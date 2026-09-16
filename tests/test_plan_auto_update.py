@@ -13,6 +13,7 @@ Guards under test (per /tmp/MASTER_DECISIONS_tasks12 §11):
 """
 from datetime import date, timedelta
 
+import json
 import pathlib
 import pytest
 
@@ -266,24 +267,41 @@ def test_what_counts_as_a_microinterval_session():
     def shape(*segs):
         return tp._micro_shape(_zwo(*segs))
 
+    def is_micro(*segs):                    # the verdict the planner reads
+        return tp.is_microinterval(*shape(*segs))
+
     ss = lambda d, p: ("SteadyState", {"Duration": d, "Power": p})
     ivl = lambda n, on, off, p, offp=0.6: ("IntervalsT", {
         "Repeat": n, "OnDuration": on, "OffDuration": off, "OnPower": p, "OffPower": offp})
     reps, micro_s, long_s = shape(ivl(13, 30, 15, 1.18))
     assert (reps, micro_s, long_s) == (13, 390, 0), "the protocol itself"
 
+    # Each rule is pinned AT ITS EDGE, both sides. A review found four
+    # constants that survived every mutation because the only case near them
+    # sat several steps away: the recovery ratio passed at 1.0, 2.0 and 4.9.
     # the bout ceiling: 60 s reps are the format it is contrasted against
     assert shape(ivl(10, 60, 30, 1.10))[1] == 0, "a 60 s rep is not a microinterval"
     assert shape(ivl(10, 40, 20, 1.15))[1] == 400, "40/20 is in the family"
-    assert shape(ivl(10, 45, 20, 1.15))[1] == 0, "the ceiling is 40 s, the top of the band"
+    assert shape(ivl(10, 41, 20, 1.15))[1] == 0, "one second over the ceiling is out"
 
     # the recovery ratio: full recovery is anaerobic work, not this protocol
     assert shape(ivl(10, 30, 150, 1.25))[1] == 0, "30 s with 150 s recovery"
     assert shape(ivl(10, 30, 30, 1.10))[1] == 300, "30/30 still qualifies"
+    assert shape(ivl(10, 30, 45, 1.10))[1] == 300, "1.5x the bout is the edge"
+    assert shape(ivl(10, 30, 46, 1.10))[1] == 0, "and one second past it is out"
 
     # the power band: below FTP is not work, above 1.5 reads neuromuscular
     assert shape(ivl(10, 30, 15, 0.80))[1] == 0
+    assert shape(ivl(10, 30, 15, 0.99))[1] == 0, "under FTP is not the work leg"
+    assert shape(ivl(10, 30, 15, 1.00))[1] == 300, "FTP itself is in"
     assert shape(ivl(10, 20, 20, 2.00))[1] == 0
+    assert shape(ivl(10, 20, 20, 1.51))[1] == 0, "past 1.50 reads neuromuscular"
+    assert shape(ivl(10, 20, 20, 1.50))[1] == 200, "1.50 is the top of the band"
+
+    # the recovery-power ceiling, both sides
+    assert shape(ivl(10, 30, 30, 1.15, 0.80))[1] == 300, "0.80 still recovers"
+    assert shape(ivl(10, 30, 30, 1.15, 0.81))[1] == 0, "past it, a second effort"
+
 
     # the recovery must recover. An over-under alternating 30 s at 1.15 with
     # 30 s at 0.95 never lets oxygen uptake fall, which is the whole mechanism,
@@ -296,9 +314,26 @@ def test_what_counts_as_a_microinterval_session():
     assert shape(*[x for _ in range(6) for x in (ss(30, 1.2), ss(15, 0.6))])[0] == 6
     assert shape(("Ramp", {"Duration": 240, "PowerLow": 0.85, "PowerHigh": 1.2}))[2] == 240
 
-    # and the verdict the planner reads
-    def is_micro(*segs):
-        return tp.is_microinterval(*shape(*segs))
+    # A SERIES is consecutive reps. Six sets of four, written as pairs with a
+    # three-minute rest between sets, are six sets of four -- reading them as
+    # one series of 24 made the same session qualify or not depending only on
+    # whether its author used IntervalsT or SteadyState pairs.
+    _set4 = [x for _ in range(4) for x in (ss(30, 1.2), ss(15, 0.6))]
+    assert shape(*[x for _ in range(6) for x in (_set4 + [ss(180, 0.5)])])[0] == 4
+    assert shape(*(_set4 + [("FreeRide", {"Duration": 300})] + _set4))[0] == 4
+    # ...and the last rep of a series counts, though the series rest follows it
+    assert shape(*([x for _ in range(4) for x in (ss(30, 1.2), ss(15, 0.6))]
+                   + [ss(30, 1.2), ss(300, 0.5)]))[0] == 5
+
+    # Sustained work is INTEGRATED, not averaged. A 15-min ramp to 1.0 spends
+    # its last 270 s at or over the line; scored at its 0.75 mean it vanished,
+    # and a sweet-spot pyramid carrying eight 40/20s read as microintervals.
+    _pyramid = (("Ramp", {"Duration": 900, "PowerLow": 0.5, "PowerHigh": 1.0}),
+                ("Ramp", {"Duration": 900, "PowerLow": 1.0, "PowerHigh": 0.5}))
+    assert shape(*_pyramid)[2] == 540, "270 s above the line in each direction"
+    assert not is_micro(*(_pyramid + (ivl(8, 40, 20, 1.15),)))
+    # a warm-up ramp that never reaches the line stays invisible
+    assert shape(("Warmup", {"Duration": 600, "PowerLow": 0.4, "PowerHigh": 0.75}))[2] == 0
 
     assert is_micro(ivl(13, 30, 15, 1.18))
     assert not is_micro(ivl(6, 30, 15, 1.18)), "under 5 min of work"
@@ -306,6 +341,9 @@ def test_what_counts_as_a_microinterval_session():
     # a sweet-spot main set is sustained work even though it is under FTP
     assert not is_micro(ivl(13, 30, 15, 1.18), ivl(4, 360, 180, 0.90)), "4x6min at 0.90 dominates"
     assert is_micro(ivl(13, 30, 15, 1.18), ivl(4, 360, 180, 0.70)), "an endurance block does not"
+    # and the line itself, both sides
+    assert not is_micro(ivl(13, 30, 15, 1.18), ivl(4, 360, 180, 0.85)), "0.85 competes"
+    assert is_micro(ivl(13, 30, 15, 1.18), ivl(4, 360, 180, 0.84)), "0.84 does not"
     # 12 min of short work, but in fours: openers repeated, not a series
     assert not is_micro(*[ivl(4, 30, 15, 1.18)] * 6), "under a series: an opener, not a session"
 
@@ -353,7 +391,10 @@ def test_the_index_is_rebuilt_when_a_rule_changes(tmp_path, monkeypatch):
     tp._WORKOUT_LIB_FAST_VALIDATOR.clear()
 
     assert tp.load_workout_library()[0]["IsMicro"] is True
-    assert (lib_dir / tp._LIBRARY_INDEX_FILENAME).exists(), "the index was written"
+    written = json.loads((lib_dir / tp._LIBRARY_INDEX_FILENAME).read_text())
+    assert written.get("rules") == tp._index_rules_fingerprint(), (
+        "the header must carry the rules it was built under, or every cold "
+        "load rejects the index and re-parses 4,307 files")
 
     # Same files, same mtimes: only the rule moved.
     monkeypatch.setattr(tp, "MICRO_MIN_SERIES_REPS", 99)
@@ -388,6 +429,55 @@ def test_microintervals_only_serves_microintervals_and_still_fills_the_slot():
     on_hit, _ = sweep(True)
     assert on_hit == tot, (on_hit, tot)
     assert off_hit < tot, "OFF must keep the variety the library is for"
+
+
+def test_microintervals_only_holds_through_a_whole_generated_plan(freeze_clock):
+    """The preference has to survive the PLAN, not just match_zwo.
+
+    Six places build a session straight from a library row and two more
+    rematch one; the flag lived in match_zwo alone, so a review found about
+    half the VO2max days of a real plan coming back long-rep while the
+    match_zwo-level test above read 60/60. This one asks generate_plan.
+    """
+    import datetime as _dt
+    freeze_clock(_dt.datetime(2026, 9, 14, 9, 0))
+    lib = tp.load_workout_library()
+    by = {w["File"]: w for w in lib}
+
+    def plan(micro_only, salt):
+        goal = tp.Goal(goal_type="continuous", rest_days=[6],
+                       available_days=[0, 1, 2, 3, 4, 5],
+                       daily_max_hours={d: 2.0 for d in range(6)})
+        goal.vo2_microintervals_only = micro_only
+        _phases, weeks = tp.generate_plan(goal, seed_salt=salt, current_ctl=60.0,
+                                          recent_weekly_tss=400.0)
+        served, unfilled = [], 0
+        for wk in weeks:
+            for sess in wk.sessions:
+                if sess.session_type != "vo2max":
+                    continue
+                if not (sess.zwo_file or ""):
+                    unfilled += 1
+                    continue
+                served.append(sess.zwo_file)
+        return served, unfilled
+
+    on_total = on_micro = off_total = off_micro = 0
+    for salt in (0, 3, 7, 11, 42, 99, 4242):
+        served, unfilled = plan(True, salt)
+        assert unfilled == 0, f"salt {salt}: microintervals-only left a VO2max day empty"
+        for f in served:
+            assert by.get(f, {}).get("IsMicro"), (
+                f"salt {salt}: {f} is not a microinterval session, and the "
+                f"library has one that fits")
+        on_total += len(served)
+        on_micro += len(served)
+        served_off, _ = plan(False, salt)
+        off_total += len(served_off)
+        off_micro += sum(1 for f in served_off if by.get(f, {}).get("IsMicro"))
+
+    assert on_total >= 7, f"the flag must not empty the plan of VO2max work ({on_total})"
+    assert off_micro < off_total, "OFF must keep the variety the library is for"
 
 
 def test_the_preference_defaults_off_and_never_goes_stale():

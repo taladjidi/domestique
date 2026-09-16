@@ -5279,7 +5279,8 @@ def _micro_shape(workout_el) -> tuple[int, int, int]:
     three-minute-rep session came to read as a microinterval session.
     """
     micro_s = long_s = best = 0
-    run = 0
+    run = 0                  # reps in the series being counted right now
+    consumed = -1            # index of the recovery leg the last bout used
     segs = list(workout_el)
     for i, el in enumerate(segs):
         tag = el.tag
@@ -5300,13 +5301,18 @@ def _micro_shape(workout_el) -> tuple[int, int, int]:
                         long_s += on * n
                 run = 0
                 continue
-            if tag not in ("SteadyState", "Ramp"):
-                continue
             dur = int(float(el.get("Duration", 0) or 0))
             if tag == "SteadyState":
-                pw = float(el.get("Power", 0) or 0)
+                pw = lo = hi = float(el.get("Power", 0) or 0)
+            elif tag in ("Ramp", "Warmup", "Cooldown"):
+                lo = float(el.get("PowerLow", 0) or 0)
+                hi = float(el.get("PowerHigh", 0) or 0)
+                pw = (lo + hi) / 2
             else:
-                pw = (float(el.get("PowerLow", 0) or 0) + float(el.get("PowerHigh", 0) or 0)) / 2
+                # FreeRide and friends: not work, and not a recovery leg
+                # either, so whatever series was running has ended.
+                run = 0
+                continue
         except (TypeError, ValueError):
             run = 0
             continue
@@ -5325,10 +5331,33 @@ def _micro_shape(workout_el) -> tuple[int, int, int]:
                 micro_s += dur
                 run += 1
                 best = max(best, run)
+                consumed = i + 1
             else:
+                # A series' LAST rep is followed by the series rest, not by the
+                # short one: counting only bouts with a short recovery read
+                # Ronnestad's 13 as 12 and dropped a 5-rep set to 4.
+                if run > 0:
+                    micro_s += dur
+                    run += 1
+                    best = max(best, run)
                 run = 0
-        elif pw >= MICRO_LONG_MIN_POWER and dur > MICRO_MAX_BOUT_S:
-            long_s += dur
+            continue
+        # Sustained work, integrated rather than averaged: a 15-min ramp from
+        # 0.5 to 1.0 spends its last 270 s at or over the line, and scoring it
+        # at its 0.75 mean hid a sweet-spot pyramid behind eight 40/20s.
+        if max(lo, hi) >= MICRO_LONG_MIN_POWER:
+            if lo == hi:
+                above = dur
+            else:
+                frac = (max(lo, hi) - MICRO_LONG_MIN_POWER) / abs(hi - lo)
+                above = int(dur * max(0.0, min(1.0, frac)))
+            if above > MICRO_MAX_BOUT_S:
+                long_s += above
+        # Anything that is not a short bout, and not the recovery leg one of
+        # them just consumed, ends the series: two sets of four 30/15s with a
+        # three-minute rest between them are two sets, not one series of
+        # eight.
+        if i != consumed:
             run = 0
     return best, micro_s, long_s
 
@@ -7051,6 +7080,11 @@ def _repair_week(out: list, slots: list, budget: "IntensityBudget",
         moves.append(best[1])
 
     return moves
+
+
+def _micro_only_goal(goal) -> bool:
+    """The rider's "VO2max microintervals only" preference, read once."""
+    return bool(getattr(goal, "vo2_microintervals_only", False))
 
 
 def _build_pool_indexes(library: list[dict]) -> dict:
@@ -9133,6 +9167,8 @@ def generate_plan(
     # budget). Demotes any excess HIT to a real endurance/tempo library file
     # so no non-stepback week exceeds get_budget_for_phase(phase).hit_count_max.
     _enforce_weekly_hit_cap(weeks, library)
+    _enforce_microintervals_only(weeks, library, _micro, seed_salt=seed_salt,
+                                 plan_start_date=plan_start_date)
     _ensure_fresh_legs_before_ftp_tests(weeks)
 
     # ── v1.3.2 IMPL-AVAILABILITY-IN-GENERATE ──────────────────────────────
@@ -10168,6 +10204,55 @@ def _ensure_fresh_legs_before_ftp_tests(weeks: list) -> None:
             "the whole cycle.")
 
 
+def _enforce_microintervals_only(weeks: list, library: list[dict],
+                                 micro_only: bool, seed_salt: int = 0,
+                                 plan_start_date: "date | None" = None) -> int:
+    """FINAL guarantee for the rider's "VO2max microintervals only" preference.
+
+    Six places build a session straight from a library row and two more rematch
+    one, and the preference used to live in exactly one of them -- match_zwo --
+    so about half the VO2max days came back long-rep however the flag was set.
+    Rather than repeat the rule at every writer (and lose it again at the next
+    one), this walks the finished weeks last, the way the HIT cap does, and
+    re-matches any VO2max day whose file is not a microinterval session.
+
+    Keeps the day's duration (exact_duration) so the week's load is unchanged,
+    and keeps the existing file when the library has no microinterval session
+    that fits -- an empty day, or a day of the wrong length, is worse than the
+    long-rep session the rider did not ask for. Returns how many it swapped.
+    """
+    if not micro_only:
+        return 0
+    by_file = {(r.get("File") or ""): r for r in library}
+    swapped = 0
+    for wk in weeks:
+        for off, s in enumerate(getattr(wk, "sessions", []) or []):
+            if getattr(s, "session_type", "") != "vo2max":
+                continue
+            fn = (getattr(s, "zwo_file", "") or "").strip()
+            if not fn:
+                continue
+            row = by_file.get(fn)
+            if row is not None and row.get("IsMicro"):
+                continue
+            old_file, old_name = s.zwo_file, s.zwo_name
+            s.zwo_file = s.zwo_name = ""
+            try:
+                match_zwo(s, library, week_num=getattr(wk, "week_num", 0),
+                          day_idx=off, plan_start_date=plan_start_date,
+                          seed_salt=seed_salt, exact_duration=True,
+                          raise_on_empty=True, micro_only=True)
+            except Exception:                                    # noqa: BLE001
+                s.zwo_file, s.zwo_name = old_file, old_name
+                continue
+            new_row = by_file.get((s.zwo_file or "").strip())
+            if new_row is not None and new_row.get("IsMicro"):
+                swapped += 1
+            else:
+                s.zwo_file, s.zwo_name = old_file, old_name
+    return swapped
+
+
 def _enforce_weekly_hit_cap(weeks: list, library: list[dict]) -> None:
     """FIX-1b (safety) — FINAL guaranteed weekly HIT cap.
 
@@ -10746,6 +10831,14 @@ def _enforce_slot_file_coherence(weeks: list, library: list,
             if _old_cc:
                 _same_cc = [r for r in library
                             if _content_class_for_row(r) == _old_cc]
+                if (micro_only and s.session_type == "vo2max"
+                        and not any(r.get("IsMicro") for r in _same_cc)):
+                    # The class filter preserves a phase's stimulus contract,
+                    # but the rider's own instruction outranks it: narrowing to
+                    # a class holding no microinterval file handed match_zwo a
+                    # pool its micro_only filter could not rescue, and the slot
+                    # came back long-rep however the flag was set.
+                    _same_cc = []
                 if _same_cc:
                     _lib_view = _same_cc
             s.zwo_file = ""
@@ -14420,6 +14513,8 @@ def recalculate_plan(
                                         used_names_dict, used_names)
         _enforce_ronnestad_floor(new_weeks, pool_index, plan_pick_counts)
         _enforce_weekly_hit_cap(new_weeks, library)
+        _enforce_microintervals_only(new_weeks, library, _micro_only_goal(goal),
+                                     seed_salt=seed_salt)
     # FTP-tests IP W1e: fresh-legs guard on the rebuilt weeks (parity with
     # generate_plan / extend_continuous_plan — floors above can land a HIT
     # session the day before a test).
@@ -14806,6 +14901,8 @@ def extend_continuous_plan(
             count_weeks=_rolling_window)
         _enforce_ronnestad_floor(new_weeks, pool_index, plan_pick_counts)
     _enforce_weekly_hit_cap(new_weeks, library)
+    _enforce_microintervals_only(new_weeks, library, _micro_only_goal(goal),
+                                 seed_salt=seed_salt)
     # FTP-tests IP W1e: fresh-legs guard on the appended weeks too — the hard
     # floor passes above can land a HIT session the day before an appended
     # test, exactly the gap the generation path already closes. Appended weeks

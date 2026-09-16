@@ -1,80 +1,146 @@
-# Domestique — Python dependencies
+# GENERATED from pyproject.toml + uv.lock by tools/export-requirements.sh.
+# Do not edit: declare dependencies in pyproject.toml, then re-run that script.
 #
-# v4.0.0-alpha: the live-trainer runtime was removed, so the BLE/ANT+
-# stack (bleak, pycycling, openant) is gone. The app is now planner +
-# workout library + post-ride FIT import viewer.
-#
-# Upper bounds prevent a major-version upstream release (e.g. Pydantic 3,
-# Starlette 0.40, FastAPI 0.120) from silently breaking a tagged build.
-# Review + bump these deliberately when upstream majors roll.
-fastapi>=0.119.0,<0.140
-# Plain uvicorn (no [standard] extra) -- no WebSockets, no uvloop needed.
-# httptools stays via uvicorn's own minimal deps if we want HTTP/1.1 parser
-# acceleration, but even that is optional.
-uvicorn>=0.30.0,<0.40
-jinja2>=3.1.0,<4
-httpx>=0.27.0,<1
-# v3.11.4 WIN-TLS-TRUST: on Windows the intervals.icu HTTPS calls are verified
-# by the OS (CryptoAPI) instead of OpenSSL — antivirus "HTTPS scanning" roots
-# are often not well-formed CAs; Windows trusts them by identity, OpenSSL
-# refuses them ("invalid CA certificate"). Pure Python, MIT, ~30 KB; installed
-# on macOS/Linux too so the platform selection is unit-testable there.
-truststore>=0.10,<1
-fit-tool==0.9.16  # EXACT pin: 0.9.15 and 0.9.16 scale workout-step durations differently (2026-09); move the pin and app.py's duration_time together
-pydantic>=2.0,<3
-# starlette>=0.49.1 required: CVE-2025-62727 FileResponse Range-parsing DoS.
-# Upper bound 2.0 admits starlette 1.x which fastapi 0.119+ uses.
-starlette>=0.49.1,<2.0
-# python-multipart is required by FastAPI for UploadFile / multipart form
-# parsing; used by POST /api/ride/import.
-python-multipart>=0.0.9,<1
-
-# ZWO parsing (fallback to stdlib lxml if available for faster XPath; the
-# app also works with xml.etree from stdlib alone).
-lxml>=5.0,<7
-
-# v1.0.2 IMPL-BANNER: explicit pin for `packaging.version.parse` used by the
-# /api/update/check endpoint (already a transitive dep of fastapi/pydantic,
-# but pinning here locks the version so the update-check banner doesn't
-# silently break if a parent pulls a different range).
-packaging>=23,<27
-
-# v1.0.7 IMPL-TAU-FIT-CORE: scipy is needed by tau_fitting.py for nonlinear
-# least-squares (`scipy.optimize.curve_fit`, Trust Region Reflective bounds)
-# + the bootstrap-CI helpers. ~50 MB DMG hit is acceptable for the reliability
-# gain over a hand-rolled Levenberg-Marquardt. Upper bound <2 keeps a future
-# major-version release from silently breaking the fit (curve_fit behaviour
-# changes have happened across major versions before).
-scipy>=1.13,<2
-
-# Desktop app (launcher)
-pystray>=0.19.0
-Pillow>=10.0.0
-pywebview>=5.0
-# v2.0.2 WIN-START-FIX: pywebview's Windows (EdgeChromium/WinForms) backend
-# drives the .NET CLR via pythonnet — without it `webview.start()` aborts and
-# the windowed EXE shows nothing. The `; sys_platform == "win32"` marker keeps
-# pip from ever pulling pythonnet on macOS/Linux, so the DMG build and any
-# `pip install -r requirements.txt` on a Mac are unaffected.
-# NOTE: pythonnet only supplies the CLR bridge. The Microsoft Edge WebView2
-# *runtime* is a separate OS prerequisite (the Evergreen redistributable; it
-# ships preinstalled on Windows 11 but must be installed on older Windows 10).
-pythonnet>=3.0; sys_platform == "win32"
-# LINUX-QT (first Linux release): pywebview's Linux default is GTK/WebKitGTK,
-# which cannot be honestly bundled — PyInstaller has no WebKit2 hook and
-# WebKitGTK hardcodes its helper-process directory at compile time, so a frozen
-# copy execs the *host's* helpers and dies wherever the layout differs. The Qt
-# backend ships its own Chromium and depends on no host engine, at the cost of
-# ~270 MB. PySide6 deliberately, NOT PyQt6: PySide6 is LGPLv3 (dynamic linking
-# leaves this Apache-2.0 project's terms intact) where PyQt6 is GPLv3 and would
-# force the Linux binary to GPL — which is also why we must never install via
-# pywebview's own `qt`/`qt6` extras, as those pull PyQt6.
-# qtpy is NOT optional: webview/platforms/qt.py does `from qtpy import QtCore`
-# at module top, so the backend won't even import without it.
-# As with pythonnet above, the marker keeps pip from ever pulling Qt on
-# macOS/Windows, so the DMG and EXE builds resolve exactly as they do today.
-PySide6>=6.8,<7 ; sys_platform == "linux"
-qtpy>=2.4 ; sys_platform == "linux"
-
-# Build (not needed at runtime)
-# pyinstaller>=6.0.0
+annotated-doc==0.0.5
+    # via fastapi
+annotated-types==0.8.0
+    # via pydantic
+anyio==4.15.1
+    # via
+    #   httpx
+    #   starlette
+bottle==0.13.4
+    # via pywebview
+certifi==2026.7.22
+    # via
+    #   httpcore
+    #   httpx
+cffi==2.1.1 ; sys_platform == 'win32'
+    # via clr-loader
+click==8.5.0
+    # via uvicorn
+clr-loader==0.3.1 ; sys_platform == 'win32'
+    # via pythonnet
+fastapi==0.139.2
+    # via domestique
+fit-tool==0.9.16
+    # via domestique
+h11==0.16.0
+    # via
+    #   httpcore
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via domestique
+idna==3.19
+    # via
+    #   anyio
+    #   httpx
+jinja2==3.1.6
+    # via domestique
+lxml==6.1.3
+    # via domestique
+markupsafe==3.0.3
+    # via jinja2
+numpy==2.5.3
+    # via scipy
+packaging==26.3
+    # via
+    #   domestique
+    #   qtpy
+pillow==12.3.0
+    # via
+    #   domestique
+    #   pystray
+proxy-tools==0.1.0
+    # via pywebview
+pycparser==3.0 ; implementation_name != 'PyPy' and sys_platform == 'win32'
+    # via cffi
+pydantic==2.13.5
+    # via
+    #   domestique
+    #   fastapi
+pydantic-core==2.46.5
+    # via pydantic
+pyobjc-core==12.2.2 ; sys_platform == 'darwin'
+    # via
+    #   pyobjc-framework-cocoa
+    #   pyobjc-framework-quartz
+    #   pyobjc-framework-security
+    #   pyobjc-framework-uniformtypeidentifiers
+    #   pyobjc-framework-webkit
+    #   pywebview
+pyobjc-framework-cocoa==12.2.2 ; sys_platform == 'darwin'
+    # via
+    #   pyobjc-framework-quartz
+    #   pyobjc-framework-security
+    #   pyobjc-framework-uniformtypeidentifiers
+    #   pyobjc-framework-webkit
+    #   pywebview
+pyobjc-framework-quartz==12.2.2 ; sys_platform == 'darwin'
+    # via
+    #   pystray
+    #   pywebview
+pyobjc-framework-security==12.2.2 ; sys_platform == 'darwin'
+    # via pywebview
+pyobjc-framework-uniformtypeidentifiers==12.2.2 ; sys_platform == 'darwin'
+    # via pywebview
+pyobjc-framework-webkit==12.2.2 ; sys_platform == 'darwin'
+    # via pywebview
+pyside6==6.11.2 ; sys_platform == 'linux'
+    # via domestique
+pyside6-addons==6.11.2 ; sys_platform == 'linux'
+    # via pyside6
+pyside6-essentials==6.11.2 ; sys_platform == 'linux'
+    # via
+    #   pyside6
+    #   pyside6-addons
+pystray==0.19.5
+    # via domestique
+python-multipart==0.0.32
+    # via domestique
+python-xlib==0.33 ; sys_platform == 'linux'
+    # via pystray
+pythonnet==3.1.0 ; sys_platform == 'win32'
+    # via
+    #   domestique
+    #   pywebview
+pywebview==6.2.1
+    # via domestique
+qtpy==2.4.3 ; sys_platform == 'linux' or sys_platform == 'openbsd6'
+    # via
+    #   domestique
+    #   pywebview
+scipy==1.18.1
+    # via domestique
+shiboken6==6.11.2 ; sys_platform == 'linux'
+    # via
+    #   pyside6
+    #   pyside6-addons
+    #   pyside6-essentials
+six==1.17.0
+    # via
+    #   pystray
+    #   python-xlib
+starlette==1.6.0
+    # via
+    #   domestique
+    #   fastapi
+truststore==0.10.4
+    # via domestique
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   fastapi
+    #   pydantic
+    #   pydantic-core
+    #   pywebview
+    #   starlette
+    #   typing-inspection
+typing-inspection==0.4.4
+    # via
+    #   fastapi
+    #   pydantic
+uvicorn==0.39.0
+    # via domestique

@@ -131,3 +131,34 @@ def test_spec_bundles_the_critical_data():
     # VERSION must land at the bundle root.
     assert any(d == "." and s.endswith("VERSION") for s, d in entries)
 
+
+# ── packaging: one place declares dependencies ───────────────────────────────
+
+def test_requirements_txt_is_generated_from_pyproject():
+    """pyproject.toml declares dependencies; requirements.txt is exported from
+    the lock for the build scripts that still run `pip install -r`.
+
+    A hand-edited requirements.txt would be a second source of truth, and the
+    last one of those (`fit-tool>=0.9.13,<1` versus a pinned 0.9.16) shipped
+    workout durations 1000x too long on a from-source install.
+    """
+    req = (ROOT / "requirements.txt").read_text()
+    assert req.startswith("# GENERATED from pyproject.toml"), (
+        "requirements.txt looks hand-edited; regenerate it with "
+        "tools/export-requirements.sh")
+    assert (ROOT / "pyproject.toml").is_file()
+    assert (ROOT / "uv.lock").is_file(), "the export needs a committed lock"
+    assert (ROOT / "tools" / "export-requirements.sh").is_file()
+
+
+def test_the_pinned_fit_tool_agrees_across_both_files():
+    """The one dependency whose exact version changes behaviour."""
+    import re
+    pyproj = (ROOT / "pyproject.toml").read_text()
+    req = (ROOT / "requirements.txt").read_text()
+    declared = re.search(r'"fit-tool==([0-9.]+)"', pyproj)
+    exported = re.search(r"^fit-tool==([0-9.]+)", req, re.M)
+    assert declared and exported, "fit-tool must be pinned in both files"
+    assert declared.group(1) == exported.group(1), (
+        f"pyproject pins {declared.group(1)}, requirements.txt has "
+        f"{exported.group(1)}; re-run tools/export-requirements.sh")

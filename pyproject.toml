@@ -1,0 +1,68 @@
+[project]
+name = "domestique"
+version = "0.0.0"                      # the shipped version lives in VERSION
+description = "Adaptive cycling training planner"
+requires-python = ">=3.12"
+
+# The one place dependencies are declared. requirements.txt is generated from
+# this (tools/export-requirements.sh) for the build scripts that still read it;
+# edit here, never there.
+#
+# fit-tool is PINNED, not a range, and the comment is load-bearing: 0.9.15 and
+# 0.9.16 disagree about the workout-step duration setter and disagree silently.
+# On 0.9.15 the raw field is written through (`duration_value = seconds *
+# 1000`); on 0.9.16 the library applies the field's own 1000x scale, so the
+# same call writes a 60-minute step as 1,000 hours. A range resolves to
+# whichever is newest, which is how a from-source install shipped 1000x
+# durations. tests/test_fit_duration_roundtrip.py guards both the pin and the
+# call site.
+dependencies = [
+    "fastapi>=0.119.0,<0.140",
+    "uvicorn>=0.30.0,<0.40",
+    "jinja2>=3.1.0,<4",
+    "httpx>=0.27.0,<1",
+    # truststore: the OS trust store for TLS, so a corporate/AV root that
+    # OpenSSL refuses as a trust anchor does not break intervals.icu.
+    "truststore>=0.10,<1",
+    "fit-tool==0.9.16",
+    "pydantic>=2.0,<3",
+    # starlette>=0.49.1: CVE-2025-62727, FileResponse Range-parsing DoS.
+    "starlette>=0.49.1,<2.0",
+    "python-multipart>=0.0.9,<1",
+    "lxml>=5.0,<7",
+    "packaging>=23,<27",
+    # scipy: the week solver's assignment model. Without it the solver
+    # returns False and the caller keeps its greedy result, so this is a
+    # quality dependency rather than a hard one.
+    "scipy>=1.13,<2",
+    # The desktop layer. A headless/server install never imports these
+    # (DOMESTIQUE_SERVER_ONLY=1), but a packaged build needs them.
+    "pystray>=0.19.0",
+    "Pillow>=10.0.0",
+    "pywebview>=5.0",
+    "pythonnet>=3.0; sys_platform == 'win32'",
+    "PySide6>=6.8,<7; sys_platform == 'linux'",
+    "qtpy>=2.4; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+# What the gate needs on top of the app. fitparse is a SECOND FIT decoder,
+# kept deliberately: it is how test_fit_duration_roundtrip checks fit_tool's
+# output with an implementation that shares none of its code.
+dev = [
+    "pytest>=8,<9",
+    "pytest-timeout>=2,<3",
+    "pytest-xdist>=3,<4",
+    "fitparse>=1.2,<2",
+    "pyflakes>=3,<4",
+]
+
+[tool.uv]
+# Not an installable package: the app runs from src/ and ships through
+# PyInstaller, so uv manages the environment without building a wheel.
+package = false
+
+# No [tool.pytest.ini_options] here on purpose: pytest.ini already owns that
+# config and takes precedence over pyproject.toml, so a section here would be
+# a second source of truth that never applies -- the exact thing this file is
+# meant to remove.

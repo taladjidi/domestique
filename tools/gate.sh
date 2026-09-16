@@ -18,7 +18,11 @@ cd "$WT" || exit 2
 export PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0
 # fitparse and Pillow: without them three test modules fail to import (the
 # gates review, GATE-8). Pillow is a declared requirement the prod venv lacks.
-PYT=(uv run --quiet --with pytest --with pytest-timeout --with pytest-xdist
+# --no-project: pyproject.toml now declares the app's dependencies, and
+# without this uv would try to resolve and install THEM (PySide6 and all)
+# before running anything. The gate wants the ephemeral layering it has always
+# used: the existing .venv, plus the test-only packages named here.
+PYT=(uv run --no-project --quiet --with pytest --with pytest-timeout --with pytest-xdist
      --with fitparse --with Pillow
      --python .venv/bin/python -m pytest -p no:cacheprovider)
 

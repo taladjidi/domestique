@@ -474,6 +474,11 @@ def test_the_planner_re_exports_the_one_measure():
     assert tp.is_microinterval is zwo_parse.is_microinterval
     assert tp._index_rules_fingerprint is zwo_parse.rules_fingerprint
     assert tp._np_fraction_from_samples is zwo_parse.np_fraction_from_samples
+    # app held a third, byte-identical copy of the NP fraction, kept in step
+    # with the planner's by a comment. All three names are one object now.
+    import app
+    assert app._np_fraction_from_samples is zwo_parse.np_fraction_from_samples
+    assert app._scan_zwo_for_library is zwo_parse.scan_zwo
 
 
 def test_microintervals_only_holds_through_a_whole_generated_plan(freeze_clock):

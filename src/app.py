@@ -5235,26 +5235,10 @@ def api_hrv_recording_dismiss(payload: dict = Body(...)):
 # v4.2.0 IMPL-LIBRARY: helper to scan a single ZWO into the structural
 # metrics the score helper + filters need. Extracted so /api/workouts and
 # /api/workouts/tags can share the parse without duplicating XML walking.
-def _np_fraction_from_samples(samples: "list[float]") -> float:
-    """Coggan NP as an FTP fraction over a 1 Hz planned-power series.
-
-    30-s simple rolling mean, full windows only (first value covers samples
-    [0, 30)), 4th-power mean, 4th root. Byte-identical to the planner's
-    training_planner._np_fraction_from_samples — the two scanners must stay
-    in lockstep (v4.1.1 Bug C / score_sync contract).
-    """
-    n = len(samples)
-    if n < 30:
-        return 0.0
-    s = sum(samples[:30])
-    p4 = (s / 30.0) ** 4
-    count = 1
-    for i in range(30, n):
-        s += samples[i] - samples[i - 30]
-        p4 += (s / 30.0) ** 4
-        count += 1
-    return (p4 / count) ** 0.25
-
+# The Coggan NP fraction lives in zwo_parse with the scan that uses it. This
+# was a byte-identical third copy, kept in lockstep with the planner's by a
+# comment asking whoever edited one to edit the other.
+from zwo_parse import np_fraction_from_samples as _np_fraction_from_samples  # noqa: E402,F401
 
 # The library scan lives in zwo_parse now, one implementation for the file we
 # just wrote and for every file in the library (they were two, 72 identical

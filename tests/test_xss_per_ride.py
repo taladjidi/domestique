@@ -64,7 +64,7 @@ def _install_fake_strain_score():
     """
     fake = types.ModuleType("strain_score")
 
-    def compute_xss_components(power_series, cp, wprime_j, pmax):
+    def compute_xss_components(power_series, cp, w_prime, pmax):
         # Crude partition: anything <= CP is aerobic; anything above CP
         # is split 70/30 between glycolytic and PCr by power magnitude.
         # Per-second sum scaled to TSS-equivalent so the numbers look
@@ -95,6 +95,28 @@ def _install_fake_strain_score():
             "xss_w_prime": round(wp_part, 2),
             "xss_pmax": round(pm_part, 2),
         }
+
+    # The double must accept what the real module accepts. It used to take
+    # `wprime_j`, copying ride_storage's mistaken keyword rather than
+    # strain_score's actual signature, so this suite passed for four months
+    # while every real call raised TypeError and the dashboard told riders
+    # their rides had no power.
+    import importlib
+    _real = sys.modules.pop("strain_score", None)
+    try:
+        _spec = importlib.util.find_spec("strain_score")
+        if _spec is not None:
+            _mod = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            import inspect as _inspect
+            # Only the KEYWORD arguments have to match: ride_storage passes
+            # the trace positionally, then cp=, w_prime=, pmax= by name.
+            assert (list(_inspect.signature(_mod.compute_xss_components).parameters)[1:4]
+                    == list(_inspect.signature(compute_xss_components).parameters)[1:4]), (
+                "the fake strain_score no longer matches the real signature")
+    finally:
+        if _real is not None:
+            sys.modules["strain_score"] = _real
 
     fake.compute_xss_components = compute_xss_components
     sys.modules["strain_score"] = fake
@@ -221,8 +243,12 @@ class TestRideWithoutPowerTraceGraceful(_ScaffoldedTest):
         """If strain_score isn't on the path yet (cross-agent ordering), the
         helper should log + return {} rather than raising ImportError."""
         import ride_storage
-        # Remove the fake.
+        # Remove the fake AND block the real module: sys.modules[name] = None
+        # makes `import strain_score` raise ImportError. Without this the test
+        # loaded the REAL module and passed only because every call raised
+        # TypeError -- the bug it was meant to be indifferent to.
         _uninstall_fake_strain_score()
+        sys.modules["strain_score"] = None
         try:
             out = ride_storage.compute_ride_xss(
                 power_series=[200] * 60,
@@ -232,6 +258,7 @@ class TestRideWithoutPowerTraceGraceful(_ScaffoldedTest):
             )
             self.assertEqual(out, {})
         finally:
+            sys.modules.pop("strain_score", None)
             _install_fake_strain_score()
 
 
@@ -247,9 +274,11 @@ class TestPmaxWUsedAsDefault(_ScaffoldedTest):
 
         import strain_score as _ss
 
-        def _capture(power_series, cp, wprime_j, pmax):
+        # w_prime, the real module's name for it: this double also used to
+        # copy ride_storage's mistaken keyword.
+        def _capture(power_series, cp, w_prime, pmax):
             captured["cp"] = cp
-            captured["wprime_j"] = wprime_j
+            captured["wprime_j"] = w_prime
             captured["pmax"] = pmax
             return {
                 "xss_total": 1.0, "xss_cp": 1.0,

@@ -4886,6 +4886,9 @@ def api_backfill_3d_fitness(auto: int = Query(0)):
 
     `skipped_reason` is one of:
       ``"no_power_stream"`` — fetch returned nothing
+      ``"compute_failed"``  — the stream was there and the SS computation
+                              returned nothing or raised; NOT a data problem
+                              on the rider's side
       ``"all_zero"``        — stream present but every sample == 0
       ``"fit_missing"``     — FIT-sourced ride but the .fit file is gone
       ``"cutoff"``          — ride pre-dates the SS feature cutoff
@@ -4984,17 +4987,22 @@ def api_backfill_3d_fitness(auto: int = Query(0)):
                     "skipped_reason": None,
                 })
             else:
+                # The ride HAD a power stream; the computation returned
+                # nothing. Reporting that as "no power stream" is how a rider
+                # with 1 Hz power on every ride was told their rides had no
+                # power, for the four months compute_ride_xss was raising
+                # TypeError on every call.
                 skipped += 1
                 results.append({
                     "ride_id": ride_id,
-                    "skipped_reason": "no_power_stream",
+                    "skipped_reason": "compute_failed",
                 })
         except Exception as e:
-            _log.debug(f"backfill-3d-fitness ride {r.get('ride_id')}: {e}")
+            _log.warning(f"backfill-3d-fitness ride {r.get('ride_id')}: {e}")
             failed += 1
             results.append({
                 "ride_id": ride_id,
-                "skipped_reason": "no_power_stream",
+                "skipped_reason": "compute_failed",
             })
 
     # Bust cache so /api/wellness re-augments next read.
@@ -5009,18 +5017,24 @@ def api_backfill_3d_fitness(auto: int = Query(0)):
     #   without_power: HR-only rides skipped for lack of watts
     #   pre_cutoff: rides predating the SS feature
     #   successfully_backfilled: subset that wrote a row (skipped_reason None)
+    #   compute_failed: the stream was there and OUR computation returned
+    #     nothing. Counted with_power, never without: telling a rider their
+    #     rides lack power when the fault is ours is what hid a four-month
+    #     TypeError in compute_ride_xss.
     pre_cutoff_n = sum(1 for r in results
                        if r.get("skipped_reason") == "cutoff")
     without_power_n = sum(1 for r in results
                           if r.get("skipped_reason")
                           in ("no_power_stream", "all_zero", "fit_missing"))
+    compute_failed_n = sum(1 for r in results
+                           if r.get("skipped_reason") == "compute_failed")
     success_n = backfilled
-    with_power_n = success_n + sum(1 for r in results
-                                    if r.get("skipped_reason")
-                                    == "already_cached")
+    with_power_n = success_n + compute_failed_n + sum(
+        1 for r in results if r.get("skipped_reason") == "already_cached")
     aggregate_summary = {
         "with_power": int(with_power_n),
         "without_power": int(without_power_n),
+        "compute_failed": int(compute_failed_n),
         "pre_cutoff": int(pre_cutoff_n),
         "successfully_backfilled": int(success_n),
     }

@@ -412,3 +412,33 @@ def _derived_library_caches():
             lock.rmdir()
         except OSError:
             pass
+
+
+def assert_double_matches_strain_score(double) -> None:
+    """A stand-in for strain_score.compute_xss_components must accept what the
+    real one accepts.
+
+    Three doubles across two files declared `wprime_j`, copying
+    ride_storage's mistaken keyword instead of strain_score's actual
+    `w_prime`. So every test of this path exercised the bug's own shape, the
+    real call raised TypeError from 2026-05-05 to 2026-09-16, and the
+    dashboard told a rider with 1 Hz power on every ride that their rides had
+    no power. Only the keyword arguments are compared: the trace is passed
+    positionally.
+    """
+    import importlib.util
+    import inspect
+
+    real = sys.modules.pop("strain_score", None)
+    try:
+        spec = importlib.util.find_spec("strain_score")
+        if spec is None:
+            return
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        want = list(inspect.signature(mod.compute_xss_components).parameters)[1:4]
+        got = list(inspect.signature(double).parameters)[1:4]
+        assert want == got, f"double takes {got}, strain_score takes {want}"
+    finally:
+        if real is not None:
+            sys.modules["strain_score"] = real

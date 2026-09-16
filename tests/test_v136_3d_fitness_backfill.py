@@ -61,7 +61,7 @@ def _bootstrap_home(tmp: Path):
 def _install_fake_strain_score():
     fake = types.ModuleType("strain_score")
 
-    def compute_xss_components(power_series, cp, wprime_j, pmax):
+    def compute_xss_components(power_series, cp, w_prime, pmax):
         if not power_series:
             return {}
         total = 0.0; cp_part = 0.0; wp_part = 0.0; pm_part = 0.0
@@ -287,3 +287,30 @@ class TestFitImportHooksXSS(_BackfillBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestComputeFailureIsNotReportedAsMissingPower(_BackfillBase):
+    """A ride WITH power whose computation returns nothing must not be
+    reported as a ride without power.
+
+    That label is what sent a rider looking at their power meter while
+    compute_ride_xss raised TypeError on every call: the backfill said 39 of
+    39 rides had no power, and 22 of them had a full 1 Hz watts stream.
+    """
+
+    def test_a_failed_computation_says_so(self):
+        self._seed_icu_ride("2026-05-06T08:00:00", "i_compute_fail")
+        with patch("training.fetch_activity_streams",
+                   return_value={"watts": [200] * 600}), \
+             patch("ride_storage.compute_ride_xss", return_value={}):
+            r = self.client.post("/api/wellness/backfill-3d-fitness")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        reasons = {x.get("skipped_reason") for x in body["results"]}
+        self.assertIn("compute_failed", reasons,
+                      f"expected compute_failed, got {reasons}")
+        self.assertNotIn("no_power_stream", reasons,
+                         "a ride with watts was reported as having no power")
+        agg = body["aggregate_summary"]
+        self.assertEqual(agg["without_power"], 0, agg)
+        self.assertGreaterEqual(agg["compute_failed"], 1, agg)

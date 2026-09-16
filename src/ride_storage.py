@@ -1423,8 +1423,13 @@ def compute_ride_xss(
 
     try:
         import strain_score
+        # w_prime=, not wprime_j=: the local name is wprime_j, the callee's
+        # parameter is w_prime. Passing the local name raised TypeError on
+        # every call from 2026-05-05 until 2026-09-16, the `except Exception`
+        # below swallowed it, and the backfill reported the ride as having no
+        # power. The signature is pinned in test_xss_ingest_contract.py.
         components = strain_score.compute_xss_components(
-            power_series, cp=cp, wprime_j=wprime_j, pmax=pmax,
+            power_series, cp=cp, w_prime=wprime_j, pmax=pmax,
         )
     except ImportError:
         # IMPL-3D-MODEL hasn't landed in this run — graceful no-op.

@@ -204,3 +204,53 @@ class CapsAndContent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── the rider-dependent rule: wired 2026-09-16 ───────────────────────────────
+
+def test_the_acwr_check_reaches_a_caller_that_knows_the_rider():
+    """check_acwr was written, tested by four files, and called by nothing.
+
+    Not an oversight: ALL_CHECKS take a plan and no rider, and this needs the
+    load the rider carries in. generate_plan has that number
+    (``recent_weekly_tss``), so it reports the violations there, and audit()
+    runs the rule when it is handed ``chronic``.
+    """
+    import datetime as _dt
+    import clock
+    import plan_invariants as pi
+    import training_planner as tp
+
+    clock.freeze(_dt.datetime(2026, 9, 14, 9, 0))
+    try:
+        def plan_for(carried):
+            goal = tp.Goal(goal_type="continuous", rest_days=[6],
+                           available_days=[0, 1, 2, 3, 4, 5],
+                           daily_max_hours={d: 2.0 for d in range(6)})
+            _ph, weeks = tp.generate_plan(goal, seed_salt=7,
+                                          current_ctl=carried / 7,
+                                          recent_weekly_tss=carried)
+            return weeks
+
+        # A detrained rider is who the ratio is about: measured 1.40-1.58x
+        # against a 1.3x sweet spot on these seeds.
+        detrained = tp._report_acwr(plan_for(150.0), 150.0)
+        assert detrained, "the check went quiet on the rider it exists for"
+        assert all(v.rule == "acwr" for v in detrained)
+
+        # A fit rider's plan ramps inside the sweet spot.
+        assert tp._report_acwr(plan_for(600.0), 600.0) == []
+
+        # No rider, no rule: the number is the whole input.
+        assert tp._report_acwr(plan_for(150.0), None) == []
+        assert tp._report_acwr(plan_for(150.0), 0) == []
+
+        # And audit() runs it only when handed a rider.
+        weeks = plan_for(150.0)
+        goal = tp.Goal(goal_type="continuous", rest_days=[6],
+                       available_days=[0, 1, 2, 3, 4, 5],
+                       daily_max_hours={d: 2.0 for d in range(6)})
+        assert not [v for v in pi.audit(weeks, goal) if v.rule == "acwr"]
+        assert [v for v in pi.audit(weeks, goal, chronic=150.0) if v.rule == "acwr"]
+    finally:
+        clock.unfreeze()

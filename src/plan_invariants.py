@@ -449,8 +449,9 @@ def check_acwr(weeks, chronic, today=None, tolerance=1.05,
     checked from four days; a shorter one still counts toward the load
     carried. The taper is history only: its race is the point of the plan,
     not a dose. Weeks behind ``today`` are skipped, since ``chronic`` holds
-    what the rider did. Not part of audit(), which has no rider: a plan does
-    not carry their chronic load.
+    what the rider did. audit() runs this only when it is given ``chronic``:
+    ALL_CHECKS take a plan and no rider, and a plan does not carry the
+    rider's load.
     """
     carried, out = float(chronic), []
     for w in _weeks_ahead(weeks, today):
@@ -520,20 +521,29 @@ ALL_CHECKS = (
 )
 
 
-def audit(weeks, goal, rides=None, today=None) -> list[Violation]:
+def audit(weeks, goal, rides=None, today=None, chronic=None) -> list[Violation]:
     """Every rule, over a finished plan. Empty list means the plan is legal.
 
     ``rides`` (the athlete's activities) turns on the ridden-aware budget;
     ``today`` limits the budget rules to days still ahead.
+
+    ``chronic`` (the load the rider carries into the plan, TSS a week) turns
+    on check_acwr, which cannot live in ALL_CHECKS because those take a plan
+    and no rider. Given the number, it is the one rule here that asks whether
+    the ramp is safe for THIS athlete rather than merely self-consistent: on
+    generated plans it fires for detrained riders at 1.4-1.6x carried and
+    stays quiet for fit ones, which is the population ACWR is about.
     """
     out = []
     for _name, fn in ALL_CHECKS:
         out.extend(fn(weeks, goal, rides, today))
+    if chronic is not None:
+        out.extend(check_acwr(weeks, float(chronic), today))
     return out
 
 
-def summary(weeks, goal, rides=None, today=None) -> str:
-    v = audit(weeks, goal, rides, today)
+def summary(weeks, goal, rides=None, today=None, chronic=None) -> str:
+    v = audit(weeks, goal, rides, today, chronic)
     if not v:
         return "clean"
     by_rule: dict[str, int] = {}

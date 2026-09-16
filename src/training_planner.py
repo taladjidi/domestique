@@ -54,6 +54,7 @@ log = logging.getLogger(__name__)
 # to stdlib logging so observability still gets a record. The indirection
 # avoids a circular import (app -> tp -> app).
 import error_codes  # leaf module — no circular risk
+import plan_invariants  # the auditor, for the rider-dependent ACWR check
 from plan_invariants import (  # leaf: the auditor's rules are the planner's
     ACWR_SWEET_SPOT, REST_UNAVAILABLE, UNLOAD_PHASES, _field, asks_nothing,
     chronic_after)
@@ -9185,6 +9186,7 @@ def generate_plan(
                                  plan_start_date=plan_start_date,
                                  seed_salt=seed_salt, micro_only=_micro)
 
+    _report_acwr(weeks, recent_weekly_tss)
     return phases, weeks
 
 
@@ -9931,6 +9933,31 @@ def _ensure_fresh_legs_before_ftp_tests(weeks: list) -> None:
             "Recovery — eased to leave fresh legs for tomorrow's FTP test. "
             "A maximal protocol read off a fatigued day sets a wrong FTP for "
             "the whole cycle.")
+
+
+def _report_acwr(weeks: list, carried: "float | None") -> list:
+    """Say when a generated plan ramps a rider past the ACWR sweet spot.
+
+    plan_invariants.check_acwr was written and tested and called by nothing,
+    because ALL_CHECKS take a plan and no rider while this needs the load the
+    rider carries in. generate_plan HAS that number: recent_weekly_tss is it.
+
+    Measured over twelve generated plans, it fires for detrained riders
+    (carried 150-250 TSS a week, ramps of 1.40-1.58x against a 1.3x sweet
+    spot) and never for fit ones (400-600) -- the population the ratio exists
+    to protect. Reported, not enforced: clamping a week is a change to what
+    riders are given, and that is a decision, not a cleanup. Returns the
+    violations so a caller can surface them.
+    """
+    if not carried or float(carried) <= 0:
+        return []
+    try:
+        violations = plan_invariants.check_acwr(weeks, float(carried))
+    except Exception:                                            # noqa: BLE001
+        return []
+    for v in violations:
+        log.info("EVENT=acwr_over_sweet_spot week=%s %s", v.week_num, v.detail)
+    return violations
 
 
 def _enforce_microintervals_only(weeks: list, library: list[dict],

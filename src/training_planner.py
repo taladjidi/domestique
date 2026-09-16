@@ -179,8 +179,12 @@ _CLASSIFIER_VERSION = 3  # v4.1.2 IMPL-CLASSIFIER: content-based 12-rule cascade
 # live workouts dir, and falls back to the XML parse (self-healing: it rewrites
 # the index) on any mismatch. The builder lives in
 # scripts/classify_library_content.py (run via --all). Bump _INDEX_SCHEMA_VERSION
-# whenever the row shape changes so stale on-disk indexes are rejected.
-_INDEX_SCHEMA_VERSION = 3  # v3.5.0: TSS/IF switched from RMS power to Coggan NP (README's documented formula) → invalidate cached indexes
+# whenever the row shape changes so stale on-disk indexes are rejected. The row
+# VALUES are pinned separately, by _index_rules_fingerprint(): rows cache
+# computed verdicts, so a threshold edited without a schema bump would keep
+# being served from the old index -- silently, since nothing about the library
+# changed.
+_INDEX_SCHEMA_VERSION = 4  # v4.7.0: the microinterval measure is structural (MicroSeriesReps/MicroWorkS/IsMicro replace MicroFrac)
 _LIBRARY_INDEX_FILENAME = ".library_index.json"
 _WORKOUT_LIB_CACHE: dict[str, tuple] = {}
 # v1.8.1 SPEED-A: fast hot-path validator keyed by str(WORKOUT_DIR).
@@ -360,6 +364,7 @@ def _read_library_index(count: int, max_mtime: float) -> list[dict] | None:
         return None
     if (
         payload.get("schema_version") != _INDEX_SCHEMA_VERSION
+        or payload.get("rules") != _index_rules_fingerprint()
         or payload.get("classifier_version") != _CLASSIFIER_VERSION
         or payload.get("count") != count
         or payload.get("max_mtime") != max_mtime
@@ -384,6 +389,7 @@ def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None
     index_path = WORKOUT_DIR / _LIBRARY_INDEX_FILENAME
     payload = {
         "schema_version": _INDEX_SCHEMA_VERSION,
+        "rules": _index_rules_fingerprint(),
         "classifier_version": _CLASSIFIER_VERSION,
         "count": count,
         "max_mtime": max_mtime,
@@ -4879,8 +4885,7 @@ def load_workout_library() -> list[dict]:
         # the long-rep sessions it was meant to exclude. This measures the main
         # set instead — the shortest ON leg the file actually repeats at
         # intensity.
-        _micro_work_s = 0      # seconds in reps at or under the micro ceiling
-        _long_work_s = 0       # seconds in reps above it
+        _micro_reps, _micro_work_s, _long_work_s = _micro_shape(workout_el)
 
         for seg in workout_el:
             tag = seg.tag
@@ -4891,11 +4896,6 @@ def load_workout_library() -> list[dict]:
                     _rep = int(float(seg.get("Repeat", 0) or 0))
                 except (TypeError, ValueError):
                     _on = _rep = 0; _onp = 0.0
-                if _on > 0 and _rep >= 4 and _onp >= 1.00:
-                    if _on <= MICROINTERVAL_MAX_REP_S:
-                        _micro_work_s += _on * _rep
-                    else:
-                        _long_work_s += _on * _rep
             if tag in ("Warmup", "Cooldown", "Ramp"):
                 dur = int(float(seg.get("Duration", 0)))
                 plo = float(seg.get("PowerLow", 0.5))
@@ -5039,13 +5039,14 @@ def load_workout_library() -> list[dict]:
             # has_vo2_work, has_sprints, has_sweet_spot_work,
             # pattern_over_under, pattern_microinterval, polarized_consistent,
             # pyramidal_consistent). Empty when the content cache is absent.
-            # v3.7.1 — share of the file's repeated at-intensity work that
-            # sits in SHORT reps. Time-weighted, not a median: a 10x2min
-            # session with an 8x40s finisher has a median rep of 40 s and is
-            # emphatically not a microinterval session. None when the file
-            # declares no repeated work set at all.
-            "MicroFrac": (round(_micro_work_s / (_micro_work_s + _long_work_s), 3)
-                          if (_micro_work_s + _long_work_s) > 0 else None),
+            # v4.7.0 — the microinterval measure, structural (see
+            # _micro_shape). The share this replaced could not see a main set
+            # written as SteadyState or Ramp blocks, so it read 1.0 for a
+            # 6x4min session whose only IntervalsT was its 4x40s opener.
+            "MicroSeriesReps": _micro_reps,
+            "MicroWorkS": _micro_work_s,
+            "MicroLongS": _long_work_s,
+            "IsMicro": is_microinterval(_micro_reps, _micro_work_s, _long_work_s),
             "ContentClass": content_class,
             "ContentConfidence": content_confidence,
             "SecondaryFlags": secondary_flags,
@@ -5173,13 +5174,32 @@ MICROINTERVAL_VO2_BONUS = 5.0
 # microinterval file that fits, small enough that the slot still fills when
 # none does.
 MICROINTERVAL_ONLY_PENALTY = 500.0
-# The ON leg at or under which a repeated effort is a MICROinterval. 60 s is
-# the natural break: the protocols in this family run 30 s and 40 s, while the
-# formats they are contrasted against in the literature start at 2 minutes.
-MICROINTERVAL_MAX_REP_S = 60
-# …and the share of repeated work that must sit in those short reps for the
-# session to BE a microinterval session rather than merely contain some.
-MICROINTERVAL_MIN_FRAC = 0.5
+# What makes a bout a MICROinterval, from the literature (see _micro_shape):
+# 30 s and 40 s families, 15-45 s; a 60 s rep is the format they are contrasted
+# against. Recovery at most 1.5x the bout -- 30/15 and 40/20 are 0.5, 30/30 is
+# 1.0 -- because the short recovery IS the mechanism. At or over FTP, and under
+# the line past which a 30/15 reads neuromuscular (the generator draws it at
+# the same 1.50).
+MICRO_MAX_BOUT_S = 40
+MICRO_MAX_REST_RATIO = 1.5
+MICRO_MIN_POWER = 1.00
+MICRO_MAX_POWER = 1.50
+# The recovery leg must actually recover. Ronnestad's OFF leg is ~60 % of
+# 40-min maximal power; every unambiguous file in the library rests at or
+# under 0.70. Without a ceiling here an over-under -- 30 s at 1.15 alternating
+# with 30 s at 0.95, which never lets oxygen uptake fall -- reads as a series
+# of microintervals, because its "recovery" is merely under FTP.
+MICRO_MAX_REST_POWER = 0.80
+# What COMPETES with the short work: a sustained bout longer than the ceiling,
+# from tempo up. Not from FTP up -- a 4 x 6 min sweet-spot main set at 0.90
+# never counts as work by an at-or-over-FTP test, so a sweet-spot session that
+# happens to carry ten 15 s activations read as a microinterval session.
+MICRO_LONG_MIN_POWER = 0.85
+# A session must carry a full series (Ronnestad's own is 5-13 reps) and about
+# one series' worth of short work, and that work must not be a sideshow beside
+# a longer effort.
+MICRO_MIN_SERIES_REPS = 5
+MICRO_MIN_WORK_S = 300
 
 
 # Headroom before a matched file is considered over budget. A library workout
@@ -5232,6 +5252,107 @@ def match_zwo(session: PlannedSession, library: list[dict], *args, **kwargs):
         out.duration_min = scaled
         out.tss_estimate = round(got * (scaled / dur))
     return out
+
+
+def _micro_shape(workout_el) -> tuple[int, int, int]:
+    """(reps in the longest short-work series, seconds of short work, seconds
+    of long work) for one parsed .zwo.
+
+    THE DEFINITION, from the literature this family comes from. Ronnestad's
+    protocol is series of 5-13 x (30 s ON / 15 s OFF), the ON leg at ~118 % of
+    40-min maximal power, the OFF at ~60 % (PMC11680548); the wider
+    short-interval literature runs 10-40 s bouts at ~100-130 % of maximal
+    aerobic power with recovery at or under the work duration, and contrasts
+    them against LONG intervals of 4-5 min. The mechanism is the short
+    recovery: oxygen uptake does not fall between reps.
+
+    So short work is a bout <= MICRO_MAX_BOUT_S at MICRO_MIN_POWER..
+    MICRO_MAX_POWER whose recovery is at most MICRO_MAX_REST_RATIO x the bout
+    and at most MICRO_MAX_REST_POWER (a leg at 0.95 is a second effort, not a
+    recovery).
+    Long work is anything from MICRO_LONG_MIN_POWER up in a bout longer than
+    that ceiling.
+
+    Files are authored three ways and all three are read: IntervalsT, repeated
+    SteadyState pairs, and repeated work Ramps. Measuring only IntervalsT saw
+    a 4x40s opener and missed the 6x4min main set beside it, which is how a
+    three-minute-rep session came to read as a microinterval session.
+    """
+    micro_s = long_s = best = 0
+    run = 0
+    segs = list(workout_el)
+    for i, el in enumerate(segs):
+        tag = el.tag
+        try:
+            if tag == "IntervalsT":
+                on = int(float(el.get("OnDuration", 0) or 0))
+                off = int(float(el.get("OffDuration", 0) or 0))
+                pw = float(el.get("OnPower", 0) or 0)
+                n = int(float(el.get("Repeat", 0) or 0))
+                if on > 0 and n > 0:
+                    off_pw = float(el.get("OffPower", 0) or 0)
+                    if (MICRO_MIN_POWER <= pw <= MICRO_MAX_POWER
+                            and on <= MICRO_MAX_BOUT_S and off <= on * MICRO_MAX_REST_RATIO
+                            and off_pw <= MICRO_MAX_REST_POWER):
+                        micro_s += on * n
+                        best = max(best, n)
+                    elif pw >= MICRO_LONG_MIN_POWER and on > MICRO_MAX_BOUT_S:
+                        long_s += on * n
+                run = 0
+                continue
+            if tag not in ("SteadyState", "Ramp"):
+                continue
+            dur = int(float(el.get("Duration", 0) or 0))
+            if tag == "SteadyState":
+                pw = float(el.get("Power", 0) or 0)
+            else:
+                pw = (float(el.get("PowerLow", 0) or 0) + float(el.get("PowerHigh", 0) or 0)) / 2
+        except (TypeError, ValueError):
+            run = 0
+            continue
+        if dur <= 0:
+            continue
+        if MICRO_MIN_POWER <= pw <= MICRO_MAX_POWER and dur <= MICRO_MAX_BOUT_S:
+            nxt = segs[i + 1] if i + 1 < len(segs) else None
+            rest = rest_pw = 0
+            if nxt is not None and nxt.tag == "SteadyState":
+                try:
+                    rest = int(float(nxt.get("Duration", 0) or 0))
+                    rest_pw = float(nxt.get("Power", 0) or 0)
+                except (TypeError, ValueError):
+                    rest = 0
+            if rest and rest <= dur * MICRO_MAX_REST_RATIO and rest_pw <= MICRO_MAX_REST_POWER:
+                micro_s += dur
+                run += 1
+                best = max(best, run)
+            else:
+                run = 0
+        elif pw >= MICRO_LONG_MIN_POWER and dur > MICRO_MAX_BOUT_S:
+            long_s += dur
+            run = 0
+    return best, micro_s, long_s
+
+
+def _index_rules_fingerprint() -> str:
+    """The thresholds that decide a cached row's computed verdicts.
+
+    The index stores conclusions, not just parsed facts, so an index built
+    under other thresholds is wrong even though every .zwo file is untouched
+    (count and mtime, which validate the rest of the header, cannot see it).
+    Editing a constant below therefore invalidates the index by itself."""
+    return "|".join(str(v) for v in (
+        MICRO_MAX_BOUT_S, MICRO_MAX_REST_RATIO, MICRO_MAX_REST_POWER,
+        MICRO_MIN_POWER, MICRO_MAX_POWER, MICRO_LONG_MIN_POWER,
+        MICRO_MIN_SERIES_REPS, MICRO_MIN_WORK_S))
+
+
+def is_microinterval(reps: int, micro_s: int, long_s: int) -> bool:
+    """The verdict, from a file's shape (see _micro_shape): a full series of
+    short bouts, about a series' worth of work, and that work not a sideshow
+    beside a longer effort. One definition, used by the index builder and by
+    anything that asks."""
+    return (reps >= MICRO_MIN_SERIES_REPS and micro_s >= MICRO_MIN_WORK_S
+            and micro_s >= long_s)
 
 
 def _match_zwo_unclamped(
@@ -5458,11 +5579,10 @@ def _match_zwo_unclamped(
         # block that served nothing but 30/15 would be its own kind of wrong,
         # and the variety machinery still has to have something to choose.
         if session.session_type == "vo2max" and not want_test:
-            _mf = w.get("MicroFrac")
-            _is_micro = (_mf is not None and _mf >= MICROINTERVAL_MIN_FRAC)
-            if _mf is None:
-                # No declared work set to measure — fall back to the
-                # classifier's pattern flag rather than assuming either way.
+            _is_micro = bool(w.get("IsMicro"))
+            if "IsMicro" not in w:
+                # An index built before the structural measure: fall back to
+                # the classifier's pattern flag rather than assuming either way.
                 _is_micro = bool((w.get("SecondaryFlags") or {})
                                  .get("pattern_microinterval"))
             if _is_micro:
@@ -5737,6 +5857,18 @@ def _match_zwo_unclamped(
     # cumulative-weight ladder per regen.
     if seed_salt:
         rng.shuffle(pool)
+
+    # v4.7.0 — "microintervals only" means only, when the library can answer.
+    # The penalty above is not enough on its own: the weighted draw floors
+    # every weight at 0.1, so a penalised file still won about one slot in
+    # nine (measured: a 60-min VO2 slot served a 10/8/6/4-min ladder). Filter
+    # the pool to microinterval files when any survived the duration narrowing
+    # -- and only then, so a slot with no microinterval file that fits still
+    # fills rather than emptying.
+    if micro_only:
+        _micro_pool = [c for c in pool if c[1].get("IsMicro")]
+        if _micro_pool:
+            pool = _micro_pool
 
     # Score-weighted selection: higher score = more likely, but ALL pool items reachable
     weights = [max(0.1, c[0]) for c in pool]

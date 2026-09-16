@@ -87,9 +87,9 @@ def _index_rows():
     return idx, {r["File"]: r for r in idx["rows"]}
 
 
-def test_index_schema_v3_and_flagship_row():
+def test_index_schema_v4_and_flagship_row():
     idx, rows = _index_rows()
-    assert idx["schema_version"] == 3
+    assert idx["schema_version"] == 4
     fl = rows[FLAGSHIP]
     # v3.7.0: the flagship's cooldown eased from 0.65 to 0.60 FTP, so a
     # little less easy time is averaged in and IF ticks up. The workout's
@@ -111,6 +111,8 @@ def test_facts_v3_flagship_matches_index():
 
 def test_schema_versions_pinned():
     # A future TSS/IF formula change MUST bump these (stale installed caches
-    # validate on .zwo mtimes, which a formula edit does not touch).
-    assert tp._INDEX_SCHEMA_VERSION == 3
+    # validate on .zwo mtimes, which a formula edit does not touch). The
+    # microinterval thresholds are pinned separately and automatically, by
+    # tp._index_rules_fingerprint() in the index header.
+    assert tp._INDEX_SCHEMA_VERSION == 4
     assert wf._SCHEMA_VERSION == 3

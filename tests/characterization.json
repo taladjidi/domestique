@@ -3539,7 +3539,7 @@
        "vo2max",
        60,
        75.0,
-       "anaerobic_2x6x30s_120pct_59min.zwo",
+       "vo2max_5x3x40s_109pct_60min.zwo",
        "pending"
       ],
       [
@@ -3821,7 +3821,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2_short_4x1min-1min_115pct_46min.zwo",
+       "vo2max_4x4min-4min_120pct_49min.zwo",
        "pending"
       ],
       [
@@ -4222,7 +4222,7 @@
        "vo2max",
        60,
        75.0,
-       "anaerobic_2x6x30s_120pct_59min.zwo",
+       "vo2max_5x3x40s_109pct_60min.zwo",
        "pending"
       ],
       [
@@ -4504,7 +4504,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2_short_4x1min-1min_115pct_46min.zwo",
+       "vo2max_4x4min-4min_120pct_49min.zwo",
        "pending"
       ],
       [
@@ -5163,7 +5163,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2_short_3x2min-3min_115pct_48min.zwo",
+       "vo2_6x3min-2min_115pct_45min.zwo",
        "pending"
       ],
       [
@@ -5566,7 +5566,7 @@
        "vo2max",
        60,
        75.0,
-       "anaerobic_2x6x30s_120pct_59min.zwo",
+       "vo2max_5x3x40s_109pct_60min.zwo",
        "pending"
       ],
       [
@@ -5848,7 +5848,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2_short_4x1min-1min_115pct_46min.zwo",
+       "vo2max_4x4min-4min_120pct_49min.zwo",
        "pending"
       ],
       [
@@ -6249,7 +6249,7 @@
        "vo2max",
        60,
        75.0,
-       "anaerobic_2x6x30s_120pct_59min.zwo",
+       "vo2max_5x3x40s_109pct_60min.zwo",
        "pending"
       ],
       [
@@ -6531,7 +6531,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2_short_4x1min-1min_115pct_46min.zwo",
+       "vo2max_4x4min-4min_120pct_49min.zwo",
        "pending"
       ],
       [
@@ -7190,7 +7190,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2_short_3x2min-3min_115pct_48min.zwo",
+       "vo2_6x3min-2min_115pct_45min.zwo",
        "pending"
       ],
       [
@@ -7345,7 +7345,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -7609,7 +7609,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ],
       [
@@ -7680,7 +7680,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -7991,7 +7991,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_12x1min-1min_121pct_54min.zwo",
+       "anaerobic_2x1min-1min_134pct_50min.zwo",
        "pending"
       ],
       [
@@ -8676,7 +8676,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -8708,7 +8708,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -8972,7 +8972,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ],
       [
@@ -9072,7 +9072,7 @@
        "vo2max",
        75,
        90.0,
-       "vo2max_2x3x3min-3min_115pct_80min.zwo",
+       "vo2max_9x3min-1min_106pct_70min.zwo",
        "pending"
       ],
       [
@@ -9214,7 +9214,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -9246,7 +9246,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -9549,7 +9549,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -9581,7 +9581,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -9892,7 +9892,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_12x1min-1min_121pct_54min.zwo",
+       "anaerobic_2x1min-1min_134pct_50min.zwo",
        "pending"
       ],
       [
@@ -9926,7 +9926,7 @@
        "vo2max",
        75,
        89.0,
-       "vo2max_9x3min-1min_106pct_70min.zwo",
+       "vo2max_6x5min-3min_120pct_70min.zwo",
        "pending"
       ],
       [
@@ -10065,7 +10065,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -10097,7 +10097,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -10279,7 +10279,7 @@
        "vo2max",
        75,
        94.0,
-       "vo2max_2x3x2min-3min_115pct_70min.zwo",
+       "vo2max_6x3min-4min_113pct_70min.zwo",
        "pending"
       ],
       [
@@ -10334,7 +10334,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "missed"
       ],
       [
@@ -10374,7 +10374,7 @@
        "vo2max",
        60,
        75.0,
-       "vo2_ladder5_120pct_60min.zwo",
+       "vo2max_5x150s-3min_115pct_60min.zwo",
        "pending"
       ]
      ]
@@ -10711,7 +10711,7 @@
        "vo2max",
        75,
        88.0,
-       "vo2max_9x3min-1min_106pct_70min.zwo",
+       "vo2max_6x5min-3min_120pct_70min.zwo",
        "pending"
       ],
       [
@@ -11649,7 +11649,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -12416,7 +12416,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -12762,7 +12762,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_8x1min-2min_140pct_47min.zwo",
        "pending"
       ],
       [
@@ -12951,7 +12951,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -13231,7 +13231,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -13286,7 +13286,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -13800,7 +13800,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -14014,7 +14014,7 @@
        "vo2max",
        45,
        56.0,
-       "vo2max_ladder4_109pct_46min.zwo",
+       "vo2max_4x5min-150s_106pct_46min.zwo",
        "pending"
       ],
       [
@@ -14069,7 +14069,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "missed"
       ],
       [
@@ -14681,7 +14681,7 @@
         "vo2max",
         50,
         67.0,
-        "anaerobic_2x2min-2min_111pct_49min.zwo",
+        "anaerobic_10x20s-30s_125pct_48min.zwo",
         "pending"
        ],
        [
@@ -14752,7 +14752,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -15000,7 +15000,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -15087,7 +15087,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -15440,7 +15440,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_6x45s-285s_168pct_49min.zwo",
+       "anaerobic_2x3min-3min_115pct_54min.zwo",
        "pending"
       ],
       [
@@ -15872,7 +15872,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -16143,7 +16143,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -16767,7 +16767,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -17104,7 +17104,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -17623,7 +17623,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "missed"
       ],
       [
@@ -18143,7 +18143,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -18423,7 +18423,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -18480,7 +18480,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -18860,7 +18860,7 @@
        "vo2max",
        75,
        89.0,
-       "vo2max_9x3min-1min_106pct_70min.zwo",
+       "vo2max_6x5min-3min_120pct_70min.zwo",
        "pending"
       ],
       [
@@ -18999,7 +18999,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "missed"
       ],
       [
@@ -19378,7 +19378,7 @@
        "vo2max",
        75,
        88.0,
-       "vo2max_9x3min-1min_106pct_70min.zwo",
+       "vo2max_6x5min-3min_120pct_70min.zwo",
        "pending"
       ],
       [
@@ -20923,7 +20923,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ]
      ]
@@ -21047,7 +21047,7 @@
        "vo2max",
        75,
        81.0,
-       "tempo_3x20s_120pct_73min.zwo",
+       "anaerobic_2x85s-235s_120pct_81min.zwo",
        "pending"
       ],
       [
@@ -21145,9 +21145,9 @@
       [
        "2026-10-13",
        "sprint",
-       45,
-       46.0,
-       "neuromuscular_7x12s-3min_210pct_43min.zwo",
+       44,
+       35.0,
+       "neuromuscular_12x15s_160pct_44min.zwo",
        "pending"
       ],
       [
@@ -21161,9 +21161,9 @@
       [
        "2026-10-15",
        "overunder",
-       90,
-       113.0,
-       "threshold_4x12min-5min_100pct_90min.zwo",
+       75,
+       85.0,
+       "over_under_5x3min_92pct_75min.zwo",
        "pending"
       ],
       [
@@ -21176,18 +21176,18 @@
       ],
       [
        "2026-10-17",
-       "long_z2",
-       120,
-       89.0,
-       "endurance_6x1min-1min_85pct_120min.zwo",
+       "vo2max",
+       50,
+       67.0,
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ],
       [
        "2026-10-18",
-       "vo2max",
-       49,
-       62.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "long_z2",
+       120,
+       88.0,
+       "endurance_2x8min-5min_80pct_120min.zwo",
        "pending"
       ]
      ]
@@ -21260,7 +21260,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ]
      ]
@@ -21384,7 +21384,7 @@
        "vo2max",
        75,
        81.0,
-       "tempo_3x20s_120pct_73min.zwo",
+       "anaerobic_2x85s-235s_120pct_81min.zwo",
        "pending"
       ],
       [
@@ -21597,7 +21597,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_12x1min-1min_121pct_54min.zwo",
+       "anaerobic_2x1min-1min_134pct_50min.zwo",
        "pending"
       ],
       [
@@ -21900,7 +21900,7 @@
        "vo2max",
        75,
        81.0,
-       "tempo_3x20s_120pct_73min.zwo",
+       "anaerobic_2x85s-235s_120pct_81min.zwo",
        "pending"
       ],
       [
@@ -22021,7 +22021,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ]
      ]
@@ -22557,7 +22557,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -22665,7 +22665,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -22794,10 +22794,10 @@
       ],
       [
        "2026-11-12",
-       "overunder",
+       "vo2max",
        60,
-       65.0,
-       "over_under_4x4min_80pct_60min.zwo",
+       78.0,
+       "neuromuscular_28x15s_120pct_62min.zwo",
        "pending"
       ],
       [
@@ -22847,7 +22847,7 @@
        "vo2max",
        50,
        60.0,
-       "vo2_short_3x10x30s-15s_125pct_48min.zwo",
+       "vo2max_4x4min-2min_107pct_50min.zwo",
        "pending"
       ],
       [
@@ -22860,10 +22860,10 @@
       ],
       [
        "2026-11-19",
-       "threshold",
-       60,
-       72.0,
-       "threshold_5x5min_100pct_60min.zwo",
+       "vo2max",
+       58,
+       78.0,
+       "vo2_short_3x3min_95pct_58min.zwo",
        "pending"
       ],
       [
@@ -22879,7 +22879,7 @@
        "vo2max",
        60,
        66.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "over_under_2x5x1min_102pct_64min.zwo",
        "pending"
       ],
       [
@@ -22913,7 +22913,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_8x1min-2min_140pct_47min.zwo",
        "pending"
       ]
      ]
@@ -22929,9 +22929,9 @@
       [
        "2026-11-25",
        "z2",
-       35,
-       29.0,
-       "sweetspot_3x20s_120pct_32min.zwo",
+       55,
+       46.0,
+       "neuromuscular_ladder7_150pct_55min.zwo",
        "pending"
       ],
       [
@@ -22960,10 +22960,10 @@
       ],
       [
        "2026-11-29",
-       "z2",
-       40,
-       33.0,
-       "recovery_ladder3_113pct_38min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -23442,7 +23442,7 @@
        "vo2max",
        75,
        93.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -23706,7 +23706,7 @@
        "vo2max",
        75,
        88.0,
-       "supra_threshold_2x5min-2min_85pct_72min.zwo",
+       "anaerobic_5x3min-3min_117pct_71min.zwo",
        "pending"
       ]
      ]
@@ -24169,7 +24169,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -24227,7 +24227,7 @@
        "vo2max",
        60,
        72.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_8x40s-20s_110pct_62min.zwo",
        "pending"
       ],
       [
@@ -24425,7 +24425,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_7x70s-20s_110pct_60min.zwo",
+       "vo2_short_8x50s-10s_118pct_60min.zwo",
        "pending"
       ],
       [
@@ -24475,7 +24475,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -24491,7 +24491,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_3x13x30s-15s_113pct_55min.zwo",
        "pending"
       ],
       [
@@ -24657,7 +24657,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -24723,7 +24723,7 @@
        "vo2max",
        60,
        70.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_5x2min_90pct_59min.zwo",
        "pending"
       ]
      ]
@@ -24854,7 +24854,7 @@
        "vo2max",
        75,
        88.0,
-       "vo2max_4x40s-20s_120pct_77min.zwo",
+       "vo2max_ladder13_140pct_75min.zwo",
        "pending"
       ],
       [
@@ -25052,7 +25052,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_3x13x30s-15s_113pct_55min.zwo",
        "pending"
       ],
       [
@@ -25382,7 +25382,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_ladder8_150pct_54min.zwo",
        "pending"
       ],
       [
@@ -25580,7 +25580,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder7_132pct_48min.zwo",
+       "anaerobic_6x1min-4min_145pct_47min.zwo",
        "pending"
       ]
      ]
@@ -26268,10 +26268,10 @@
       ],
       [
        "2026-11-11",
-       "z2",
-       64,
-       46.0,
-       "endurance_steady_69pct_64min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -26292,18 +26292,18 @@
       ],
       [
        "2026-11-14",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_2x12s-3min_240pct_41min.zwo",
+       "vo2max",
+       60,
+       80.0,
+       "vo2_short_4x5x30s-30s_120pct_60min.zwo",
        "pending"
       ],
       [
        "2026-11-15",
        "long_z2",
-       180,
-       139.0,
-       "endurance_steady_74pct_180min.zwo",
+       144,
+       111.0,
+       "endurance_steady_68pct_140min.zwo",
        "pending"
       ]
      ]
@@ -26327,9 +26327,9 @@
       [
        "2026-11-17",
        "vo2max",
-       60,
-       75.0,
-       "vo2_short_3x13x30s-15s_108pct_55min.zwo",
+       75,
+       94.0,
+       "vo2max_6x3min-4min_113pct_70min.zwo",
        "pending"
       ],
       [
@@ -26350,18 +26350,18 @@
       ],
       [
        "2026-11-20",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       37,
+       30.0,
+       "sweet_spot_1x2min_80pct_37min.zwo",
        "pending"
       ],
       [
        "2026-11-21",
-       "overunder",
-       60,
-       82.0,
-       "over_under_3x3min_80pct_60min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_2x12s-3min_240pct_41min.zwo",
        "pending"
       ],
       [
@@ -26411,7 +26411,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ],
       [
@@ -26986,7 +26986,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -27044,7 +27044,7 @@
        "vo2max",
        60,
        72.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_8x40s-20s_110pct_62min.zwo",
        "pending"
       ],
       [
@@ -27242,7 +27242,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_7x70s-20s_110pct_60min.zwo",
+       "vo2_short_8x50s-10s_118pct_60min.zwo",
        "pending"
       ],
       [
@@ -27292,7 +27292,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -27308,7 +27308,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_3x13x30s-15s_113pct_55min.zwo",
        "pending"
       ],
       [
@@ -27474,7 +27474,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -27540,7 +27540,7 @@
        "vo2max",
        60,
        70.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_5x2min_90pct_59min.zwo",
        "pending"
       ]
      ]
@@ -27935,7 +27935,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -27993,7 +27993,7 @@
        "vo2max",
        60,
        72.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_8x40s-20s_110pct_62min.zwo",
        "pending"
       ],
       [
@@ -28191,7 +28191,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_7x70s-20s_110pct_60min.zwo",
+       "vo2_short_8x50s-10s_118pct_60min.zwo",
        "pending"
       ],
       [
@@ -28241,7 +28241,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -28257,7 +28257,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_3x13x30s-15s_113pct_55min.zwo",
        "pending"
       ],
       [
@@ -28423,7 +28423,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -28489,7 +28489,7 @@
        "vo2max",
        60,
        70.0,
-       "vo2_short_8x50s-10s_118pct_60min.zwo",
+       "vo2_short_5x2min_90pct_59min.zwo",
        "pending"
       ]
      ]
@@ -28950,7 +28950,7 @@
        "vo2max",
        75,
        93.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -29312,7 +29312,7 @@
        "vo2max",
        75,
        96.0,
-       "vo2max_5x6min-5min_110pct_80min.zwo",
+       "vo2max_3x5min-5min_105pct_70min.zwo",
        "pending"
       ],
       [
@@ -29958,7 +29958,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -29984,7 +29984,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -30050,7 +30050,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -30264,7 +30264,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -30346,7 +30346,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -30446,7 +30446,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -30881,7 +30881,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_3x13x30s-15s_116pct_60min.zwo",
+       "vo2_short_3x13x30s-15s_108pct_55min.zwo",
        "pending"
       ]
      ]
@@ -31187,7 +31187,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x3min-3min_115pct_54min.zwo",
+       "anaerobic_6x30s-90s_124pct_48min.zwo",
        "pending"
       ],
       [
@@ -32065,10 +32065,10 @@
       ],
       [
        "2026-11-12",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_7x10s-3min_250pct_43min.zwo",
+       "vo2max",
+       60,
+       83.0,
+       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
        "pending"
       ],
       [
@@ -32090,9 +32090,9 @@
       [
        "2026-11-15",
        "long_z2",
-       290,
-       224.0,
-       "endurance_steady_66pct_240min.zwo",
+       227,
+       175.0,
+       "endurance_steady_68pct_225min.zwo",
        "pending"
       ]
      ]
@@ -32116,9 +32116,9 @@
       [
        "2026-11-17",
        "vo2max",
-       60,
-       75.0,
-       "vo2_short_3x13x30s-15s_108pct_55min.zwo",
+       75,
+       94.0,
+       "vo2max_6x3min-4min_113pct_70min.zwo",
        "pending"
       ],
       [
@@ -32147,10 +32147,10 @@
       ],
       [
        "2026-11-21",
-       "overunder",
-       60,
-       82.0,
-       "over_under_3x3min_80pct_60min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_2x12s-3min_240pct_41min.zwo",
        "pending"
       ],
       [
@@ -32200,7 +32200,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ],
       [
@@ -32777,7 +32777,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -32803,7 +32803,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -32869,7 +32869,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -33083,7 +33083,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -33165,7 +33165,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -33265,7 +33265,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -33726,7 +33726,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -33752,7 +33752,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -33818,7 +33818,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -34032,7 +34032,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -34114,7 +34114,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -34214,7 +34214,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -34673,7 +34673,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -34699,7 +34699,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -34765,7 +34765,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -34979,7 +34979,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -35061,7 +35061,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -35161,7 +35161,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -35620,7 +35620,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -35646,7 +35646,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -35712,7 +35712,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -35926,7 +35926,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -36008,7 +36008,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -36108,7 +36108,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
+       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
        "pending"
       ]
      ]
@@ -36637,7 +36637,7 @@
        "vo2max",
        75,
        93.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -36901,7 +36901,7 @@
        "vo2max",
        75,
        88.0,
-       "supra_threshold_2x5min-2min_85pct_72min.zwo",
+       "anaerobic_5x3min-3min_117pct_71min.zwo",
        "pending"
       ],
       [
@@ -37602,7 +37602,7 @@
        "vo2max",
        60,
        75.0,
-       "neuromuscular_3x8x15s_120pct_63min.zwo",
+       "anaerobic_5x1min-1min_125pct_60min.zwo",
        "pending"
       ],
       [
@@ -37884,7 +37884,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2max_short_2x3x1min-1min_115pct_48min.zwo",
+       "anaerobic_5x2min_90pct_50min.zwo",
        "pending"
       ],
       [
@@ -38285,7 +38285,7 @@
        "vo2max",
        60,
        75.0,
-       "neuromuscular_3x8x15s_120pct_63min.zwo",
+       "anaerobic_5x1min-1min_125pct_60min.zwo",
        "pending"
       ],
       [
@@ -38567,7 +38567,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2max_short_2x3x1min-1min_115pct_48min.zwo",
+       "anaerobic_5x2min_90pct_50min.zwo",
        "pending"
       ],
       [
@@ -39226,7 +39226,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2max_short_2x3x1min-1min_115pct_48min.zwo",
+       "anaerobic_5x2min_90pct_50min.zwo",
        "pending"
       ],
       [
@@ -39629,7 +39629,7 @@
        "vo2max",
        60,
        75.0,
-       "neuromuscular_3x8x15s_120pct_63min.zwo",
+       "anaerobic_5x1min-1min_125pct_60min.zwo",
        "pending"
       ],
       [
@@ -39911,7 +39911,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2max_short_2x3x1min-1min_115pct_48min.zwo",
+       "anaerobic_5x2min_90pct_50min.zwo",
        "pending"
       ],
       [
@@ -40312,7 +40312,7 @@
        "vo2max",
        60,
        75.0,
-       "neuromuscular_3x8x15s_120pct_63min.zwo",
+       "anaerobic_5x1min-1min_125pct_60min.zwo",
        "pending"
       ],
       [
@@ -40594,7 +40594,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2max_short_2x3x1min-1min_115pct_48min.zwo",
+       "anaerobic_5x2min_90pct_50min.zwo",
        "pending"
       ],
       [
@@ -41253,7 +41253,7 @@
        "vo2max",
        48,
        60.0,
-       "vo2max_short_2x3x1min-1min_115pct_48min.zwo",
+       "anaerobic_5x2min_90pct_50min.zwo",
        "pending"
       ],
       [
@@ -41408,7 +41408,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -41672,7 +41672,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ],
       [
@@ -41743,7 +41743,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -42744,7 +42744,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -42776,7 +42776,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -43140,7 +43140,7 @@
        "vo2max",
        75,
        90.0,
-       "vo2max_2x3x3min-3min_115pct_80min.zwo",
+       "vo2max_9x3min-1min_106pct_70min.zwo",
        "pending"
       ],
       [
@@ -43282,7 +43282,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -43314,7 +43314,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -43578,7 +43578,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ],
       [
@@ -43617,7 +43617,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -43649,7 +43649,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -44134,7 +44134,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "pending"
       ],
       [
@@ -44166,7 +44166,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "neuromuscular_3x30s_150pct_52min.zwo",
        "pending"
       ],
       [
@@ -44348,7 +44348,7 @@
        "vo2max",
        55,
        69.0,
-       "vo2max_5x5min-150s_108pct_55min.zwo",
+       "sprints_6x2min_114pct_52min.zwo",
        "pending"
       ],
       [
@@ -44403,7 +44403,7 @@
        "vo2max",
        75,
        104.0,
-       "vo2max_3x3x220s_106pct_70min.zwo",
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
        "missed"
       ],
       [
@@ -44443,7 +44443,7 @@
        "vo2max",
        60,
        75.0,
-       "vo2_ladder5_120pct_60min.zwo",
+       "vo2max_5x150s-3min_115pct_60min.zwo",
        "pending"
       ]
      ]
@@ -45720,7 +45720,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -46489,7 +46489,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -46835,7 +46835,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_8x1min-2min_140pct_47min.zwo",
        "pending"
       ],
       [
@@ -47024,7 +47024,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -47304,7 +47304,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -47359,7 +47359,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -47876,7 +47876,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -48090,7 +48090,7 @@
        "vo2max",
        45,
        56.0,
-       "vo2max_ladder4_109pct_46min.zwo",
+       "vo2max_4x5min-150s_106pct_46min.zwo",
        "pending"
       ],
       [
@@ -48147,7 +48147,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "missed"
       ],
       [
@@ -48758,7 +48758,7 @@
         "vo2max",
         50,
         67.0,
-        "anaerobic_2x2min-2min_111pct_49min.zwo",
+        "anaerobic_10x20s-30s_125pct_48min.zwo",
         "pending"
        ],
        [
@@ -48829,7 +48829,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -49093,7 +49093,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -49164,7 +49164,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -49952,7 +49952,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -50223,7 +50223,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_2x2min-2min_111pct_49min.zwo",
+       "anaerobic_10x20s-30s_125pct_48min.zwo",
        "pending"
       ],
       [
@@ -51113,7 +51113,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -51513,7 +51513,7 @@
        "vo2max",
        35,
        46.1,
-       "vo2max_2x30s-30s_122pct_33min.zwo",
+       "anaerobic_3x20s_130pct_38min.zwo",
        "pending"
       ],
       [
@@ -52216,7 +52216,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -52480,7 +52480,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x1min-1min_134pct_50min.zwo",
+       "anaerobic_2x2x45s-45s_130pct_47min.zwo",
        "pending"
       ],
       [
@@ -52553,7 +52553,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "pending"
       ],
       [
@@ -53073,7 +53073,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_3x2min-1min_121pct_52min.zwo",
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
        "missed"
       ],
       [
@@ -53452,7 +53452,7 @@
        "vo2max",
        75,
        89.0,
-       "vo2max_9x3min-1min_106pct_70min.zwo",
+       "vo2max_6x5min-3min_120pct_70min.zwo",
        "pending"
       ],
       [
@@ -54956,10 +54956,10 @@
       ],
       [
        "2026-09-15",
-       "threshold",
-       79,
-       97.0,
-       "ftp_test_1x25min_96pct_79min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
        "pending"
       ],
       [
@@ -54996,10 +54996,10 @@
       ],
       [
        "2026-09-20",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_6x30s_160pct_42min.zwo",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ]
      ]
@@ -55121,9 +55121,9 @@
       [
        "2026-10-03",
        "vo2max",
-       50,
-       54.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       60,
+       64.8,
+       "vo2_short_29x30s-30s_120pct_66min.zwo",
        "pending"
       ],
       [
@@ -55140,8 +55140,8 @@
      "2026-10-05",
      "2026-10-11",
      "continuous",
-     306.0,
-     306.0,
+     314.0,
+     314.0,
      true,
      [
       [
@@ -55163,41 +55163,41 @@
       [
        "2026-10-07",
        "z2",
-       60,
-       51.0,
-       "endurance_ladder6_120pct_60min.zwo",
+       63,
+       44.7,
+       "endurance_steady_68pct_65min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "recovery",
-       45,
-       22.0,
-       "recovery_steady_56pct_45min.zwo",
+       29,
+       14.2,
+       "endurance_steady_64pct_30min.zwo",
        "pending"
       ],
       [
        "2026-10-09",
        "z2",
-       23,
-       15.8,
-       "sweet_spot_1x2min_80pct_21min_v2.zwo",
+       20,
+       14.3,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
        "2026-10-10",
-       "long_z2",
-       150,
-       93.0,
-       "endurance_steady_66pct_160min.zwo",
-       "pending"
-      ],
-      [
-       "2026-10-11",
        "rest",
        0,
        0.0,
        "",
+       "pending"
+      ],
+      [
+       "2026-10-11",
+       "long_z2",
+       150,
+       113.0,
+       "endurance_steady_68pct_140min.zwo",
        "pending"
       ]
      ]
@@ -55206,7 +55206,7 @@
      "2026-10-12",
      "2026-10-18",
      "continuous",
-     440.0,
+     446.0,
      null,
      false,
      [
@@ -55220,10 +55220,10 @@
       ],
       [
        "2026-10-13",
-       "tempo",
-       60,
-       60.0,
-       "tempo_1x45min_82pct_60min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_7x12s-3min_210pct_43min.zwo",
        "pending"
       ],
       [
@@ -55236,10 +55236,10 @@
       ],
       [
        "2026-10-15",
-       "overunder",
-       73,
-       82.0,
-       "over_under_4x1min-1min_105pct_73min.zwo",
+       "threshold",
+       63,
+       84.0,
+       "over_under_5x30s_110pct_63min.zwo",
        "pending"
       ],
       [
@@ -55252,18 +55252,18 @@
       ],
       [
        "2026-10-17",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_6x20s_80pct_44min.zwo",
+       "vo2max",
+       49,
+       62.0,
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ],
       [
        "2026-10-18",
-       "z2",
-       46,
-       36.0,
-       "endurance_2x1min_90pct_46min.zwo",
+       "long_z2",
+       120,
+       88.0,
+       "endurance_2x8min-5min_80pct_120min.zwo",
        "pending"
       ]
      ]
@@ -55293,10 +55293,10 @@
       ],
       [
        "2026-09-15",
-       "threshold",
-       79,
-       97.0,
-       "ftp_test_1x25min_96pct_79min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
        "pending"
       ],
       [
@@ -55333,10 +55333,10 @@
       ],
       [
        "2026-09-20",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_6x30s_160pct_42min.zwo",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ]
      ]
@@ -55458,9 +55458,9 @@
       [
        "2026-10-03",
        "vo2max",
-       50,
-       54.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       60,
+       64.8,
+       "vo2_short_29x30s-30s_120pct_66min.zwo",
        "pending"
       ],
       [
@@ -55477,8 +55477,8 @@
      "2026-10-05",
      "2026-10-11",
      "continuous",
-     306.0,
-     306.0,
+     314.0,
+     314.0,
      true,
      [
       [
@@ -55500,41 +55500,41 @@
       [
        "2026-10-07",
        "z2",
-       60,
-       51.0,
-       "endurance_ladder6_120pct_60min.zwo",
+       63,
+       44.7,
+       "endurance_steady_68pct_65min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "recovery",
-       45,
-       22.0,
-       "recovery_steady_56pct_45min.zwo",
+       29,
+       14.2,
+       "endurance_steady_64pct_30min.zwo",
        "pending"
       ],
       [
        "2026-10-09",
        "z2",
-       23,
-       15.8,
-       "sweet_spot_1x2min_80pct_21min_v2.zwo",
+       20,
+       14.3,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
        "2026-10-10",
-       "long_z2",
-       150,
-       93.0,
-       "endurance_steady_66pct_160min.zwo",
-       "pending"
-      ],
-      [
-       "2026-10-11",
        "rest",
        0,
        0.0,
        "",
+       "pending"
+      ],
+      [
+       "2026-10-11",
+       "long_z2",
+       150,
+       113.0,
+       "endurance_steady_68pct_140min.zwo",
        "pending"
       ]
      ]
@@ -55639,7 +55639,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_12x1min-1min_121pct_54min.zwo",
+       "anaerobic_2x1min-1min_134pct_50min.zwo",
        "pending"
       ],
       [
@@ -55705,7 +55705,7 @@
        "vo2max",
        43,
        46.4,
-       "anaerobic_3x3min-30s_100pct_45min.zwo",
+       "anaerobic_4x3min_95pct_46min.zwo",
        "pending"
       ],
       [
@@ -55810,10 +55810,10 @@
       ],
       [
        "2026-09-15",
-       "threshold",
-       79,
-       97.0,
-       "ftp_test_1x25min_96pct_79min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
        "missed"
       ],
       [
@@ -55850,10 +55850,10 @@
       ],
       [
        "2026-09-20",
-       "threshold",
-       80,
-       120.0,
-       "threshold_4x12min-3min_100pct_80min.zwo",
+       "sprint",
+       45,
+       43.0,
+       "neuromuscular_2x12s-3min_240pct_41min.zwo",
        "pending"
       ]
      ]
@@ -55975,9 +55975,9 @@
       [
        "2026-10-03",
        "vo2max",
-       50,
-       54.0,
-       "anaerobic_10x20s-30s_125pct_48min.zwo",
+       60,
+       64.8,
+       "vo2_short_29x30s-30s_120pct_66min.zwo",
        "pending"
       ],
       [
@@ -55994,8 +55994,8 @@
      "2026-10-05",
      "2026-10-11",
      "continuous",
-     306.0,
-     306.0,
+     314.0,
+     314.0,
      true,
      [
       [
@@ -56017,41 +56017,41 @@
       [
        "2026-10-07",
        "z2",
-       60,
-       51.0,
-       "endurance_ladder6_120pct_60min.zwo",
+       63,
+       44.7,
+       "endurance_steady_68pct_65min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "recovery",
-       45,
-       22.0,
-       "recovery_steady_56pct_45min.zwo",
+       29,
+       14.2,
+       "endurance_steady_64pct_30min.zwo",
        "pending"
       ],
       [
        "2026-10-09",
        "z2",
-       23,
-       15.8,
-       "sweet_spot_1x2min_80pct_21min_v2.zwo",
+       20,
+       14.3,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
        "2026-10-10",
-       "long_z2",
-       150,
-       93.0,
-       "endurance_steady_66pct_160min.zwo",
-       "pending"
-      ],
-      [
-       "2026-10-11",
        "rest",
        0,
        0.0,
        "",
+       "pending"
+      ],
+      [
+       "2026-10-11",
+       "long_z2",
+       150,
+       113.0,
+       "endurance_steady_68pct_140min.zwo",
        "pending"
       ]
      ]
@@ -56095,10 +56095,10 @@
       ],
       [
        "2026-09-20",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_6x30s_160pct_42min.zwo",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_2x2min-2min_111pct_49min.zwo",
        "pending"
       ]
      ]
@@ -56107,8 +56107,8 @@
      "2026-09-21",
      "2026-09-27",
      "continuous",
-     341.0,
-     341.0,
+     351.0,
+     351.0,
      false,
      [
       [
@@ -56130,17 +56130,17 @@
       [
        "2026-09-23",
        "z2",
-       145,
-       108.3,
-       "endurance_5x1min-1min_88pct_135min.zwo",
+       150,
+       112.0,
+       "endurance_6x1min-1min_85pct_150min.zwo",
        "pending"
       ],
       [
        "2026-09-24",
        "threshold",
-       50,
-       56.0,
-       "threshold_2x5min-1min_95pct_50min.zwo",
+       62,
+       70.0,
+       "threshold_2x4x40s_121pct_62min.zwo",
        "pending"
       ],
       [
@@ -56154,9 +56154,9 @@
       [
        "2026-09-26",
        "threshold",
-       62,
-       76.5,
-       "threshold_3x30s-90s_120pct_62min.zwo",
+       58,
+       67.7,
+       "threshold_4x5min_96pct_58min.zwo",
        "pending"
       ],
       [
@@ -56173,8 +56173,8 @@
      "2026-09-28",
      "2026-10-04",
      "continuous",
-     374.0,
-     374.0,
+     385.0,
+     385.0,
      false,
      [
       [
@@ -56187,50 +56187,50 @@
       ],
       [
        "2026-09-29",
-       "sweetspot",
-       66,
-       68.0,
-       "tempo_4x1min-2min_98pct_66min.zwo",
+       "threshold",
+       60,
+       66.0,
+       "tempo_2x5min-2min_103pct_60min.zwo",
        "pending"
       ],
       [
        "2026-09-30",
        "z2",
-       72,
-       52.8,
-       "recovery_3x2min-2min_90pct_67min.zwo",
+       36,
+       26.4,
+       "recovery_steady_50pct_36min.zwo",
        "pending"
       ],
       [
        "2026-10-01",
-       "vo2max",
-       52,
-       67.0,
-       "vo2_6x4min-2min_85pct_52min.zwo",
+       "threshold",
+       90,
+       87.0,
+       "threshold_4x5min-2min_95pct_98min.zwo",
        "pending"
       ],
       [
        "2026-10-02",
        "z2",
-       130,
-       91.0,
-       "endurance_steady_66pct_130min.zwo",
+       160,
+       114.0,
+       "endurance_steady_66pct_160min.zwo",
        "pending"
       ],
       [
        "2026-10-03",
        "vo2max",
-       75,
-       81.0,
-       "anaerobic_2x3x3min_95pct_77min.zwo",
+       61,
+       77.3,
+       "anaerobic_6x2min-2min_120pct_61min.zwo",
        "pending"
       ],
       [
        "2026-10-04",
        "recovery",
-       28,
-       13.7,
-       "pyramid_steady_65pct_30min.zwo",
+       29,
+       14.2,
+       "recovery_steady_50pct_32min.zwo",
        "pending"
       ]
      ]
@@ -56239,8 +56239,8 @@
      "2026-10-05",
      "2026-10-11",
      "continuous",
-     269.0,
-     269.0,
+     277.0,
+     277.0,
      true,
      [
       [
@@ -56254,9 +56254,9 @@
       [
        "2026-10-06",
        "z2",
-       80,
-       54.0,
-       "endurance_steady_66pct_80min.zwo",
+       45,
+       22.0,
+       "endurance_steady_60pct_45min_v2.zwo",
        "pending"
       ],
       [
@@ -56264,39 +56264,39 @@
        "z2",
        105,
        75.0,
-       "endurance_steady_68pct_105min.zwo",
+       "endurance_steady_68pct_105min_v4.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "z2",
-       55,
-       29.0,
-       "recovery_steady_57pct_55min.zwo",
+       62,
+       48.0,
+       "sweetspot_2x4x1min-4min_95pct_62min.zwo",
        "pending"
       ],
       [
        "2026-10-09",
        "z2",
-       110,
-       79.0,
-       "endurance_steady_68pct_110min.zwo",
+       130,
+       95.0,
+       "endurance_steady_68pct_130min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-10",
        "z2",
-       28,
-       17.7,
-       "pyramid_1x2min_83pct_27min.zwo",
+       35,
+       22.6,
+       "recovery_2x45s-30s_115pct_34min.zwo",
        "pending"
       ],
       [
        "2026-10-11",
        "z2",
-       29,
+       27,
        14.2,
-       "sweet_spot_1x2min_83pct_31min.zwo",
+       "recovery_steady_55pct_30min_v5.zwo",
        "pending"
       ]
      ]
@@ -56625,7 +56625,7 @@
        "vo2max",
        55,
        70.6,
-       "anaerobic_3x30s_125pct_58min.zwo",
+       "vo2max_4x1min-1min_80pct_59min.zwo",
        "pending"
       ],
       [
@@ -56675,7 +56675,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_3x10x30s-15s_110pct_64min.zwo",
+       "vo2_short_3x10x30s-30s_110pct_60min.zwo",
        "pending"
       ],
       [
@@ -56757,7 +56757,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_ladder8_150pct_54min.zwo",
+       "anaerobic_4x1min-3min_170pct_48min.zwo",
        "pending"
       ],
       [
@@ -56873,7 +56873,7 @@
        "vo2max",
        60,
        81.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_7x70s-20s_110pct_60min.zwo",
        "pending"
       ],
       [
@@ -56886,10 +56886,10 @@
       ],
       [
        "2026-11-14",
-       "threshold",
-       68,
-       91.4,
-       "over_under_5x30s_110pct_63min.zwo",
+       "vo2max",
+       60,
+       81.0,
+       "vo2_short_2x10x30s_112pct_60min.zwo",
        "pending"
       ],
       [
@@ -56923,7 +56923,7 @@
        "vo2max",
        50,
        60.0,
-       "vo2_short_3x10x30s-15s_116pct_48min.zwo",
+       "vo2_ladder5_125pct_50min.zwo",
        "pending"
       ],
       [
@@ -57020,18 +57020,18 @@
       ],
       [
        "2026-11-27",
-       "z2",
-       36,
-       24.0,
-       "sweet_spot_1x2min_80pct_37min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
        "2026-11-28",
        "z2",
-       46,
-       39.0,
-       "intervals_6x40s_76pct_46min.zwo",
+       63,
+       54.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "pending"
       ],
       [
@@ -57516,7 +57516,7 @@
        "vo2max",
        75,
        93.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -58241,7 +58241,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -58299,7 +58299,7 @@
        "vo2max",
        60,
        72.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_8x40s-20s_110pct_62min.zwo",
        "pending"
       ],
       [
@@ -58333,7 +58333,7 @@
        "vo2max",
        75,
        88.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -58497,7 +58497,7 @@
        "vo2max",
        36,
        47.4,
-       "anaerobic_ladder4_120pct_39min.zwo",
+       "vo2max_8x1min-1min_110pct_35min.zwo",
        "pending"
       ],
       [
@@ -59140,7 +59140,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_4x7x40s-20s_117pct_64min.zwo",
+       "neuromuscular_8x30s-30s_108pct_58min.zwo",
        "pending"
       ],
       [
@@ -59164,7 +59164,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_3x13x30s-15s_116pct_60min.zwo",
+       "vo2_short_3x13x30s-15s_108pct_55min.zwo",
        "pending"
       ]
      ]
@@ -59470,7 +59470,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x3min-3min_115pct_54min.zwo",
+       "anaerobic_6x30s-90s_124pct_48min.zwo",
        "pending"
       ],
       [
@@ -60342,10 +60342,10 @@
       ],
       [
        "2026-11-11",
-       "z2",
-       64,
-       46.0,
-       "endurance_steady_69pct_64min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -60366,18 +60366,18 @@
       ],
       [
        "2026-11-14",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_2x12s-3min_240pct_41min.zwo",
+       "vo2max",
+       60,
+       80.0,
+       "vo2_short_4x5x30s-30s_120pct_60min.zwo",
        "pending"
       ],
       [
        "2026-11-15",
        "long_z2",
-       180,
-       139.0,
-       "endurance_steady_74pct_180min.zwo",
+       144,
+       111.0,
+       "endurance_steady_68pct_140min.zwo",
        "pending"
       ]
      ]
@@ -60401,9 +60401,9 @@
       [
        "2026-11-17",
        "vo2max",
-       60,
-       75.0,
-       "vo2_short_3x13x30s-15s_108pct_55min.zwo",
+       75,
+       94.0,
+       "vo2max_6x3min-4min_113pct_70min.zwo",
        "pending"
       ],
       [
@@ -60424,18 +60424,18 @@
       ],
       [
        "2026-11-20",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       37,
+       30.0,
+       "sweet_spot_1x2min_80pct_37min.zwo",
        "pending"
       ],
       [
        "2026-11-21",
-       "overunder",
-       60,
-       82.0,
-       "over_under_3x3min_80pct_60min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_2x12s-3min_240pct_41min.zwo",
        "pending"
       ],
       [
@@ -60485,7 +60485,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ],
       [
@@ -61060,7 +61060,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -61118,7 +61118,7 @@
        "vo2max",
        60,
        72.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_8x40s-20s_110pct_62min.zwo",
        "pending"
       ],
       [
@@ -61152,7 +61152,7 @@
        "vo2max",
        75,
        88.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -61316,7 +61316,7 @@
        "vo2max",
        36,
        47.4,
-       "anaerobic_ladder4_120pct_39min.zwo",
+       "vo2max_8x1min-1min_110pct_35min.zwo",
        "pending"
       ],
       [
@@ -62009,7 +62009,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -62067,7 +62067,7 @@
        "vo2max",
        60,
        72.0,
-       "vo2_short_2x10x30s_112pct_60min.zwo",
+       "vo2_short_8x40s-20s_110pct_62min.zwo",
        "pending"
       ],
       [
@@ -62101,7 +62101,7 @@
        "vo2max",
        75,
        88.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -62265,7 +62265,7 @@
        "vo2max",
        36,
        47.4,
-       "anaerobic_ladder4_120pct_39min.zwo",
+       "vo2max_8x1min-1min_110pct_35min.zwo",
        "pending"
       ],
       [
@@ -63026,7 +63026,7 @@
        "vo2max",
        75,
        93.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -63290,7 +63290,7 @@
        "vo2max",
        75,
        89.0,
-       "supra_threshold_2x5min-2min_85pct_72min.zwo",
+       "anaerobic_5x3min-3min_117pct_71min.zwo",
        "pending"
       ],
       [
@@ -63388,7 +63388,7 @@
        "vo2max",
        75,
        92.0,
-       "vo2max_5x6min-5min_110pct_80min.zwo",
+       "vo2max_3x5min-5min_105pct_70min.zwo",
        "pending"
       ],
       [
@@ -64034,7 +64034,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -64060,7 +64060,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -64126,7 +64126,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -64340,7 +64340,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -64422,7 +64422,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -65015,7 +65015,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_2x12x40s-20s_110pct_60min.zwo",
+       "vo2_short_4x13x30s-15s_106pct_64min.zwo",
        "pending"
       ],
       [
@@ -65263,7 +65263,7 @@
        "vo2max",
        50,
        68.0,
-       "anaerobic_2x3min-3min_115pct_54min.zwo",
+       "anaerobic_6x30s-90s_124pct_48min.zwo",
        "pending"
       ],
       [
@@ -66143,10 +66143,10 @@
       ],
       [
        "2026-11-12",
-       "sprint",
-       45,
-       50.0,
-       "neuromuscular_7x10s-3min_250pct_43min.zwo",
+       "vo2max",
+       60,
+       83.0,
+       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
        "pending"
       ],
       [
@@ -66168,9 +66168,9 @@
       [
        "2026-11-15",
        "long_z2",
-       290,
-       224.0,
-       "endurance_steady_66pct_240min.zwo",
+       227,
+       175.0,
+       "endurance_steady_68pct_225min.zwo",
        "pending"
       ]
      ]
@@ -66194,9 +66194,9 @@
       [
        "2026-11-17",
        "vo2max",
-       60,
-       75.0,
-       "vo2_short_3x13x30s-15s_108pct_55min.zwo",
+       75,
+       94.0,
+       "vo2max_6x3min-4min_113pct_70min.zwo",
        "pending"
       ],
       [
@@ -66225,10 +66225,10 @@
       ],
       [
        "2026-11-21",
-       "overunder",
-       60,
-       82.0,
-       "over_under_3x3min_80pct_60min.zwo",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_2x12s-3min_240pct_41min.zwo",
        "pending"
       ],
       [
@@ -66278,7 +66278,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ],
       [
@@ -66855,7 +66855,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -66881,7 +66881,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -66947,7 +66947,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -67161,7 +67161,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -67243,7 +67243,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -67804,7 +67804,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -67830,7 +67830,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -67896,7 +67896,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -68110,7 +68110,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -68192,7 +68192,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -68751,7 +68751,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -68777,7 +68777,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -68843,7 +68843,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -69057,7 +69057,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -69139,7 +69139,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -69698,7 +69698,7 @@
        "vo2max",
        60,
        77.0,
-       "vo2_short_7x1min-30s_113pct_61min.zwo",
+       "neuromuscular_3x8x15s_120pct_63min.zwo",
        "pending"
       ]
      ]
@@ -69724,7 +69724,7 @@
        "vo2max",
        60,
        83.0,
-       "vo2_short_4x9x30s-15s_125pct_56min.zwo",
+       "vo2_short_3x13x30s-15s_110pct_57min.zwo",
        "pending"
       ],
       [
@@ -69790,7 +69790,7 @@
        "vo2max",
        75,
        87.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -70004,7 +70004,7 @@
        "vo2max",
        50,
        67.0,
-       "anaerobic_5x3x30s-15s_135pct_47min.zwo",
+       "anaerobic_2x4min-3min_100pct_48min.zwo",
        "pending"
       ],
       [
@@ -70086,7 +70086,7 @@
        "vo2max",
        60,
        80.0,
-       "vo2_short_10x40s-20s_120pct_60min.zwo",
+       "vo2_short_4x11x30s-15s_116pct_62min.zwo",
        "pending"
       ],
       [
@@ -70715,7 +70715,7 @@
        "vo2max",
        75,
        93.0,
-       "vo2max_3x5min-5min_105pct_70min.zwo",
+       "vo2max_5x3min-3min_106pct_80min.zwo",
        "pending"
       ],
       [
@@ -70979,7 +70979,7 @@
        "vo2max",
        75,
        89.0,
-       "supra_threshold_2x5min-2min_85pct_72min.zwo",
+       "anaerobic_5x3min-3min_117pct_71min.zwo",
        "pending"
       ],
       [
@@ -71077,7 +71077,7 @@
        "vo2max",
        75,
        96.0,
-       "vo2max_5x6min-5min_110pct_80min.zwo",
+       "vo2max_3x5min-5min_105pct_70min.zwo",
        "pending"
       ],
       [

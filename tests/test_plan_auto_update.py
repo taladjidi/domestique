@@ -13,6 +13,7 @@ Guards under test (per /tmp/MASTER_DECISIONS_tasks12 §11):
 """
 from datetime import date, timedelta
 
+import pathlib
 import pytest
 
 import app
@@ -243,52 +244,150 @@ def test_rebuild_preserves_top_level_keys_and_past_weeks():
 
 # ── v3.7.1: VO2max microintervals-only preference ────────────────────────────
 
-def test_microinterval_preference_measures_the_main_set_not_a_finisher():
-    """The classifier's pattern_microinterval flag fires when a microinterval
-    pattern occurs ANYWHERE, which a warm-up drill or a short finisher is enough
-    to do — vo2_short_2x5x2min_115pct_81min.zwo carries it while being a 10x2min
-    session. A preference built on that flag served exactly the long-rep
-    sessions it was meant to exclude, so the row now carries the time-weighted
-    share of repeated work sitting in short reps."""
+def _zwo(*segments):
+    """A .zwo tree from (tag, attrs) pairs, for testing the measure itself."""
+    import xml.etree.ElementTree as ET
+    root = ET.Element("workout")
+    for tag, attrs in segments:
+        ET.SubElement(root, tag, {k: str(v) for k, v in attrs.items()})
+    return root
+
+
+def test_what_counts_as_a_microinterval_session():
+    """Ronnestad's protocol is series of 5-13 x (30 s ON / 15 s OFF) at ~118 %
+    of 40-min maximal power, ~60 % on the OFF leg (PMC11680548); the wider
+    short-interval literature runs 10-40 s bouts at ~100-130 % of maximal
+    aerobic power with recovery at or under the work, and contrasts them with
+    4-5 min intervals. The short recovery is the mechanism: oxygen uptake does
+    not fall between reps.
+
+    Each case below turns one of those numbers, so a rule that stops being
+    enforced fails here."""
+    def shape(*segs):
+        return tp._micro_shape(_zwo(*segs))
+
+    ss = lambda d, p: ("SteadyState", {"Duration": d, "Power": p})
+    ivl = lambda n, on, off, p, offp=0.6: ("IntervalsT", {
+        "Repeat": n, "OnDuration": on, "OffDuration": off, "OnPower": p, "OffPower": offp})
+    reps, micro_s, long_s = shape(ivl(13, 30, 15, 1.18))
+    assert (reps, micro_s, long_s) == (13, 390, 0), "the protocol itself"
+
+    # the bout ceiling: 60 s reps are the format it is contrasted against
+    assert shape(ivl(10, 60, 30, 1.10))[1] == 0, "a 60 s rep is not a microinterval"
+    assert shape(ivl(10, 40, 20, 1.15))[1] == 400, "40/20 is in the family"
+    assert shape(ivl(10, 45, 20, 1.15))[1] == 0, "the ceiling is 40 s, the top of the band"
+
+    # the recovery ratio: full recovery is anaerobic work, not this protocol
+    assert shape(ivl(10, 30, 150, 1.25))[1] == 0, "30 s with 150 s recovery"
+    assert shape(ivl(10, 30, 30, 1.10))[1] == 300, "30/30 still qualifies"
+
+    # the power band: below FTP is not work, above 1.5 reads neuromuscular
+    assert shape(ivl(10, 30, 15, 0.80))[1] == 0
+    assert shape(ivl(10, 20, 20, 2.00))[1] == 0
+
+    # the recovery must recover. An over-under alternating 30 s at 1.15 with
+    # 30 s at 0.95 never lets oxygen uptake fall, which is the whole mechanism,
+    # so it is not this protocol however short its legs are.
+    assert shape(ivl(10, 30, 30, 1.15, 0.60))[1] == 300, "an easy recovery leg"
+    assert shape(ivl(10, 30, 30, 1.15, 0.95))[1] == 0, "a 0.95 leg is a second effort"
+    assert shape(*[x for _ in range(10) for x in (ss(30, 1.15), ss(30, 0.95))])[1] == 0
+
+    # a main set written as SteadyState or Ramp blocks is still a main set
+    assert shape(*[x for _ in range(6) for x in (ss(30, 1.2), ss(15, 0.6))])[0] == 6
+    assert shape(("Ramp", {"Duration": 240, "PowerLow": 0.85, "PowerHigh": 1.2}))[2] == 240
+
+    # and the verdict the planner reads
+    def is_micro(*segs):
+        return tp.is_microinterval(*shape(*segs))
+
+    assert is_micro(ivl(13, 30, 15, 1.18))
+    assert not is_micro(ivl(6, 30, 15, 1.18)), "under 5 min of work"
+    assert not is_micro(ivl(13, 30, 15, 1.18), ivl(6, 300, 180, 1.05)), "a longer effort dominates"
+    # a sweet-spot main set is sustained work even though it is under FTP
+    assert not is_micro(ivl(13, 30, 15, 1.18), ivl(4, 360, 180, 0.90)), "4x6min at 0.90 dominates"
+    assert is_micro(ivl(13, 30, 15, 1.18), ivl(4, 360, 180, 0.70)), "an endurance block does not"
+    # 12 min of short work, but in fours: openers repeated, not a series
+    assert not is_micro(*[ivl(4, 30, 15, 1.18)] * 6), "under a series: an opener, not a session"
+
+
+def test_the_library_measure_agrees_with_the_definition():
+    """The index caches the verdict, so this recomputes it from the .zwo files
+    themselves: a stale or drifting index fails here rather than quietly
+    serving the wrong workouts."""
+    import xml.etree.ElementTree as ET
     lib = tp.load_workout_library()
     by = {w["File"]: w for w in lib}
-    tenx2 = by.get("vo2_short_2x5x2min_115pct_81min.zwo")
-    if tenx2 is not None:
-        assert tenx2.get("MicroFrac") is not None
-        assert tenx2["MicroFrac"] < tp.MICROINTERVAL_MIN_FRAC, (
-            "a 10x2min session must not read as a microinterval session")
-    ron = by.get("vo2_short_3x13x30s-15s_113pct_55min.zwo")
-    if ron is not None:
-        assert ron.get("MicroFrac") == 1.0
+
+    def verdict(name):
+        path = pathlib.Path(tp.WORKOUT_DIR) / name
+        root = ET.parse(path).getroot()
+        el = root.find("workout") if root.find("workout") is not None else root
+        return tp.is_microinterval(*tp._micro_shape(el))
+
+    expect_micro = ("vo2_short_3x13x30s-15s_113pct_55min.zwo",
+                    "vo2_short_3x8x40s-20s_115pct_46min.zwo")
+    expect_not = ("vo2_short_2x5x2min_115pct_81min.zwo",       # 10x2min
+                  "vo2max_3x2x1min_100pct_63min.zwo",          # 1-min reps
+                  "vo2max_6x4min-2min_85pct_63min.zwo",        # main set as Ramps
+                  "vo2max_3x3min-3min_110pct_61min.zwo",       # main set as IntervalsT
+                  "anaerobic_16x30s-150s_125pct_78min.zwo",    # 30 s, full recovery
+                  "vo2_short_15x30s-30s_125pct_60min.zwo")     # 15x30/30 beside an 8-min effort
+    for f in expect_micro + expect_not:
+        want = f in expect_micro
+        assert verdict(f) is want, f"{f}: the rule says {verdict(f)}, expected {want}"
+        assert bool(by[f]["IsMicro"]) is want, f"{f}: the index disagrees with the rule"
 
 
-def test_microintervals_only_shifts_vo2_slots_and_still_fills_them():
-    """ON must raise the microinterval share well above OFF, and must never
-    leave a slot unfilled — a day with no session is worse than one long
-    interval the rider did not ask for."""
+def test_the_index_is_rebuilt_when_a_rule_changes(tmp_path, monkeypatch):
+    """The index caches verdicts, not just parsed files, so editing a threshold
+    must invalidate it. Nothing about the library changes when a constant is
+    edited -- same files, same count, same mtimes -- so without the rules in
+    the header the old conclusions are served forever, which is exactly how a
+    measured 150 files kept reading as 160."""
+    src = pathlib.Path(tp.WORKOUT_DIR) / "vo2_short_3x13x30s-15s_113pct_55min.zwo"
+    lib_dir = tmp_path / "workouts"
+    lib_dir.mkdir()
+    (lib_dir / src.name).write_bytes(src.read_bytes())
+    monkeypatch.setattr(tp, "WORKOUT_DIR", lib_dir)
+    tp._WORKOUT_LIB_CACHE.clear()
+    tp._WORKOUT_LIB_FAST_VALIDATOR.clear()
+
+    assert tp.load_workout_library()[0]["IsMicro"] is True
+    assert (lib_dir / tp._LIBRARY_INDEX_FILENAME).exists(), "the index was written"
+
+    # Same files, same mtimes: only the rule moved.
+    monkeypatch.setattr(tp, "MICRO_MIN_SERIES_REPS", 99)
+    tp._WORKOUT_LIB_CACHE.clear()
+    tp._WORKOUT_LIB_FAST_VALIDATOR.clear()
+    assert tp.load_workout_library()[0]["IsMicro"] is False, "served a stale verdict"
+
+
+def test_microintervals_only_serves_microintervals_and_still_fills_the_slot():
+    """ON must serve a microinterval session wherever the library has one that
+    fits -- the scoring penalty alone left about one slot in nine to a
+    long-rep file, because the weighted draw floors every weight at 0.1 -- and
+    must never leave a slot unfilled."""
     lib = tp.load_workout_library()
     by = {w["File"]: w for w in lib}
 
     def sweep(flag):
         hit = tot = 0
-        for wk in range(1, 21):
-            for dur in (45, 60):
-                s = tp.PlannedSession(day="", day_name="", session_type="vo2max",
-                                      duration_min=dur, tss_estimate=80,
-                                      description="")
-                m = tp.match_zwo(s, lib, week_num=wk, day_idx=2, micro_only=flag)
-                f = getattr(m, "zwo_file", None)
-                assert f, "microintervals-only left a VO2max slot unfilled"
-                tot += 1
-                mf = (by.get(f) or {}).get("MicroFrac")
-                if mf is not None and mf >= tp.MICROINTERVAL_MIN_FRAC:
-                    hit += 1
+        for wk in range(1, 61):
+            for day in (1, 3):
+                for dur in (45, 60, 75):
+                    s = tp.PlannedSession(day="", day_name="", session_type="vo2max",
+                                          duration_min=dur, tss_estimate=int(dur * 1.3),
+                                          description="")
+                    f = tp.match_zwo(s, lib, week_num=wk, day_idx=day, micro_only=flag).zwo_file
+                    assert f, "microintervals-only left a VO2max slot unfilled"
+                    tot += 1
+                    hit += bool((by.get(f) or {}).get("IsMicro"))
         return hit, tot
 
     off_hit, tot = sweep(False)
     on_hit, _ = sweep(True)
-    assert on_hit > off_hit, (off_hit, on_hit, tot)
-    assert on_hit >= 0.75 * tot, f"only {on_hit}/{tot} slots microinterval"
+    assert on_hit == tot, (on_hit, tot)
+    assert off_hit < tot, "OFF must keep the variety the library is for"
 
 
 def test_the_preference_defaults_off_and_never_goes_stale():

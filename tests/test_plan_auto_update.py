@@ -435,6 +435,28 @@ def test_microintervals_only_serves_microintervals_and_still_fills_the_slot():
     assert off_hit < tot, "OFF must keep the variety the library is for"
 
 
+def test_the_index_notices_a_changed_MEASURE_not_just_a_changed_threshold(
+        tmp_path, monkeypatch):
+    """Editing the rule's CODE has to invalidate the index too.
+
+    This is the hole the previous version left, and it was not theoretical:
+    the index committed on 2026-09-16 was stale by 517 fields, because two
+    fixes to micro_shape (counting a series' last rep, integrating a ramp
+    instead of averaging it) changed what the rows say without touching a
+    single threshold. Count, mtime and every constant still matched, so the
+    stale conclusions were served.
+    """
+    before = zwo_parse.rules_fingerprint()
+
+    def micro_shape_but_different(workout_el):      # same rules, other code
+        reps, micro_s, long_s = zwo_parse.micro_shape(workout_el)
+        return reps, micro_s, long_s
+
+    monkeypatch.setattr(zwo_parse, "micro_shape", micro_shape_but_different)
+    assert zwo_parse.rules_fingerprint() != before, (
+        "the fingerprint must cover the measure's code, not only its numbers")
+
+
 def test_the_planner_re_exports_the_one_measure():
     """`training_planner.X` and `zwo_parse.X` must BE the same objects.
 

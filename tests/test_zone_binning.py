@@ -9,16 +9,19 @@ Three things have to hold and none of them were checked:
      read by the sampler's budget-fit, by the planner's zone rails and by the
      UI; if they are wrong every consumer is wrong together and consistently,
      which is the hardest kind of wrong to notice.
-  3. The two scanners agree with each other. `training_planner._scan` and
-     `app._scan_zwo_for_library` are separate implementations of the same
-     computation, 72 identical code lines apart. Until they are merged, they
-     must at least be shown to produce the same numbers.
+  3. There is only one scanner. `training_planner`'s inline copy and
+     `app._scan_zwo_for_library` were separate implementations of the same
+     computation, 72 identical code lines apart; this file used to pin them
+     as producing the same numbers "until they are merged". They were merged
+     into `zwo_parse.scan_zwo` on 2026-09-16, after being shown to agree on
+     every one of the 4,307 library files, and both names now point at it.
 
 Ramps used to be binned at 20 slices regardless of length while the NP/IF
 series for the same segment was built at 1 Hz — two resolutions for one
 segment, costing up to 2.8 points on a zone share.
 """
 import collections
+import inspect
 import os
 import pathlib
 import sys
@@ -90,15 +93,22 @@ class ZoneEdges(unittest.TestCase):
         for got, want in zip(inline, fracs):
             self.assertAlmostEqual(got, want, places=6)
 
-    def test_the_planner_and_app_scanners_use_the_same_edges(self):
-        import inspect
+    def test_there_is_only_one_scanner(self):
+        """The two implementations were merged on 2026-09-16.
+
+        This test used to compare their source text for the zone boundaries,
+        the best it could do while both existed. Now it pins the thing that
+        made that necessary: app and the library loader must reach the SAME
+        object, so there is no second copy to drift. They agreed on all 4,307
+        files when they were merged, and nothing has to keep agreeing now.
+        """
         import app
-        a = inspect.getsource(app._scan_zwo_for_library)
-        p = inspect.getsource(tp._load_workout_library_uncached
-                              if hasattr(tp, "_load_workout_library_uncached")
-                              else tp.load_workout_library)
+        import zwo_parse
+        self.assertIs(app._scan_zwo_for_library, zwo_parse.scan_zwo)
+        self.assertIs(tp._scan_zwo, zwo_parse.scan_zwo)
+        src = inspect.getsource(zwo_parse.scan_zwo)
         for edge in ("< 56", "< 76", "< 91", "< 106", "< 121"):
-            self.assertIn(edge, a, f"app scanner lost the {edge} boundary")
+            self.assertIn(edge, src, f"the scanner lost the {edge} boundary")
 
 
 class LibraryBinning(unittest.TestCase):

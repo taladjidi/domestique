@@ -12,6 +12,10 @@ The microinterval measure is the literature's, not a heuristic: see
 """
 from __future__ import annotations
 
+import hashlib
+import inspect
+import xml.etree.ElementTree as ET
+
 # What makes a bout a MICROinterval, from the literature (see micro_shape):
 # 30 s and 40 s families, 15-45 s; a 60 s rep is the format they are contrasted
 # against. Recovery at most 1.5x the bout -- 30/15 and 40/20 are 0.5, 30/30 is
@@ -147,17 +151,40 @@ def micro_shape(workout_el) -> tuple[int, int, int]:
             run = 0
     return best, micro_s, long_s
 
+def _measure_digest() -> str:
+    """A hash of the CODE that computes the cached fields.
+
+    The constants alone were not enough, and the gap was not theoretical: the
+    index committed on 2026-09-16 was stale by 517 fields, because two fixes
+    to micro_shape -- counting a series' last rep, integrating a ramp instead
+    of averaging it -- changed the verdicts without touching a threshold, so
+    every header check still passed and the old conclusions were served.
+    Hashing the source closes it without anyone having to remember to bump a
+    number, which is the same thing _CLASSIFIER_VERSION asks of people and
+    does not get.
+    """
+    try:
+        src = "".join(inspect.getsource(f)
+                      for f in (micro_shape, is_microinterval, scan_zwo))
+    except (OSError, TypeError):
+        # A frozen build has no source. Fall back to the constants alone:
+        # weaker, but never wrong about a threshold, and such a build does
+        # not edit its own measure between runs.
+        return "nosrc"
+    return hashlib.blake2b(src.encode("utf-8"), digest_size=6).hexdigest()
+
+
 def rules_fingerprint() -> str:
-    """The thresholds that decide a cached row's computed verdicts.
+    """What the cached rows were computed by: the thresholds AND the code.
 
     The index stores conclusions, not just parsed facts, so an index built
-    under other thresholds is wrong even though every .zwo file is untouched
+    under another rule is wrong even though every .zwo file is untouched
     (count and mtime, which validate the rest of the header, cannot see it).
-    Editing a constant below therefore invalidates the index by itself."""
+    Editing a constant below, or the measure itself, invalidates the index."""
     return "|".join(str(v) for v in (
         MICRO_MAX_BOUT_S, MICRO_MAX_REST_RATIO, MICRO_MAX_REST_POWER,
         MICRO_MIN_POWER, MICRO_MAX_POWER, MICRO_LONG_MIN_POWER,
-        MICRO_MIN_SERIES_REPS, MICRO_MIN_WORK_S))
+        MICRO_MIN_SERIES_REPS, MICRO_MIN_WORK_S)) + "|" + _measure_digest()
 
 def is_microinterval(reps: int, micro_s: int, long_s: int) -> bool:
     """The verdict, from a file's shape (see micro_shape): a full series of
@@ -188,3 +215,130 @@ def np_fraction_from_samples(samples: "list[float]") -> float:
         p4 += (s / 30.0) ** 4
         count += 1
     return (p4 / count) ** 0.25
+
+
+def scan_zwo(zwo_path) -> dict | None:
+    """Parse one .zwo file into the facts every consumer needs, or None.
+
+    THE one scan. There were two: this one, reached from app for a file just
+    written, and an inline copy in training_planner.load_workout_library for
+    every file in the library. 72 identical lines apart, kept in step by
+    tests/test_zone_binning.py, which said in its own docstring "until they
+    are merged, they must at least be shown to produce the same numbers".
+    They were merged here after being shown to agree on all 4,307 files.
+
+    Returns: name, description, total_sec, tss, if_val, z1_sec..z6_sec,
+    max_power, distinct_high_targets (set), has_vo2_intensity (bool),
+    zwo_tags (list), and the microinterval shape (micro_reps, micro_work_s,
+    long_work_s) -- the last three because the file is already parsed here
+    and a second parse is a second chance to disagree.
+    """
+    try:
+        tree = ET.parse(zwo_path)
+    except (ET.ParseError, OSError):
+        return None
+    root = tree.getroot()
+    name = (root.findtext("name") or zwo_path.stem).strip()
+    description = (root.findtext("description") or "").strip()
+    workout_el = root.find("workout")
+    if workout_el is None:
+        return None
+    zwo_tags: list[str] = []
+    tags_el = root.find("tags")
+    if tags_el is not None:
+        for tag_el in tags_el.findall("tag"):
+            nm = tag_el.get("name")
+            if nm:
+                zwo_tags.append(nm.strip())
+
+    total_sec = 0
+    z1_sec = z2_sec = z3_sec = z4_sec = z5_sec = z6_sec = 0
+    max_power = 0.0
+    distinct_high_targets: set = set()
+    has_vo2_intensity = False
+    # v3.5.0: 1 Hz planned-power series (FTP fractions) for Coggan NP —
+    # replaces the per-segment RMS accumulation (mirrors the planner).
+    samples: list = []
+
+    def _acc_zone(power_pct: float, dur_s: int):
+        nonlocal z1_sec, z2_sec, z3_sec, z4_sec, z5_sec, z6_sec
+        if power_pct < 56: z1_sec += dur_s
+        elif power_pct < 76: z2_sec += dur_s
+        elif power_pct < 91: z3_sec += dur_s
+        elif power_pct < 106: z4_sec += dur_s
+        elif power_pct < 121: z5_sec += dur_s
+        else: z6_sec += dur_s
+
+    def _acc_structure(power_pct: float):
+        nonlocal has_vo2_intensity
+        if power_pct > 75:
+            distinct_high_targets.add(round(power_pct))
+        if power_pct > 105:
+            has_vo2_intensity = True
+
+    for seg in workout_el:
+        tag = seg.tag
+        if tag in ("Warmup", "Cooldown", "Ramp"):
+            dur = int(float(seg.get("Duration", 0)))
+            plo = float(seg.get("PowerLow", 0.5))
+            phi = float(seg.get("PowerHigh", 0.7))
+            total_sec += dur
+            samples.extend(plo + (phi - plo) * (t + 0.5) / dur for t in range(dur))
+            max_power = max(max_power, plo, phi)
+            # v2.1.0: slice the ramp across the zones it SWEEPS, mirroring the
+            # planner's load_workout_library parse (training_planner.py, v2.0.6).
+            # Binning the whole duration at mean power here (while the planner
+            # sliced) drifted the two scanners' zone seconds → score_sync mismatch
+            # (e.g. neuromuscular_9x30s-2min_175pct_52min.zwo scored 5 vs 6).
+            # 1-second slices — see the note on the planner's copy of this
+            # scanner. The two must stay in step: they are compared file by
+            # file in tests/test_zone_binning.py.
+            _RAMP_SLICES = max(20, int(dur))
+            for _i in range(_RAMP_SLICES):
+                _acc_zone((plo + (phi - plo) * (_i + 0.5) / _RAMP_SLICES) * 100, dur / _RAMP_SLICES)
+            _acc_structure(phi * 100)
+        elif tag == "SteadyState":
+            dur = int(float(seg.get("Duration", 0)))
+            p = float(seg.get("Power", 0.65))
+            total_sec += dur
+            samples.extend([p] * dur)
+            max_power = max(max_power, p)
+            _acc_zone(p * 100, dur)
+            _acc_structure(p * 100)
+        elif tag == "IntervalsT":
+            reps = int(seg.get("Repeat", 1))
+            on_s = int(float(seg.get("OnDuration", 0)))
+            off_s = int(float(seg.get("OffDuration", 0)))
+            on_p = float(seg.get("OnPower", 1.0))
+            off_p = float(seg.get("OffPower", 0.5))
+            total_sec += reps * (on_s + off_s)
+            samples.extend(([on_p] * on_s + [off_p] * off_s) * reps)
+            max_power = max(max_power, on_p, off_p)
+            _acc_zone(on_p * 100, reps * on_s)
+            _acc_zone(off_p * 100, reps * off_s)
+            _acc_structure(on_p * 100)
+            _acc_structure(off_p * 100)
+        elif tag == "FreeRide":
+            dur = int(float(seg.get("Duration", 0)))
+            total_sec += dur
+            samples.extend([0.65] * dur)
+            _acc_zone(65, dur)
+
+    if total_sec < 30:
+        # NP is undefined below one 30-s window (mirrors the planner's skip).
+        return None
+    micro_reps, micro_work_s, long_work_s = micro_shape(workout_el)
+    if_val = np_fraction_from_samples(samples)
+    tss_np = (total_sec / 3600) * (if_val ** 2) * 100
+    return {
+        "name": name, "description": description,
+        "total_sec": total_sec, "tss": tss_np, "if_val": if_val,
+        "max_power": max_power,
+        "z1_sec": z1_sec, "z2_sec": z2_sec, "z3_sec": z3_sec,
+        "z4_sec": z4_sec, "z5_sec": z5_sec, "z6_sec": z6_sec,
+        "distinct_high_targets": distinct_high_targets,
+        "has_vo2_intensity": has_vo2_intensity,
+        "zwo_tags": zwo_tags,
+        "micro_reps": micro_reps, "micro_work_s": micro_work_s,
+        "long_work_s": long_work_s,
+    }

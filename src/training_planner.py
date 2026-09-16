@@ -4800,143 +4800,27 @@ def load_workout_library() -> list[dict]:
 
     workouts: list[dict] = []
     for zwo_path in zwo_paths:
-        try:
-            tree = ET.parse(zwo_path)
-        except (ET.ParseError, OSError):
+        # ONE scan, shared with app (which reaches it as
+        # _scan_zwo_for_library): this loop used to carry its own copy, 72
+        # lines identical to app's, kept in step by a test that compared the
+        # two implementations' source text. They agreed on all 4,307 files
+        # when they were merged.
+        facts = _scan_zwo(zwo_path)
+        if facts is None:
             continue
-        root = tree.getroot()
-        name = (root.findtext("name") or zwo_path.stem).strip()
-        description = (root.findtext("description") or "").strip()
-        workout_el = root.find("workout")
-        if workout_el is None:
-            continue
-        # T5 (v4.1.0): pick up <tags><tag name="…"/></tags> so we can skip
-        # ftp_test-tagged workouts from normal selection (they shouldn't
-        # land on a random Tuesday).
-        zwo_tags: list[str] = []
-        tags_el = root.find("tags")
-        if tags_el is not None:
-            for tag_el in tags_el.findall("tag"):
-                tnm = tag_el.get("name")
-                if tnm:
-                    zwo_tags.append(tnm.strip())
-
-        total_sec = 0
-        z1_sec = z2_sec = z3_sec = z4_sec = z5_sec = z6_sec = 0
-        max_power = 0.0
-        # FIX-CONTRACT C8: structure-bonus inputs. Collect the distinct
-        # above-Z2 power targets (rounded to 1% FTP bins) so the score
-        # formula can reward "real" interval variety over a single
-        # hammered SteadyState. Same-power repeats (e.g. 5x3min @ 110%)
-        # count as ONE distinct target — it's variety we're pricing,
-        # not reps, because the TSS factor already values volume. We
-        # also track whether any segment breaches 105% FTP (VO2 floor)
-        # for the +1 VO2 bonus.
-        distinct_high_targets: set = set()
-        has_vo2_intensity = False
-        # v3.5.0: 1 Hz planned-power series (FTP fractions) for Coggan NP.
-        # Replaces the per-segment RMS accumulation the old TSS used.
-        samples: list = []
-
-        def _acc_zone(power_pct: float, dur_s: int):
-            # Half-open buckets: [low, high). Value at boundary → next zone up.
-            nonlocal z1_sec, z2_sec, z3_sec, z4_sec, z5_sec, z6_sec
-            if power_pct < 56: z1_sec += dur_s
-            elif power_pct < 76: z2_sec += dur_s
-            elif power_pct < 91: z3_sec += dur_s
-            elif power_pct < 106: z4_sec += dur_s
-            elif power_pct < 121: z5_sec += dur_s
-            else: z6_sec += dur_s
-
-        def _acc_structure(power_pct: float):
-            # FIX-CONTRACT C8: track distinct above-Z2 targets + VO2 floor.
-            nonlocal has_vo2_intensity
-            if power_pct > 75:  # above-Z2 (≥76% FTP)
-                distinct_high_targets.add(round(power_pct))
-            if power_pct > 105:  # VO2 floor (Coggan Z5 edge)
-                has_vo2_intensity = True
-
-        # v3.7.1 — the length of the session's WORK REPS, measured from the
-        # prescription. The classifier's pattern_microinterval flag says a
-        # microinterval pattern occurs SOMEWHERE in the file, which a warm-up
-        # fast-pedal drill is enough to trip: a 10x2min session carries it, and
-        # a "microintervals only" preference built on that flag served exactly
-        # the long-rep sessions it was meant to exclude. This measures the main
-        # set instead — the shortest ON leg the file actually repeats at
-        # intensity.
-        _micro_reps, _micro_work_s, _long_work_s = _micro_shape(workout_el)
-
-        for seg in workout_el:
-            tag = seg.tag
-            if tag == "IntervalsT":
-                try:
-                    _on = int(float(seg.get("OnDuration", 0) or 0))
-                    _onp = float(seg.get("OnPower", 0) or 0)
-                    _rep = int(float(seg.get("Repeat", 0) or 0))
-                except (TypeError, ValueError):
-                    _on = _rep = 0; _onp = 0.0
-            if tag in ("Warmup", "Cooldown", "Ramp"):
-                dur = int(float(seg.get("Duration", 0)))
-                plo = float(seg.get("PowerLow", 0.5))
-                phi = float(seg.get("PowerHigh", 0.7))
-                total_sec += dur
-                samples.extend(plo + (phi - plo) * (t + 0.5) / dur for t in range(dur))
-                max_power = max(max_power, plo, phi)
-                # v2.0.6 — integrate the ramp across the zones it SWEEPS, not one
-                # avg-power bucket. Binning the whole duration at mean power dumped
-                # a 50%→100% ramp's Z3/Z4 time into Z2, so ramp-heavy workouts read
-                # ~95% easy — e.g. a 33%-Z3 file passed the recovery 25%-Z3 ceiling
-                # and landed on a recovery day. Slice the linear ramp; bin each
-                # slice at its local power so per-zone seconds reflect reality.
-                # 1-second slices, the same resolution as the `samples` series
-                # built two lines above for NP/IF. It used to be 20 slices
-                # regardless of length, so the zone bins and the IF for the SAME
-                # segment were computed at different resolutions: measured
-                # against a 1-second bin that cost up to 2.8 points on a zone
-                # share, with 63 of 4,079 ramp-carrying files off by more than a
-                # point. There is no reason to approximate a straight line.
-                _RAMP_SLICES = max(20, int(dur))
-                for _i in range(_RAMP_SLICES):
-                    _acc_zone((plo + (phi - plo) * (_i + 0.5) / _RAMP_SLICES) * 100, dur / _RAMP_SLICES)
-                # Warmup/Ramp peaks contribute to structure + VO2 detection
-                # (ramp-test workouts genuinely hit VO2 at the top step).
-                _acc_structure(phi * 100)
-            elif tag == "SteadyState":
-                dur = int(float(seg.get("Duration", 0)))
-                p = float(seg.get("Power", 0.65))
-                total_sec += dur
-                samples.extend([p] * dur)
-                max_power = max(max_power, p)
-                _acc_zone(p * 100, dur)
-                _acc_structure(p * 100)
-            elif tag == "IntervalsT":
-                reps = int(seg.get("Repeat", 1))
-                on_s = int(float(seg.get("OnDuration", 0)))
-                off_s = int(float(seg.get("OffDuration", 0)))
-                on_p = float(seg.get("OnPower", 1.0))
-                off_p = float(seg.get("OffPower", 0.5))
-                total_sec += reps * (on_s + off_s)
-                samples.extend(([on_p] * on_s + [off_p] * off_s) * reps)
-                max_power = max(max_power, on_p, off_p)
-                _acc_zone(on_p * 100, reps * on_s)
-                _acc_zone(off_p * 100, reps * off_s)
-                _acc_structure(on_p * 100)
-                _acc_structure(off_p * 100)
-            elif tag == "FreeRide":
-                dur = int(float(seg.get("Duration", 0)))
-                total_sec += dur
-                # Assume ~Z2 effort for FreeRide
-                samples.extend([0.65] * dur)
-                _acc_zone(65, dur)
-
+        name, description = facts["name"], facts["description"]
+        zwo_tags = facts["zwo_tags"]
+        total_sec, max_power = facts["total_sec"], facts["max_power"]
+        z1_sec, z2_sec, z3_sec = facts["z1_sec"], facts["z2_sec"], facts["z3_sec"]
+        z4_sec, z5_sec, z6_sec = facts["z4_sec"], facts["z5_sec"], facts["z6_sec"]
+        distinct_high_targets = facts["distinct_high_targets"]
+        has_vo2_intensity = facts["has_vo2_intensity"]
+        _micro_reps = facts["micro_reps"]
+        _micro_work_s = facts["micro_work_s"]
+        _long_work_s = facts["long_work_s"]
         dur_min = total_sec / 60
-        if total_sec < 30:
-            # NP is undefined below one 30-s window; a <30 s "workout" is
-            # unusable anyway — skip the file rather than emit TSS=0 rows.
-            continue
+        if_val, tss_np = facts["if_val"], facts["tss"]
 
-        if_val = _np_fraction_from_samples(samples)
-        tss_np = (total_sec / 3600) * (if_val ** 2) * 100
         zp = lambda s: round(s / total_sec * 100, 1) if total_sec else 0.0
 
         protocol = _classify_protocol(
@@ -5168,6 +5052,7 @@ from zwo_parse import (  # noqa: E402,F401
 from zwo_parse import micro_shape as _micro_shape  # noqa: E402,F401
 from zwo_parse import rules_fingerprint as _index_rules_fingerprint  # noqa: E402,F401
 from zwo_parse import np_fraction_from_samples as _np_fraction_from_samples  # noqa: E402,F401
+from zwo_parse import scan_zwo as _scan_zwo  # noqa: E402,F401
 
 
 # Headroom before a matched file is considered over budget. A library workout

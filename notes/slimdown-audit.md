@@ -26,11 +26,12 @@ check the flag actually evaluates false in production) before deleting it.
 
 ## Where the tree stands
 
-| | 2026-09-15 (`3a75d688`) | after wave 1 | after wave 2 |
-|---|---|---|---|
-| modules | 77 | 56 | 55 |
-| src LOC | 80,102 | 66,035 | 64,827 |
-| `/api` endpoints | 142 | 142 | 127 |
+| | 2026-09-15 (`3a75d688`) | wave 1 | wave 2 | wave 3 |
+|---|---|---|---|---|
+| modules | 77 | 56 | 55 | 56 |
+| src LOC | 80,102 | 66,035 | 64,827 | 64,619 |
+| `/api` endpoints | 142 | 142 | 127 | 127 |
+| `app.py` + `training_planner.py` | 36,916 | 36,916 | 36,246 | 36,033 |
 
 Two files hold 56 % of it: `app.py` 20,567 (403 defs, worst function 452
 lines / complexity 189) and `training_planner.py` 16,350 (241 defs, worst
@@ -144,6 +145,43 @@ wrappers over live code, and their tests now call that code directly:
 `power_curve.compute_ride_prs`, and — for `/api/readiness/composite`, which
 the dashboard stopped calling in v2.2.5 — the two remaining readers in
 `test_one_fitness_state`.
+
+## Wave 3 — the first extraction: `zwo_parse`
+
+A leaf that imports nothing of the app, caches nothing, and can see no rider,
+plan or library row. 344 lines, and `app.py` and `training_planner.py` are
+213 lines smaller between them than a straight move would suggest, because
+one duplicate went with it.
+
+**Moved:** the microinterval measure, its eight constants, the index rules
+fingerprint, the NP fraction. Verbatim; only the leading underscores went.
+`training_planner` re-exports every name it had, because the index, the
+matcher and the suite reach them through `training_planner.X`.
+
+**Merged:** `app._scan_zwo_for_library` and the inline scan inside
+`load_workout_library` were two implementations of one computation, 72
+identical lines apart, which `tests/test_zone_binning.py` pinned as "shown to
+produce the same numbers... until they are merged". They are now
+`zwo_parse.scan_zwo`, reached by both names. Before merging they were shown to
+agree on all 4,307 files; after merging, a fresh index built at the previous
+commit and one built now differ in **zero fields** across 4,307 rows.
+
+**Two things the extraction taught, both now tested:**
+
+- A re-export is a place two modules can drift. Moving the constants broke
+  `test_the_index_is_rebuilt_when_a_rule_changes`, which patched
+  `tp.MICRO_MIN_SERIES_REPS` — after the move that name is a re-export and
+  the patch changed nothing while the measure read its own global. The test
+  patches `zwo_parse` now, and a guard pins `tp.X is zwo_parse.X` for every
+  moved name.
+- **The rules fingerprint had a hole, and it had already bitten.** It hashed
+  the constants, so the two fixes to `micro_shape` (counting a series' last
+  rep, integrating a ramp rather than averaging it) changed the verdicts
+  without touching a threshold, every header check still passed, and the
+  index committed that morning was stale by **517 fields**. The fingerprint
+  now includes a hash of the measure's source, so editing the code
+  invalidates the index without anyone remembering to bump a number. Both
+  halves are mutation-tested.
 
 ## Still to decide (measured, not deleted)
 

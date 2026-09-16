@@ -33,6 +33,18 @@ import ride_storage as rs
 import training_planner as tp
 
 
+# The plan's shape depends on the weekday it starts on, so every case here
+# reads the clock. Pinned to one date: unpinned, the suite tested whichever
+# day it happened to run on and inverted on some of them.
+ANCHOR = date(2026, 9, 14)
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_clock(freeze_clock):
+    import datetime as _dt
+    freeze_clock(_dt.datetime(ANCHOR.year, ANCHOR.month, ANCHOR.day, 9, 0))
+
+
 # Generous availability: 3.5h (210 min) EVERY day, no goal-enforced rest days —
 # the "availability sum" the old cap used would be 24.5h / ~1592 TSS.
 _GENEROUS_HPW = 24.5

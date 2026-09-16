@@ -25,6 +25,15 @@ import ride_storage as rs
 TODAY = dt.date(2026, 9, 13)
 
 
+@pytest.fixture(autouse=True)
+def _pin_the_clock(freeze_clock):
+    """Every date in this module is anchored to TODAY, but
+    recent_mean_weekly_tss reads clock.today() for its own 6-week window: left
+    on the real clock the rides drifted out of that window and the test failed
+    three days after it was written, not because anything regressed."""
+    freeze_clock(dt.datetime(TODAY.year, TODAY.month, TODAY.day, 9, 0))
+
+
 def _rides(weeks: int, weekly_tss: float, *, until=TODAY, days_per_week: int = 3,
            gap_days: int = 0) -> list[dict]:
     """``weeks`` of riding at ``weekly_tss``, spread over ``days_per_week``,

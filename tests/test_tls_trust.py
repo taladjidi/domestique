@@ -71,7 +71,16 @@ def test_openssl_refuses_interceptor_style_root_even_when_trusted(root):
     ctx = ssl.create_default_context(cafile=str(FIX / f"root_{root}.pem"))
     err = _handshake(ctx, _serve(FIX / f"leaf_{root}.pem", FIX / "leaf.key"))
     assert err is not None, "OpenSSL accepted a root without CA markers — Windows special-case may be obsolete"
-    assert err.verify_message == "invalid CA certificate"
+    # The PROPERTY is the refusal, and that it is refused AS A TRUST ANCHOR.
+    # The wording is OpenSSL's and moves between releases -- 3.6.2 says "CA
+    # cert does not include key usage extension" where 3.0 said "invalid CA
+    # certificate", and pinning the 3.0 string is what put this suite on the
+    # known-failures list instead of reporting a real change.
+    assert err.verify_message in (
+        "invalid CA certificate",
+        "CA cert does not include key usage extension",
+        "key usage does not include certificate signing",
+    ), err.verify_message
 
 
 def test_openssl_accepts_well_formed_root():

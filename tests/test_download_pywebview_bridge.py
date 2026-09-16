@@ -39,7 +39,25 @@ class _BridgeTestCase(unittest.TestCase):
     """
 
     def _install_window(self, dialog_return):
-        import webview  # the real module
+        try:
+            import webview  # the real module
+        except ModuleNotFoundError:
+            # The GUI dependency (PySide6 + pywebview, ~270 MB) is not
+            # installed on a headless/server install, and this suite tests the
+            # PYTHON side of the bridge -- what JsApi._save does with the
+            # dialog's answer. A namespace with a `windows` list is all the
+            # code under test reads, so stub it rather than skip: the four
+            # tests were simply failing on every run here otherwise.
+            import types
+            webview = types.ModuleType("webview")
+            webview.windows = []
+            # Placeholders: the bridge only passes these through to
+            # create_file_dialog, which is a mock here, so the values are
+            # never compared against pywebview's own.
+            webview.SAVE_DIALOG = "SAVE_DIALOG"
+            webview.OPEN_DIALOG = "OPEN_DIALOG"
+            webview.FOLDER_DIALOG = "FOLDER_DIALOG"
+            sys.modules["webview"] = webview
 
         fake_window = mock.MagicMock()
         fake_window.create_file_dialog.return_value = dialog_return

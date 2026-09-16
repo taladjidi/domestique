@@ -1,6 +1,10 @@
-"""Canonical power & HR zone definitions. Single source of truth across
-training_live, ride_storage, app.py, and the planner. Coggan 7-zone power
-and Friel 5-zone HR conventions."""
+"""Canonical power & HR zone definitions: the single source of truth for
+ride_storage, app.py, the planner and zwo_parse's library scanner. Coggan
+7-zone power and Friel 5-zone HR conventions.
+
+The claim in that first sentence was aspirational until 2026-09-16: three
+other modules binned workouts with their own hardcoded copies of the
+boundaries. `power_zone_edges_pct()` exists so they do not have to."""
 from __future__ import annotations
 from typing import NamedTuple
 
@@ -27,6 +31,18 @@ _POWER_FRACS = [
     (1.21, 1.50, "Z6 Anaerobic"),
     (1.51, 99.99, "Z7 Neuromuscular"),
 ]
+
+def power_zone_edges_pct() -> tuple[int, ...]:
+    """The five FTP-percent boundaries between Z1..Z6, from the table above.
+
+    Six buckets, not seven: every consumer that bins a planned workout folds
+    Z7 into Z6. Derived rather than written out, so a module that bins zones
+    cannot hold its own copy of the numbers -- which is what
+    training_planner's scanner, app's scanner and the content classifier each
+    did while this file's docstring called itself the single source of truth.
+    """
+    return tuple(int(round(lo * 100)) for lo, _hi, _n in _POWER_FRACS[1:6])
+
 
 # Friel 5-zone HR model, anchored on LTHR (Z4 lower bound).
 # Z1 Recovery:      <81% LTHR

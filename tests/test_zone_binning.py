@@ -86,8 +86,8 @@ def bin_file(path):
 
 class ZoneEdges(unittest.TestCase):
     def test_the_inline_edges_match_the_canonical_coggan_table(self):
-        """zones.py calls itself the single source of truth and both scanners
-        hardcode their own copy of the boundaries. They must at least agree."""
+        """The reference binner in THIS file still writes the edges out, as an
+        independent check; zones.py is what the product reads."""
         fracs = [hi for _lo, hi, _n in zones_mod._POWER_FRACS[:5]]
         inline = [e / 100 - 0.01 for e, _n in EDGES]      # <56 means "up to 55"
         for got, want in zip(inline, fracs):
@@ -106,9 +106,17 @@ class ZoneEdges(unittest.TestCase):
         import zwo_parse
         self.assertIs(app._scan_zwo_for_library, zwo_parse.scan_zwo)
         self.assertIs(tp._scan_zwo, zwo_parse.scan_zwo)
+        # And it no longer writes the boundaries out: it asks zones.py, which
+        # is the module whose docstring claims to own them.
+        import zones
+        self.assertEqual(zones.power_zone_edges_pct(), (56, 76, 91, 106, 121))
         src = inspect.getsource(zwo_parse.scan_zwo)
-        for edge in ("< 56", "< 76", "< 91", "< 106", "< 121"):
-            self.assertIn(edge, src, f"the scanner lost the {edge} boundary")
+        self.assertIn("zones.power_zone_edges_pct()", src)
+        # Code only: a comment may well mention the old numbers, and does.
+        code = "\n".join(l.split("#", 1)[0] for l in src.splitlines())
+        for literal in ("< 56", "< 76", "< 91", "< 106", "< 121"):
+            self.assertNotIn(literal, code,
+                             f"the scanner is holding its own copy of {literal}")
 
 
 class LibraryBinning(unittest.TestCase):

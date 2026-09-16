@@ -183,6 +183,36 @@ commit and one built now differ in **zero fields** across 4,307 rows.
   invalidates the index without anyone remembering to bump a number. Both
   halves are mutation-tested.
 
+## Constants: measured, not centralised
+
+The question was whether to move constants into one global store. Measured
+with `tools/arch/constdup.py`:
+
+- **600 module-level constants across 46 files** (`training_planner.py` holds
+  141, `classify_library_content.py` 66, `app.py` 46).
+- **17 names are defined in more than one module**, and 13 of those are one
+  colour palette duplicated between `programme_summary_png.py` and
+  `ride_report_png.py` — and `ride_report_png` is the unwired module in the
+  list below, so that duplication resolves itself with a decision already
+  pending.
+
+So a global store would have moved 583 well-placed constants away from the
+rules they belong to in order to fix four real cases. It would also cost the
+property that makes a rule reviewable and mutation-testable: the threshold
+sits next to the code that turns it, and `zwo_parse.rules_fingerprint()` can
+hash both together. In Python it would add a second hazard: `from constants
+import X` binds the value, so every consumer would be a re-export able to
+drift — the exact trap the `zwo_parse` extraction hit on its first run.
+
+The four real cases, and what to do with each:
+
+| duplicated | verdict |
+|---|---|
+| the Coggan zone edges (`zones.py`, the scanner, `classify_library_content`) | **Fixed.** `zones.power_zone_edges_pct()` derives them from the canonical table; the scanner reads it, and a test forbids the literals coming back. `zones.py`'s docstring claimed "single source of truth" while three modules held their own copy. |
+| `WORKOUT_DIR` / `_BUNDLED_WORKOUT_DIR` in `app.py` and `training_planner.py` | Two independent definitions AND two independent rebinds (`app._apply_profile_paths`, `profile_manager:683`). Not a copy to collapse: a profile switch has to move both, and app's is deliberately read through a getter. Worth a careful pass of its own. |
+| `_PROFILE_ID_RE` in `app.py` and `profile_manager.py` | Identical regex, trivial to collapse onto `profile_manager`. |
+| `BANDS` in `week_solver.py` and `week_view.py` | Not a duplication: same name, different vocabularies (`z1z2/z3/z4/z5plus` vs `low_aerobic/.../anaerobic`). A rename would stop it reading like one. |
+
 ## Still to decide (measured, not deleted)
 
 These are dead in production but have real test surfaces, so deleting them is

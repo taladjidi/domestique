@@ -16,6 +16,8 @@ import hashlib
 import inspect
 import xml.etree.ElementTree as ET
 
+import zones
+
 # What makes a bout a MICROinterval, from the literature (see micro_shape):
 # 30 s and 40 s families, 15-45 s; a 60 s rep is the format they are contrasted
 # against. Recovery at most 1.5x the bout -- 30/15 and 40/20 are 0.5, 30/30 is
@@ -260,13 +262,19 @@ def scan_zwo(zwo_path) -> dict | None:
     # replaces the per-segment RMS accumulation (mirrors the planner).
     samples: list = []
 
+    # The boundaries come from zones.py, which owns them: < 56, < 76, < 91,
+    # < 106, < 121 used to be written out here, in app's copy of this scanner
+    # and in the content classifier, three places to edit and two chances to
+    # forget.
+    e1, e2, e3, e4, e5 = zones.power_zone_edges_pct()
+
     def _acc_zone(power_pct: float, dur_s: int):
         nonlocal z1_sec, z2_sec, z3_sec, z4_sec, z5_sec, z6_sec
-        if power_pct < 56: z1_sec += dur_s
-        elif power_pct < 76: z2_sec += dur_s
-        elif power_pct < 91: z3_sec += dur_s
-        elif power_pct < 106: z4_sec += dur_s
-        elif power_pct < 121: z5_sec += dur_s
+        if power_pct < e1: z1_sec += dur_s
+        elif power_pct < e2: z2_sec += dur_s
+        elif power_pct < e3: z3_sec += dur_s
+        elif power_pct < e4: z4_sec += dur_s
+        elif power_pct < e5: z5_sec += dur_s
         else: z6_sec += dur_s
 
     def _acc_structure(power_pct: float):

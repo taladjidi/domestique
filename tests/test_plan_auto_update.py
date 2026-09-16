@@ -19,6 +19,7 @@ import pytest
 
 import app
 import training_planner as tp
+import zwo_parse
 
 
 T = date.today()
@@ -396,8 +397,11 @@ def test_the_index_is_rebuilt_when_a_rule_changes(tmp_path, monkeypatch):
         "the header must carry the rules it was built under, or every cold "
         "load rejects the index and re-parses 4,307 files")
 
-    # Same files, same mtimes: only the rule moved.
-    monkeypatch.setattr(tp, "MICRO_MIN_SERIES_REPS", 99)
+    # Same files, same mtimes: only the rule moved. Patched in zwo_parse,
+    # which is where micro_shape and rules_fingerprint read it -- the name on
+    # training_planner is a re-export, and patching that would change nothing
+    # (which is the whole reason the next test pins the two as one object).
+    monkeypatch.setattr(zwo_parse, "MICRO_MIN_SERIES_REPS", 99)
     tp._WORKOUT_LIB_CACHE.clear()
     tp._WORKOUT_LIB_FAST_VALIDATOR.clear()
     assert tp.load_workout_library()[0]["IsMicro"] is False, "served a stale verdict"
@@ -429,6 +433,25 @@ def test_microintervals_only_serves_microintervals_and_still_fills_the_slot():
     on_hit, _ = sweep(True)
     assert on_hit == tot, (on_hit, tot)
     assert off_hit < tot, "OFF must keep the variety the library is for"
+
+
+def test_the_planner_re_exports_the_one_measure():
+    """`training_planner.X` and `zwo_parse.X` must BE the same objects.
+
+    The measure moved to a leaf module; the planner keeps the old names
+    because the library index, the matcher and 200+ test files reach them
+    there. A re-export that silently rebound to a copy would give the two a
+    way to disagree, which is the exact failure the extraction was meant to
+    remove.
+    """
+    for name in ("MICRO_MAX_BOUT_S", "MICRO_MAX_REST_RATIO", "MICRO_MIN_POWER",
+                 "MICRO_MAX_POWER", "MICRO_MAX_REST_POWER", "MICRO_LONG_MIN_POWER",
+                 "MICRO_MIN_SERIES_REPS", "MICRO_MIN_WORK_S"):
+        assert getattr(tp, name) == getattr(zwo_parse, name), name
+    assert tp._micro_shape is zwo_parse.micro_shape
+    assert tp.is_microinterval is zwo_parse.is_microinterval
+    assert tp._index_rules_fingerprint is zwo_parse.rules_fingerprint
+    assert tp._np_fraction_from_samples is zwo_parse.np_fraction_from_samples
 
 
 def test_microintervals_only_holds_through_a_whole_generated_plan(freeze_clock):

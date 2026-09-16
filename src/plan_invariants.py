@@ -186,6 +186,54 @@ def _weeks_ahead(weeks, today):
     return [w for w in weeks if today is None or w.end >= today]
 
 
+def hard_gap_ok(day, sessions, is_hard, *, gap_h=MIN_HARD_GAP_HOURS,
+                extra_hard_days=()) -> "tuple[bool, str]":
+    """May a hard session go on ``day``? Returns (ok, reason).
+
+    ONE rule for the two callers that ask it while choosing a slot: the
+    planner building a week (_slot_breaks_hard_spacing) and the auto-move
+    choosing where a missed hard session is re-owed (app's
+    _compute_missed_suggestions). They carried a copy each and the copies
+    disagreed -- the auto-move's lived inside its easy-day-takeover branch, so
+    a free rest slot skipped the rule entirely and a missed VO2 could land the
+    day after a ridden threshold.
+
+    ``sessions`` may be PlannedSession objects or plan dicts; both are read
+    through _field. ``is_hard`` stays the caller's, because the planner and the
+    app already agree on it (tp._session_is_hit) and unifying hardness is a
+    separate change with its own risk.
+
+    ``extra_hard_days`` are days a caller has already committed in the same
+    pass but not yet written into ``sessions``: without them two re-owed hard
+    sessions each pass against the plan as it stands and break the rule in the
+    plan that results.
+
+    D6, a missed or dismissed session costs nothing: it blocks no day, because
+    it will not be ridden. Neither does a session moved away from its day.
+    """
+    day = _day(day)
+    gap_days = max(1, int(round(gap_h / 24)))
+    for d in extra_hard_days:
+        d = _day(d)
+        if d is not None and d != day and abs((d - day).days) < gap_days:
+            return False, f"{abs((d - day).days) * 24} h from a session just placed"
+    for s in sessions or ():
+        if s is None:
+            continue
+        f = _field(s)
+        sd = _day(f("day", None))
+        if sd is None or sd == day:
+            continue
+        status = str(f("status", "pending") or "pending")
+        if status in NOT_RIDDEN or f("dismissed_at", "") or status.startswith("moved_from:"):
+            continue
+        if not is_hard(s):
+            continue
+        if abs((sd - day).days) < gap_days:
+            return False, f"{abs((sd - day).days) * 24} h from a hard day"
+    return True, ""
+
+
 def check_hard_day_spacing(weeks) -> list[Violation]:
     """No two hard days closer than 48 h, across week boundaries too.
 

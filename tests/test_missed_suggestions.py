@@ -303,3 +303,87 @@ class TestUnavailableDayExcluded(MissedSuggestionsBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHardGapOnEveryDestination(MissedSuggestionsBase):
+    """48 h from every hard day, on ANY destination and against every hard
+    session the pass has already placed.
+
+    The guard used to live inside the easy-day-takeover branch alone, so a
+    missed VO2 could land the day after a RIDDEN threshold whenever the week
+    happened to have a free rest slot. And nothing tracked the destinations
+    chosen earlier in the same pass, so two missed hard sessions could be
+    placed on consecutive free days, each one legal against the plan as it
+    stood and illegal against the plan that resulted.
+    """
+
+    def test_a_free_rest_slot_still_keeps_48h_from_a_ridden_hard_day(self):
+        sessions = []
+        for i in range(7):
+            d = self._monday + timedelta(days=i)
+            if i == 0:                      # Mon: the missed VO2
+                sessions.append(_mk_session(d, session_type="vo2max", duration_min=60,
+                                            tss=80.0, status="missed"))
+            elif i == 2:                    # Wed: ridden threshold
+                sessions.append(_mk_session(d, session_type="threshold", duration_min=60,
+                                            tss=75.0, status="done"))
+            elif i == 3:                    # Thu: free rest slot, 24 h after it
+                sessions.append(_mk_session(d, session_type="rest", status="pending"))
+            elif i == 5:                    # Sat: free rest slot, 72 h after it
+                sessions.append(_mk_session(d, session_type="rest", status="pending"))
+            else:
+                sessions.append(_mk_session(d, session_type="z2", duration_min=60,
+                                            tss=45.0, status="pending"))
+        self._write(_build_plan(self._monday, sessions))
+        out = self._suggestions(self._monday)["suggestions"]
+        assert len(out) == 1
+        assert out[0]["suggested_date"] == (self._monday + timedelta(days=5)).isoformat(), (
+            "Thursday is 24 h after a ridden threshold; Saturday is the first "
+            f"day that keeps 48 h (got {out[0]['suggested_date']})")
+
+    def test_two_re_owed_hard_sessions_keep_48h_from_each_other(self):
+        sessions = []
+        for i in range(7):
+            d = self._monday + timedelta(days=i)
+            if i == 0:
+                sessions.append(_mk_session(d, session_type="vo2max", duration_min=60,
+                                            tss=80.0, status="missed"))
+            elif i == 1:
+                sessions.append(_mk_session(d, session_type="threshold", duration_min=60,
+                                            tss=75.0, status="missed"))
+            elif i in (3, 4, 5):            # Thu, Fri, Sat all free
+                sessions.append(_mk_session(d, session_type="rest", status="pending"))
+            else:
+                sessions.append(_mk_session(d, session_type="z2", duration_min=60,
+                                            tss=45.0, status="pending"))
+        self._write(_build_plan(self._monday, sessions))
+        out = self._suggestions(self._monday)["suggestions"]
+        days = sorted(date.fromisoformat(s["suggested_date"]) for s in out)
+        if len(days) == 2:
+            assert (days[1] - days[0]).days >= 2, (
+                f"two re-owed hard sessions 24 h apart: "
+                f"{[d.isoformat() for d in days]}")
+
+    def test_a_missed_hard_neighbour_blocks_nothing(self):
+        """D6: a session that will not be ridden costs nothing, spacing
+        included. Wednesday's threshold was missed, so Thursday is free for
+        Monday's missed VO2 even though the two days are adjacent."""
+        sessions = []
+        for i in range(7):
+            d = self._monday + timedelta(days=i)
+            if i == 0:
+                sessions.append(_mk_session(d, session_type="vo2max", duration_min=60,
+                                            tss=80.0, status="missed"))
+            elif i == 2:                    # Wed: a MISSED hard day
+                sessions.append(_mk_session(d, session_type="threshold", duration_min=60,
+                                            tss=75.0, status="missed"))
+            elif i == 3:                    # Thu: free, 24 h after that miss
+                sessions.append(_mk_session(d, session_type="rest", status="pending"))
+            else:
+                sessions.append(_mk_session(d, session_type="z2", duration_min=60,
+                                            tss=45.0, status="pending"))
+        self._write(_build_plan(self._monday, sessions))
+        out = self._suggestions(self._monday)["suggestions"]
+        vo2 = [s for s in out if s["missed_session_type"] == "vo2max"]
+        assert vo2, "the VO2 found no slot; a missed neighbour should not block one"
+        assert vo2[0]["suggested_date"] == (self._monday + timedelta(days=3)).isoformat()

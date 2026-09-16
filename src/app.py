@@ -70,6 +70,7 @@ from readiness import compute_readiness
 import config
 import db
 import zones as _zones_mod
+import plan_invariants  # leaf: the shared hard-gap rule, also the planner's
 import ride_storage  # the one definition of a ride's duration (ride_moving_s)
 import training_planner as tp  # module-level: every plan endpoint uses tp.plan_write_lock()
 import continuous_policy as cpol  # 3.4.0 W2 — continuous-mode deload + rotation policy
@@ -13407,6 +13408,8 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
         except (TypeError, ValueError):
             continue
 
+    placed_hard: set[str] = set()   # destinations this pass gave a hard session
+
     def _is_available_slot(d_iso: str, missed_iso: str,
                            missed_sess: "dict | None" = None,
                            easy_takeover: bool = False) -> bool:
@@ -13436,6 +13439,23 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
             for ed in event_days:
                 if 0 <= (ed - d).days <= 2:
                     return False
+            # >=48 h from every hard day that will actually be ridden: one
+            # planned or done in the week, or one this pass has already placed
+            # for an earlier miss. The bound lived inside the easy-takeover
+            # branch alone, so a free rest slot skipped it entirely and a
+            # missed VO2 could land the day after a ridden threshold; and
+            # nothing looked at `placed_hard`, so two re-owed hard sessions
+            # each passed against the plan as it stood and broke the rule in
+            # the plan that resulted. A missed or dismissed neighbour blocks
+            # nothing: it will not be ridden (D6).
+            # The RULE is plan_invariants.hard_gap_ok, the same call the
+            # planner makes when it chooses a slot. It used to be a copy, and
+            # the copies disagreed.
+            _ok, _why = plan_invariants.hard_gap_ok(
+                d, sess_by_day.values(), tp._session_is_hit,
+                extra_hard_days=placed_hard)
+            if not _ok:
+                return False
         entry = availability.get(d_iso)
         if isinstance(entry, dict) and entry.get("type") == "unavailable":
             return False
@@ -13483,16 +13503,6 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
             # twice over.
             if (sess.get("status") or "pending") != "pending":
                 return False
-            # >=48h from any other hard day (the evidence's spacing bound,
-            # approximated as no hard neighbour on the adjacent days). A
-            # missed or dismissed neighbour does not count — it will not be
-            # ridden.
-            for nb in (d - timedelta(days=1), d + timedelta(days=1)):
-                nb_sess = sess_by_day.get(nb.isoformat())
-                if (nb_sess and tp._session_is_hit(nb_sess)
-                        and (nb_sess.get("status") or "pending")
-                        not in ("missed", "dismissed")):
-                    return False
         stat = (sess.get("status") or "")
         if stat in ("done", "done_partial", "ambiguous"):
             return False

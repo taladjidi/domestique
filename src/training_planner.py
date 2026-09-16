@@ -9525,17 +9525,15 @@ def _slot_breaks_hard_spacing(week, all_weeks: list, day) -> bool:
 
     Looks across the whole plan, not just this week, because Sunday and the
     following Monday are a day apart whatever the calendar says about weeks.
+
+    The rule itself lives in plan_invariants.hard_gap_ok, which the auto-move
+    calls too: this and app's copy disagreed, and the auto-move's version
+    applied to one branch only.
     """
-    for wk in (all_weeks or [week]):
-        for s in (getattr(wk, "sessions", None) or []):
-            if s is None or s.day == day:
-                continue
-            if (getattr(s, "status", "") in ("missed", "dismissed")
-                    or getattr(s, "dismissed_at", "")):
-                continue  # D6: a session not ridden costs nothing, spacing included
-            if _session_is_hit(s) and abs((s.day - day).days) < 2:
-                return True
-    return False
+    sessions = [s for wk in (all_weeks or [week])
+                for s in (getattr(wk, "sessions", None) or [])]
+    ok, _reason = plan_invariants.hard_gap_ok(day, sessions, _session_is_hit)
+    return not ok
 
 
 def _enforce_build2_peak_hard_floor(

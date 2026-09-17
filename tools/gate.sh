@@ -24,7 +24,12 @@ PYT=(uv run --quiet --with pytest --with pytest-timeout --with pytest-xdist
 
 date > "$OUT.full.txt"
 timeout 3300 "${PYT[@]}" -n 5 -q --timeout=900 --tb=no -rfE tests/ >> "$OUT.full.txt" 2>&1
-grep -E '^(FAILED|ERROR) ' "$OUT.full.txt" | sed -E 's/^(FAILED|ERROR) //; s/ - .*//' \
+# SUBFAILED too: a subtest failure prints `SUBFAILED(k='v', ...) tests/x.py::T::t`
+# and was invisible here, so on 2026-09-17 the gate reported "real: 0" while
+# test_b4_deload_long_ride had two failing subtests. The subtest parameters are
+# stripped so the id is the test's own, and re-runs alone below as usual.
+grep -E '^(FAILED|ERROR|SUBFAILED)' "$OUT.full.txt" \
+  | sed -E 's/^SUBFAILED\([^)]*\) //; s/^(FAILED|ERROR) //; s/ - .*//' \
   | sort -u > "$OUT.bad.txt"
 comm -23 "$OUT.bad.txt" <(sort tests/known-failures-clean-main.txt) > "$OUT.unknown.txt"
 

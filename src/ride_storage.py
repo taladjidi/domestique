@@ -900,6 +900,42 @@ def _persist_rider_input(external_id, values: dict) -> None:
         log.debug(f"_persist_rider_input({external_id}) skipped: {e}")
 
 
+def ride_moving_s(ride: dict) -> int:
+    """How long the rider actually rode, in seconds: moving time.
+
+    ONE definition, because the stored field that sounds like it means this
+    does not mean one thing. The ICU normaliser sets ``duration_s`` from
+    intervals.icu's ELAPSED time (stops, coffee, the lights included) and
+    keeps moving time in ``moving_s``; a FIT import sets ``duration_s`` from
+    the session's ``total_timer_time``, which already excludes auto-pauses.
+    So `duration_s` was elapsed for every synced ride and moving for every
+    imported one, and the calendar showed a 1h31 ride (intervals.icu's figure)
+    as 118 min -- while the zone minutes on the same card summed to 91.9.
+
+    Elapsed time stays in ``duration_s`` for what is genuinely elapsed: stream
+    axes, interval start offsets. Anything that means "how long did you ride"
+    reads this.
+    """
+    if not isinstance(ride, dict):
+        return 0
+    summary = ride.get("summary") if isinstance(ride.get("summary"), dict) else {}
+    raw = ride.get("raw_json") if isinstance(ride.get("raw_json"), dict) else {}
+    for value in (ride.get("moving_s"), ride.get("moving_time"),
+                  raw.get("moving_time"), raw.get("icu_moving_time"),
+                  summary.get("moving_time_sec"),
+                  # a FIT record's duration IS timer time; an ICU record's is
+                  # not, but an ICU record always carries moving_s above
+                  ride.get("duration_s"), ride.get("duration_sec"),
+                  summary.get("duration_sec")):
+        try:
+            v = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 0
+
+
 def load_all_rides() -> list[dict]:
     """v4.4.0 — return ICU-synced records + raw FIT imports as one merged
     flat list, deduped (ICU preferred when both have the same activity).

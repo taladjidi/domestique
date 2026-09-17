@@ -20645,7 +20645,7 @@ function renderActivityModal(p) {
   // Hero stats grid (6 tiles)
   const hero = [
     {l:'Distance', v: num(p.distance_km, ' km', 1)},
-    {l:'Time',     v: fmtDur(p.duration_s)},
+    {l:'Time',     v: fmtDur(p.moving_s || p.duration_s)},  // moving time, as intervals.icu shows it; duration_s is elapsed
     {l:'TSS',      v: num(p.tss)},
     {l:'IF',       v: p.if_pct != null ? (Number(p.if_pct).toFixed(0) + '%') : '—'},
     {l:'NP',       v: num(p.np_w, 'W')},

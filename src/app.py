@@ -70,6 +70,7 @@ from readiness import compute_readiness
 import config
 import db
 import zones as _zones_mod
+import ride_storage  # the one definition of a ride's duration (ride_moving_s)
 import training_planner as tp  # module-level: every plan endpoint uses tp.plan_write_lock()
 import continuous_policy as cpol  # 3.4.0 W2 — continuous-mode deload + rotation policy
 # v1.6.1 — register _log_error as the planner's observability hook so any
@@ -2803,7 +2804,7 @@ def api_profile_dfa_rides():
             if max(alphas) < target_alpha:
                 return "no crossing — whole ride harder than this threshold"
             return "crossing too noisy to fit (r² gate)"
-        moving = d.get("moving_s") or d.get("duration_s") or 0
+        moving = ride_storage.ride_moving_s(d)
         rides.append({
             "id": d.get("id"),
             "date": str(d.get("started_at") or "")[:10],  # naive ISO, no shift
@@ -4518,7 +4519,7 @@ def api_activities():
                     "date": d,
                     "name": r.get("name") or summary.get("name") or "",
                     "sport": r.get("sport") or "Ride",
-                    "duration_min": round((r.get("duration_s") or summary.get("duration_s") or 0) / 60),
+                    "duration_min": round(ride_storage.ride_moving_s(r) / 60),
                     "tss": r.get("tss") if r.get("tss") is not None else summary.get("tss"),
                     "avg_power": r.get("avg_power_w") if r.get("avg_power_w") is not None else summary.get("avg_power"),
                     "avg_hr": r.get("avg_hr") if r.get("avg_hr") is not None else summary.get("avg_hr"),
@@ -13049,7 +13050,7 @@ def _collect_week_activities(current_week, today: date, include_today: bool = Fa
         if not (week_start_iso <= d < upper_iso):
             return
         tss = float(a.get("tss") or a.get("icu_training_load") or raw.get("icu_training_load") or 0)
-        moving_s = a.get("moving_time") or raw.get("moving_time") or a.get("duration_sec") or 0
+        moving_s = ride_storage.ride_moving_s({**a, "raw_json": raw})
         dur_min = float(a.get("duration_min") or (moving_s or 0) / 60 or 0)
         if_ = a.get("intensity_factor") or a.get("icu_intensity") or raw.get("icu_intensity")
         real_load = tss > 0
@@ -14331,7 +14332,10 @@ def _summarize_ride_for_calendar(
     # v4.4.0 — ICU rides already carry the §3 fields at the top level.
     if (ride.get("source") == "icu"
             or (ride.get("ride_id") or "").startswith("icu_")):
-        duration_sec = ride.get("duration_s") or 0
+        # Moving time, as intervals.icu shows it: duration_s is ELAPSED on a
+        # synced ride, and reading it made a 1h31 ride a 118-min card whose own
+        # zone minutes summed to 91.9 (ride_storage.ride_moving_s).
+        duration_sec = ride_storage.ride_moving_s(ride)
         duration_min = round(float(duration_sec) / 60.0, 1) if duration_sec else 0.0
         tiz = ride.get("time_in_zone") or {}
         z12_sec = (tiz.get("z1") or 0) + (tiz.get("z2") or 0)

@@ -69,6 +69,42 @@ PROFILE_COLORS = [
 ]
 
 
+class _Fact:
+    """A number on the profile that remembers where it came from.
+
+    Four of these existed as four near-identical methods: `_set_wprime`, and
+    `_set_pmax` and `_set_max_hr`, whose docstrings both say "Cloned from
+    `_set_wprime`", and then `update_ftp`, which was the clone that never got
+    its gate -- so the 7-day eFTP drift rule could overwrite a 20-minute test
+    the rider rode the day before. One table, one writer: a fact added here
+    cannot forget the check, and a check fixed here is fixed for all of them.
+    """
+
+    __slots__ = ("field", "source_field", "unit", "lo", "hi", "prio")
+
+    def __init__(self, field, source_field, unit, lo, hi, prio):
+        self.field, self.source_field, self.unit = field, source_field, unit
+        self.lo, self.hi, self.prio = lo, hi, prio
+
+
+# Provenance tiers, higher wins. Equal tiers are allowed to overwrite, so a
+# rider can always overrule themselves, and a fresh reading from the same
+# machine source replaces the previous one.
+_FACTS = {
+    # What the rider typed or rode outranks what a machine estimated.
+    # "eftp_auto" is the sustained-drift rule applying an estimate unasked.
+    "ftp": _Fact("ftp", "ftp_source", "W", 50, 600, {
+        "manual": 2, "tested_coggan_20min": 2, "tested_ramp": 2,
+        "eftp_icu": 1, "eftp_auto": 1, "eftp_local": 1}),
+    "wprime": _Fact("wprime_j", "wprime_source", "J", 5000, 40000, {
+        "manual": 3, "icu": 2, "monod": 1, "fallback": 0}),
+    "pmax": _Fact("pmax_w", "pmax_source", "W", 300, 2500, {
+        "manual": 3, "icu": 2, "computed": 1, "fallback": 0}),
+    "max_hr": _Fact("max_hr", "max_hr_source", "bpm", 140, 220, {
+        "manual": 3, "icu": 2, "computed": 1, "age_tanaka": 0}),
+}
+
+
 class ProfileManager:
     """Singleton managing the active profile and its config values."""
 
@@ -759,6 +795,46 @@ class ProfileManager:
         if max_hr_manual is not None:
             self._set_max_hr(int(max_hr_manual), "manual")
 
+    def _set_fact(self, name: str, value, source: str) -> bool:
+        """Write a provenance-tracked fact, or refuse and say why.
+
+        Returns True when the value was written; False when it was dropped
+        (no active profile, unusable value, out of range, or a
+        higher-priority source already holds the field). Raises ValueError
+        for a source the fact does not define, which is a caller bug rather
+        than a data problem.
+        """
+        fact = _FACTS[name]
+        if source not in fact.prio:
+            raise ValueError(f"unknown {name} source: {source!r}")
+        if self._active_id is None:
+            # AC6a: no active profile (delete-last) -- a straggler mirror must
+            # not write athlete.json into the profiles root.
+            log.warning("set %s: no active profile; write dropped", fact.field)
+            return False
+        try:
+            v = int(float(value))
+        except (TypeError, ValueError):
+            log.warning("set %s: invalid value %r; ignored", fact.field, value)
+            return False
+        if not (fact.lo <= v <= fact.hi):
+            log.warning("set %s: %d out of range [%d, %d] (source=%s); ignored",
+                        fact.field, v, fact.lo, fact.hi, source)
+            return False
+
+        current = self._athlete.get(fact.source_field)
+        if current in fact.prio and fact.prio[source] < fact.prio[current]:
+            log.info("set %s: keeping %s%s from %s; refused %d from the "
+                     "lower-priority source %s", fact.field,
+                     self._athlete.get(fact.field), fact.unit, current, v, source)
+            return False
+
+        self._athlete[fact.field] = v
+        self._athlete[fact.source_field] = source
+        self._write_json(self.active_dir / "athlete.json", self._athlete)
+        log.info("set %s=%d %s source=%s", fact.field, v, fact.unit, source)
+        return True
+
     def _set_wprime(self, value: int | float, source: str) -> bool:
         """Shared write-path for `wprime_j` with source tracking (v3.6.0-fix26
         §4.1). Shared with IMPL-ICU §5.4.
@@ -786,41 +862,7 @@ class ProfileManager:
 
         Atomic write via the existing `_write_json` path (tmp+fsync+rename).
         """
-        _PRIO = {"manual": 3, "icu": 2, "monod": 1, "fallback": 0}
-        if source not in _PRIO:
-            raise ValueError(f"unknown wprime source: {source!r}")
-        if self._active_id is None:
-            # AC6a: no active profile (delete-last) — a straggler mirror must
-            # not write athlete.json into the profiles root.
-            log.warning("_set_wprime: no active profile; write dropped")
-            return False
-
-        try:
-            v = int(float(value))
-        except (TypeError, ValueError):
-            log.warning("_set_wprime: invalid value %r; ignored", value)
-            return False
-        if not (5000 <= v <= 40000):
-            log.warning(
-                "_set_wprime: %d out of range [5000, 40000] "
-                "(source=%s); ignored", v, source,
-            )
-            return False
-
-        current_source = self._athlete.get("wprime_source")
-        if current_source in _PRIO:
-            if _PRIO[source] < _PRIO[current_source]:
-                log.debug(
-                    "_set_wprime: skipping %s write (%d J); current source "
-                    "%s has higher priority", source, v, current_source,
-                )
-                return False
-
-        self._athlete["wprime_j"] = v
-        self._athlete["wprime_source"] = source
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
-        log.info("_set_wprime: wprime_j=%d J source=%s", v, source)
-        return True
+        return self._set_fact("wprime", value, source)
 
     @property
     def wprime_source(self) -> str:
@@ -857,39 +899,7 @@ class ProfileManager:
 
         Atomic write via the existing `_write_json` path (tmp+fsync+rename).
         """
-        _PRIO = {"manual": 3, "icu": 2, "computed": 1, "fallback": 0}
-        if source not in _PRIO:
-            raise ValueError(f"unknown pmax source: {source!r}")
-        if self._active_id is None:
-            log.warning("_set_pmax: no active profile; write dropped")  # AC6a
-            return False
-
-        try:
-            v = int(float(value))
-        except (TypeError, ValueError):
-            log.warning("_set_pmax: invalid value %r; ignored", value)
-            return False
-        if not (300 <= v <= 2500):
-            log.warning(
-                "_set_pmax: %d out of range [300, 2500] "
-                "(source=%s); ignored", v, source,
-            )
-            return False
-
-        current_source = self._athlete.get("pmax_source")
-        if current_source in _PRIO:
-            if _PRIO[source] < _PRIO[current_source]:
-                log.debug(
-                    "_set_pmax: skipping %s write (%d W); current source "
-                    "%s has higher priority", source, v, current_source,
-                )
-                return False
-
-        self._athlete["pmax_w"] = v
-        self._athlete["pmax_source"] = source
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
-        log.info("_set_pmax: pmax_w=%d W source=%s", v, source)
-        return True
+        return self._set_fact("pmax", value, source)
 
     @property
     def pmax_source(self) -> str:
@@ -951,39 +961,7 @@ class ProfileManager:
         NOTE: keeps the canonical key `max_hr` to match `ProfileManager.max_hr`
         property at line 147 and the existing settings field. PATCH G6.
         """
-        _PRIO = {"manual": 3, "icu": 2, "computed": 1, "age_tanaka": 0}
-        if source not in _PRIO:
-            raise ValueError(f"unknown max_hr source: {source!r}")
-        if self._active_id is None:
-            log.warning("_set_max_hr: no active profile; write dropped")  # AC6a
-            return False
-
-        try:
-            v = int(float(value))
-        except (TypeError, ValueError):
-            log.warning("_set_max_hr: invalid value %r; ignored", value)
-            return False
-        if not (140 <= v <= 220):
-            log.warning(
-                "_set_max_hr: %d out of range [140, 220] "
-                "(source=%s); ignored", v, source,
-            )
-            return False
-
-        current_source = self._athlete.get("max_hr_source")
-        if current_source in _PRIO:
-            if _PRIO[source] < _PRIO[current_source]:
-                log.debug(
-                    "_set_max_hr: skipping %s write (%d bpm); current source "
-                    "%s has higher priority", source, v, current_source,
-                )
-                return False
-
-        self._athlete["max_hr"] = v
-        self._athlete["max_hr_source"] = source
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
-        log.info("_set_max_hr: max_hr=%d bpm source=%s", v, source)
-        return True
+        return self._set_fact("max_hr", value, source)
 
     @property
     def max_hr_source(self) -> str:
@@ -1037,15 +1015,19 @@ class ProfileManager:
             f"source={source!r} applied={applied}"
         )
 
-    def update_ftp(self, ftp: int, source: str | None = None) -> None:
-        """Atomically update active profile FTP (clamped [50, 600]).
+    def update_ftp(self, ftp: int, source: str | None = None) -> bool:
+        """Atomically update the active profile's FTP (range [50, 600]).
 
-        E1 (v4.1.0): optional ``source`` records the FTP provenance on the
-        profile via ``ftp_source``. Allowed values: "tested_coggan_20min",
-        "tested_ramp", "eftp_icu", "eftp_local", "manual". Invalid sources
-        are coerced to "manual" so callers that pass free-form strings
-        don't break. Callers that don't care about provenance omit the
-        argument and leave the existing ftp_source untouched.
+        Returns True when the FTP was written, False when it was refused
+        because a higher-priority source holds it: the 7-day eFTP drift rule
+        does not get to overwrite a test the rider rode. Callers that must
+        know (the drift rule) check the result; the rest can ignore it.
+
+        Raises ValueError for an unusable number, which is what the API layer
+        turns into a 400. Provenance goes in ``ftp_source``; an unknown source
+        is coerced to "manual" so a caller passing a free-form string cannot
+        create a tier that outranks everything by accident. Omitting the
+        source leaves the existing provenance alone.
         """
         self._require_active()
         try:
@@ -1054,20 +1036,13 @@ class ProfileManager:
             raise ValueError(f"ftp must be int, got {ftp!r}")
         if not (50 <= v <= 600):
             raise ValueError(f"ftp {v} out of range [50, 600]")
-        self._athlete["ftp"] = v
-        if source is not None:
-            # FIX-CONTRACT C5: "eftp_auto" = auto-applied by F5's 7-day
-            # sustained-drift rule. "eftp_icu" retained for any legacy
-            # callers that wrote it directly (E2 accept path still uses it).
-            allowed = {"tested_coggan_20min", "tested_ramp", "eftp_icu",
-                       "eftp_auto", "eftp_local", "manual"}
-            self._athlete["ftp_source"] = source if source in allowed else "manual"
-        elif "ftp_source" not in self._athlete:
-            # E1 migration: if the profile has never had ftp_source written,
-            # default it to "manual" so downstream code always sees a value.
-            self._athlete["ftp_source"] = "manual"
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
-        log.info(f"update_ftp: ftp={v} source={self._athlete.get('ftp_source')}")
+        if source is None:
+            # No provenance offered: keep whatever is on record, and write
+            # through the same path so the gate still applies.
+            source = str(self._athlete.get("ftp_source") or "manual")
+        elif source not in _FACTS["ftp"].prio:
+            source = "manual"
+        return self._set_fact("ftp", v, source)
 
     @property
     def ftp_source(self) -> str:

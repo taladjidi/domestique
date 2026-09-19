@@ -54,10 +54,22 @@ QUANTITIES: dict[str, dict] = {
     "atl": {"keys": ("atl",), "tol": 0.55, "scope": "athlete"},
     "tsb": {"keys": ("tsb",), "tol": 0.55, "scope": "athlete"},
     "ftp": {"keys": ("ftp", "current_ftp"), "tol": 0.5, "scope": "athlete"},
-    "week_tss_target": {"keys": ("tss_target", "weekly_tss_target", "target_tss"),
+    # THREE quantities, and the app has been calling them one thing. The
+    # ramp's budget for the week, the load actually prescribed on its days,
+    # and the load ridden. They coincide in a healthy week, which is why seven
+    # key names across three endpoints went unnoticed: /api/calendar says
+    # planned_tss, /api/weekly-plan says tss_target AND budget AND planned_tss
+    # in one response, /api/week-summary says tss_target for a different one
+    # of the three. `tss_target` is deliberately filed under the prescribed
+    # load here, because that is what the rollup divides by -- so when a
+    # week's budget and its sessions disagree, this reports it instead of
+    # hiding it behind a shared name.
+    "week_budget": {"keys": ("budget", "weekly_tss_target", "target_tss"),
+                    "tol": 0.5, "scope": "week"},
+    "week_prescribed": {"keys": ("tss_target", "planned_tss"),
                         "tol": 0.5, "scope": "week"},
-    "week_tss_done": {"keys": ("tss_done", "actual_tss", "tss_actual"),
-                      "tol": 0.5, "scope": "week"},
+    "week_done": {"keys": ("tss_done", "actual_tss", "tss_actual"),
+                  "tol": 0.5, "scope": "week"},
     # How long the rider rode, as a reader DISPLAYS it. duration_s and
     # moving_s are deliberately not in here: a record carrying both is not a
     # disagreement, it is the raw material. What must agree is the minutes two
@@ -120,6 +132,20 @@ def _when_from_scope(scope: str) -> str:
     return scope.split("@", 1)[1] if "@" in scope else ""
 
 
+# Paths whose numbers share a name with a tracked quantity while answering a
+# different question. The readiness composite scores each input 0..100 and
+# calls one of them `tsb`; comparing that with the real TSB is a false
+# positive, and a probe that cries wolf gets muted. Kept short on purpose:
+# every entry here is a hole in the comparison, so each one names its reason.
+_EXCLUDED_PATHS = (
+    ".components.",       # readiness sub-scores, 0..100, not the quantity
+)
+
+
+def _excluded(path: str) -> bool:
+    return any(frag in path for frag in _EXCLUDED_PATHS)
+
+
 def _kind_of(payload: dict, when: str, scope: str) -> "tuple[str, str]":
     """What an object IS, and the subject its numbers are about.
 
@@ -146,6 +172,11 @@ def _kind_of(payload: dict, when: str, scope: str) -> "tuple[str, str]":
         return "week", f"week:{payload['week_start']}"
     if isinstance(payload.get("start"), str) and "sessions" in payload:
         return "week", f"week:{payload['start']}"
+    if isinstance(payload.get("start_date"), str) and "iso_week" in payload:
+        # /api/calendar's weeks. They key on start_date and iso_week, which
+        # this did not recognise, so the biggest plan-versus-actual screen in
+        # the app contributed ZERO week numbers to the comparison.
+        return "week", f"week:{payload['start_date']}"
     if "tss_target" in payload or "tss_done" in payload:
         # A week-shaped body that names its span some other way (the rollup
         # says week_start; the weekly plan says start) still answers week
@@ -191,7 +222,7 @@ def walk(payload, endpoint: str, path: str = "", scope: str = "",
                 n = _num(v.get("value"))
                 if n is not None and q is None:
                     q = _KEY_TO_QUANTITY.get(("athlete", k))
-            if q is not None and n is not None:
+            if q is not None and n is not None and not _excluded(f"{path}.{k}"):
                 sc = (f"athlete@{when or TODAY[0] or 'today'}"
                       if QUANTITIES[q]["scope"] == "athlete" else here)
                 out.append(Observation(q, n, endpoint, f"{path}.{k}", sc))

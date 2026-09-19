@@ -768,10 +768,31 @@ def sync_activities(days: int = 90, _snapshot=None) -> int:
                 calories = a.get("calories")
                 elevation_gain = a.get("total_elevation_gain")
                 db.execute(
-                    """INSERT OR REPLACE INTO activities
+                    # An UPSERT, not INSERT OR REPLACE. On a primary-key
+                    # conflict SQLite implements OR REPLACE as DELETE then
+                    # INSERT, so every column this statement does not name
+                    # went back to its schema default -- and `is_race`, which
+                    # only Domestique knows, was reset to 0 on every sync for
+                    # every ride. Naming the columns intervals.icu owns means
+                    # the local ones are preserved by default, so the next
+                    # locally-decided column cannot be erased by omission.
+                    """INSERT INTO activities
                        (id, date, name, sport, duration_sec, tss, avg_power, avg_hr,
                         distance_km, kilojoules, calories, elevation_gain, raw_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           date = excluded.date,
+                           name = excluded.name,
+                           sport = excluded.sport,
+                           duration_sec = excluded.duration_sec,
+                           tss = excluded.tss,
+                           avg_power = excluded.avg_power,
+                           avg_hr = excluded.avg_hr,
+                           distance_km = excluded.distance_km,
+                           kilojoules = excluded.kilojoules,
+                           calories = excluded.calories,
+                           elevation_gain = excluded.elevation_gain,
+                           raw_json = excluded.raw_json""",
                     (
                         str(aid),
                         dt,

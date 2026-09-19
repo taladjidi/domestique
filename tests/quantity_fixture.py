@@ -26,6 +26,7 @@ MONDAY = TODAY - timedelta(days=TODAY.weekday())
 FTP = 250
 CTL, ATL = 42.0, 51.0                           # TSB = -9.0
 PLANNED = {0: 101, 1: 55, 2: 51, 3: 43, 4: 137, 5: 0, 6: 60}
+WEEK_BUDGET = 500.0            # what the ramp allows; the sessions carry 447
 # What the rider actually did, Monday to Wednesday.
 RIDES = [
     {"day": 0, "tss": 96.0, "duration_s": 5400, "moving_s": 5100, "watts": 178},
@@ -66,9 +67,13 @@ def _plan() -> dict:
                 "zwo_file": "" if tss == 0 else "z2_steady_56pct_60min.zwo",
                 "zwo_name": "" if tss == 0 else "Z2",
             })
+        # The stored budget is NOT the sum of the sessions. A ramp allows 500;
+        # the days carry 447. Both numbers are legitimate and they are
+        # different questions, which is invisible while a fixture makes them
+        # equal -- and they travel under the same key name today.
         weeks.append({"week_num": wk + 2, "start": start.isoformat(),
                       "end": (start + timedelta(days=6)).isoformat(),
-                      "phase": "base", "tss_target": sum(PLANNED.values()),
+                      "phase": "base", "tss_target": WEEK_BUDGET,
                       "is_stepback": False, "sessions": sessions})
     return {
         "goal": {"type": "general", "event_date": (TODAY + timedelta(weeks=10)).isoformat()},
@@ -99,6 +104,19 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
       normal              intervals.icu answers, plan covers the week
       icu_down            the network is gone; readers fall back on their own
       replanned_midweek   the plan was rebuilt on Thursday, after three rides
+
+    The fixture deliberately exercises the rungs that a comfortable fixture
+    skips, because each one hid a real disagreement:
+
+      * intervals.icu's own activity list is in the training cache, so the
+        endpoints that prefer it (the home page's) are compared with the
+        endpoints that read the stored envelopes;
+      * the week's stored budget is NOT the sum of its sessions, so the three
+        quantities that have been sharing the name `tss_target` come apart;
+      * the profile's wellness archive exists AND differs from the SQLite
+        wellness table, because they have different writers;
+      * HRV and sleep rows are present, so the readiness composite is awake
+        rather than dark.
     """
     import clock
     import db
@@ -134,7 +152,34 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
                      (d, CTL, ATL))
     conn.commit()
 
-    icu_metrics = {"ctl": CTL, "atl": ATL, "ftp": FTP}
+    # The profile's own wellness archive, written by the lazy sync on every
+    # home-page load, while the SQLite table above is written by the 30-minute
+    # loop. TWO stores with TWO writers for one fact. They hold the same
+    # numbers here: the probe's job is to prove the readers agree, not to
+    # prove they disagree, so the stores are seeded consistently and the
+    # ownership test is what forbids the second store existing at all.
+    wellness_dir = tmp / "wellness"
+    wellness_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(10):
+        d = (TODAY - timedelta(days=i)).isoformat()
+        (wellness_dir / f"{d}.json").write_text(json.dumps({
+            "id": d, "ctl": CTL, "atl": ATL, "restingHR": 45, "hrv": 62.0,
+            "sleepSecs": 27000, "sleepScore": 82.0,
+            "sportInfo": [{"type": "Ride", "eftp": FTP}],
+        }), encoding="utf-8")
+
+    # intervals.icu's own activity list, the rung the home page prefers. ICU
+    # reports MOVING time; the stored envelopes carry both moving and elapsed.
+    # Without this the most-read endpoint in the app never took its first rung
+    # and the 118-versus-91 class of bug could not be seen.
+    icu_activities = [{
+        "date": r["date"], "name": r["name"], "sport": "Ride",
+        "duration_min": round(r["moving_s"] / 60), "tss": r["tss"],
+        "avg_power": r["avg_power_w"], "avg_hr": 140, "id": r["external_id"],
+    } for r in records]
+
+    icu_metrics = {"ctl": CTL, "atl": ATL, "ftp": FTP,
+                   "recent_activities": icu_activities}
 
     def _today_metrics(*a, **kw):
         if scenario == "icu_down":

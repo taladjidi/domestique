@@ -24,6 +24,7 @@ Per-profile WORKOUT_DIR resolution order (used on switch):
 from __future__ import annotations
 
 import clock  # the one clock every module reads (see src/clock.py)
+import facts  # the registry of who owns which number (see src/facts.py)
 import json
 import os
 import re
@@ -69,40 +70,14 @@ PROFILE_COLORS = [
 ]
 
 
-class _Fact:
-    """A number on the profile that remembers where it came from.
-
-    Four of these existed as four near-identical methods: `_set_wprime`, and
-    `_set_pmax` and `_set_max_hr`, whose docstrings both say "Cloned from
-    `_set_wprime`", and then `update_ftp`, which was the clone that never got
-    its gate -- so the 7-day eFTP drift rule could overwrite a 20-minute test
-    the rider rode the day before. One table, one writer: a fact added here
-    cannot forget the check, and a check fixed here is fixed for all of them.
-    """
-
-    __slots__ = ("field", "source_field", "unit", "lo", "hi", "prio")
-
-    def __init__(self, field, source_field, unit, lo, hi, prio):
-        self.field, self.source_field, self.unit = field, source_field, unit
-        self.lo, self.hi, self.prio = lo, hi, prio
-
-
-# Provenance tiers, higher wins. Equal tiers are allowed to overwrite, so a
-# rider can always overrule themselves, and a fresh reading from the same
-# machine source replaces the previous one.
-_FACTS = {
-    # What the rider typed or rode outranks what a machine estimated.
-    # "eftp_auto" is the sustained-drift rule applying an estimate unasked.
-    "ftp": _Fact("ftp", "ftp_source", "W", 50, 600, {
-        "manual": 2, "tested_coggan_20min": 2, "tested_ramp": 2,
-        "eftp_icu": 1, "eftp_auto": 1, "eftp_local": 1}),
-    "wprime": _Fact("wprime_j", "wprime_source", "J", 5000, 40000, {
-        "manual": 3, "icu": 2, "monod": 1, "fallback": 0}),
-    "pmax": _Fact("pmax_w", "pmax_source", "W", 300, 2500, {
-        "manual": 3, "icu": 2, "computed": 1, "fallback": 0}),
-    "max_hr": _Fact("max_hr", "max_hr_source", "bpm", 140, 220, {
-        "manual": 3, "icu": 2, "computed": 1, "age_tanaka": 0}),
-}
+# The facts this module owns, from the registry every consumer reads
+# (src/facts.py). Four near-identical setters lived here -- `_set_wprime`, and
+# `_set_pmax` and `_set_max_hr` whose docstrings both say "Cloned from
+# `_set_wprime`", and `update_ftp`, the clone that never got its gate, so the
+# 7-day eFTP drift rule could overwrite a test the rider rode the day before.
+# One table, one writer: a fact added to the registry cannot forget the check.
+_FACTS = {name: f for name, f in facts.FACTS.items() if f.tracked_provenance
+          and f.owner == "profile_manager"}
 
 
 class ProfileManager:
@@ -805,7 +780,7 @@ class ProfileManager:
         than a data problem.
         """
         fact = _FACTS[name]
-        if source not in fact.prio:
+        if source not in fact.tiers:
             raise ValueError(f"unknown {name} source: {source!r}")
         if self._active_id is None:
             # AC6a: no active profile (delete-last) -- a straggler mirror must
@@ -823,7 +798,7 @@ class ProfileManager:
             return False
 
         current = self._athlete.get(fact.source_field)
-        if current in fact.prio and fact.prio[source] < fact.prio[current]:
+        if current in fact.tiers and fact.tiers[source] < fact.tiers[current]:
             log.info("set %s: keeping %s%s from %s; refused %d from the "
                      "lower-priority source %s", fact.field,
                      self._athlete.get(fact.field), fact.unit, current, v, source)
@@ -1040,7 +1015,7 @@ class ProfileManager:
             # No provenance offered: keep whatever is on record, and write
             # through the same path so the gate still applies.
             source = str(self._athlete.get("ftp_source") or "manual")
-        elif source not in _FACTS["ftp"].prio:
+        elif source not in _FACTS["ftp"].tiers:
             source = "manual"
         return self._set_fact("ftp", v, source)
 

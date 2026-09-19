@@ -41,49 +41,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+import facts   # the registry of who owns which number  # noqa: E402
+
 # A quantity is a question the app answers. The aliases are the key names the
 # responses use for it -- gathered by reading the responses, not guessed: the
 # same number travels as `ctl`, `ctl_actual` and `current_ctl` depending on
 # which endpoint hands it over.
+# The quantities come from the registry (src/facts.py), not from a second
+# copy kept here. A fact's `api_keys` are the names it travels under in a JSON
+# response, its `scope` is what it is about, and its `tol` is how far two
+# readings may sit apart before that is a disagreement rather than rounding.
+# Keeping this list here as well is how the probe and the app drift: the
+# registry says `duration_min` on a ride means moving time, and a probe with
+# its own opinion would happily pass while a reader served elapsed.
 QUANTITIES: dict[str, dict] = {
-    "ctl": {
-        "keys": ("ctl", "ctl_actual", "current_ctl"),
-        "tol": 0.55,          # one decimal place, rounded independently
-        "scope": "athlete",
-    },
-    "atl": {"keys": ("atl",), "tol": 0.55, "scope": "athlete"},
-    "tsb": {"keys": ("tsb",), "tol": 0.55, "scope": "athlete"},
-    "ftp": {"keys": ("ftp", "current_ftp"), "tol": 0.5, "scope": "athlete"},
-    # THREE quantities, and the app has been calling them one thing. The
-    # ramp's budget for the week, the load actually prescribed on its days,
-    # and the load ridden. They coincide in a healthy week, which is why seven
-    # key names across three endpoints went unnoticed: /api/calendar says
-    # planned_tss, /api/weekly-plan says tss_target AND budget AND planned_tss
-    # in one response, /api/week-summary says tss_target for a different one
-    # of the three. `tss_target` is deliberately filed under the prescribed
-    # load here, because that is what the rollup divides by -- so when a
-    # week's budget and its sessions disagree, this reports it instead of
-    # hiding it behind a shared name.
-    "week_budget": {"keys": ("budget", "weekly_tss_target", "target_tss"),
-                    "tol": 0.5, "scope": "week"},
-    "week_prescribed": {"keys": ("tss_target", "planned_tss"),
-                        "tol": 0.5, "scope": "week"},
-    "week_done": {"keys": ("tss_done", "actual_tss", "tss_actual"),
-                  "tol": 0.5, "scope": "week"},
-    # How long the rider rode, as a reader DISPLAYS it. duration_s and
-    # moving_s are deliberately not in here: a record carrying both is not a
-    # disagreement, it is the raw material. What must agree is the minutes two
-    # screens put in front of the rider for the same ride -- the 118-vs-91 bug.
-    "ride_duration_min": {"keys": ("duration_min",), "tol": 0.6, "scope": "ride"},
-    "ride_tss": {"keys": ("tss",), "tol": 0.5, "scope": "ride"},
-    # What the plan asks of a given day. Three screens show today's session --
-    # the today card, the week view, the calendar cell -- and they are three
-    # reads of one row.
-    "session_planned_tss": {"keys": ("tss_estimate", "planned_tss"),
-                            "tol": 0.5, "scope": "session"},
-    "session_planned_min": {"keys": ("duration_min", "planned_min"),
-                            "tol": 0.5, "scope": "session"},
+    name: {"keys": f.api_keys, "tol": f.tol, "scope": f.scope}
+    for name, f in facts.FACTS.items()
 }
+
 # (kind, key) -> quantity. Keyed on the SHAPE of the object the key sits in,
 # because `duration_min` means the ride in a ride and the prescription in a
 # session, and comparing the two is how a reader concludes the app disagrees

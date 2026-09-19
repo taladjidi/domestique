@@ -41,6 +41,33 @@ TYPE_BAND = {
 }
 
 
+def week_done(rides, start: date, end: date) -> float:
+    """What the rider actually rode in the week [start, end], in TSS.
+
+    The third of the week's three numbers, and the last one to get an owner.
+    The budget and the prescribed load were already read here once and served
+    to every card; this was still summed independently by /api/week-summary
+    and by the calendar's own merge. They agreed because both loop over the
+    same rides with the same filter, which is agreement by coincidence: a
+    change to one was a silent disagreement with the other, which is exactly
+    how "499 done against 138 planned" happened one layer up.
+
+    ``rides`` are the ride records ride_storage owns, or the flatter activity
+    dicts /api/activities serves; both carry a date and a tss.
+    """
+    lo, hi = start.isoformat(), end.isoformat()
+    total = 0.0
+    for ride in rides or []:
+        day = str(ride.get("date") or ride.get("started_at") or "")[:10]
+        if not day or not (lo <= day <= hi):
+            continue
+        try:
+            total += float(ride.get("tss") or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(total, 1)
+
+
 def iso_week(today: Optional[date] = None, offset: int = 0) -> tuple[date, date]:
     """Monday..Sunday of the ISO week ``offset`` weeks from today's."""
     t = today or clock.today()
@@ -113,16 +140,24 @@ class WeekView:
     exposure_minutes_planned: dict = field(default_factory=dict)
 
     def as_weekly_plan(self) -> dict:
-        """The shape /api/weekly-plan has always served, plus budget and
-        on_record. ``tss_target`` is the planned load: what the week
-        prescribes, which is what every card compares the ridden load to."""
+        """The shape /api/weekly-plan serves.
+
+        ONE NAME PER QUESTION. A week has three loads and they used to share
+        names: `tss_target` meant the prescribed sum here and the ramp's
+        budget in /api/plan's stored weeks, while `budget` and `planned_tss`
+        rode along beside it. Three names for two questions in one response is
+        how a reader ends up dividing one by the other.
+
+          tss_budget    what the ramp allows
+          planned_tss   what the week's sessions add up to
+          tss_done      what the rider rode (week_view.week_done)
+        """
         return {
             "week_num": self.week_num,
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
             "phase": self.phase,
-            "tss_target": self.planned_tss,
-            "budget": self.budget,
+            "tss_budget": self.budget,
             "planned_tss": self.planned_tss,
             "on_record": self.on_record,
             "is_stepback": self.is_stepback,

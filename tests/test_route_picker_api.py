@@ -815,7 +815,7 @@ def test_route_summary_surface_segments_match_surface_types_file(client):
 
 WEEK_SUMMARY_REQUIRED_FIELDS = {
     "week_start", "week_end", "today",
-    "tss_target", "tss_done", "tss_adherence_pct",
+    "planned_tss", "tss_done", "tss_adherence_pct",
     "duration_min_done", "duration_min_planned",
     "exposure_minutes", "exposure_dominant",
     "sports", "missed_sessions",

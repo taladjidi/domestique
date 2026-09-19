@@ -152,7 +152,7 @@ class TestReplanKeepsElapsedDays(unittest.TestCase):
             r = self.client.get("/api/week-summary")
         self.assertEqual(r.status_code, 200, r.text)
         got = r.json()
-        done, target = got["tss_done"], got["tss_target"]
+        done, target = got["tss_done"], got["planned_tss"]
         self.assertGreaterEqual(
             target, sum(PLANNED_TSS[d] for d in range(3)),
             f"rollup reads {done:.0f} done / {target} planned: the rides span "

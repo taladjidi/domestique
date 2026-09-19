@@ -115,7 +115,7 @@ class GenerateKeepsHistory(unittest.TestCase):
                       if w["start_date"] == (LAST_MONDAY - timedelta(days=7)).isoformat())
         self.assertIsNone(before["planned_tss"])
         summary = self._get("/api/week-summary?week_offset=-1")
-        self.assertEqual(summary["tss_target"], 332.0)
+        self.assertEqual(summary["planned_tss"], 332.0)
         weekly = self._get("/api/weekly-plan?week_offset=-1")
         self.assertTrue(weekly["on_record"])
         self.assertEqual(weekly["planned_tss"], 332.0)
@@ -128,7 +128,8 @@ class GenerateKeepsHistory(unittest.TestCase):
         stub = next(w for w in plan["weeks"]
                     if w["start"] <= TODAY.isoformat() <= w["end"])
         weekly = self._get("/api/weekly-plan")
-        self.assertEqual(weekly["budget"], float(stub["tss_target"]))
+        # The stored key is the ramp's budget; the response says so.
+        self.assertEqual(weekly["tss_budget"], float(stub["tss_target"]))
         self.assertEqual(weekly["week_num"], stub["week_num"])
         # The calendar's row for the week agrees: the new plan's phase and
         # flag, not the replaced row's (the second review, S4). Make the

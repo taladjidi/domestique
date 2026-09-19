@@ -140,10 +140,21 @@ class WeekViewAgreement(unittest.TestCase):
         summary = self._get("/api/week-summary")
         cal = self._get("/api/calendar")
         current = next(w for w in cal["weeks"] if w.get("is_current"))
-        answers = {"stored": stored, "weekly-plan": float(weekly.get("tss_target") or 0),
-                   "week-summary": float(summary.get("tss_target") or 0),
+        # One name per question (src/facts.py): `planned_tss` is what the
+        # week's sessions prescribe. This used to read `tss_target` from all
+        # three and compare it with the STORED tss_target, which is the ramp's
+        # budget -- a different question that happens to hold the same number
+        # whenever a week's sessions fill their budget exactly, as this
+        # fixture's do. The endpoints agreeing is the contract; agreeing with
+        # the budget is a coincidence, so the budget is asserted separately.
+        answers = {"weekly-plan": float(weekly.get("planned_tss") or 0),
+                   "week-summary": float(summary.get("planned_tss") or 0),
                    "calendar": float(current.get("planned_tss") or 0)}
         self.assertEqual(len(set(answers.values())), 1, answers)
+        self.assertEqual(answers["calendar"], stored,
+                         "this fixture's sessions fill the week's budget")
+        self.assertEqual(float(weekly.get("tss_budget") or 0), stored,
+                         "the ramp's budget, under its own name")
 
     def test_todays_label_is_the_served_file(self):
         """A2 / P9. The Today card reads session_type, the This Week cell reads
@@ -164,7 +175,7 @@ class WeekViewAgreement(unittest.TestCase):
         cal = self._get("/api/calendar")
         last_monday = TODAY - timedelta(days=TODAY.weekday() + 7)
         row = next(w for w in cal["weeks"] if w.get("start_date", w.get("start")) == last_monday.isoformat())
-        self.assertIsNone(summary.get("tss_target"))
+        self.assertIsNone(summary.get("planned_tss"))
         self.assertIsNone(row.get("planned_tss"))
 
     def test_the_calendar_cell_is_the_served_file(self):
@@ -194,7 +205,7 @@ class WeekViewAgreement(unittest.TestCase):
         with patch.object(app_module, "api_activities", return_value=[ride]):
             summary = self._get("/api/week-summary?week_offset=-1")
         self.assertEqual(summary["tss_done"], 200)
-        self.assertIsNone(summary["tss_target"])
+        self.assertIsNone(summary["planned_tss"])
         self.assertIsNone(summary["tss_adherence_pct"])
         self.assertFalse(summary["overreach"], summary.get("overreach_reasons"))
 

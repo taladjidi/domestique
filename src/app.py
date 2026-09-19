@@ -9070,10 +9070,17 @@ def api_week_summary(week_offset: int = Query(0)):
         if week_start_str <= d <= week_end_str:
             week_activities.append(a)
 
-    # Preserve the None-vs-0 distinction: `tss_target == 0` is a legitimate
-    # rest-week plan, not a missing target. Falsy-check would collapse both.
-    tss_target = plan.get("tss_target")
-    tss_done = round(sum((a.get("tss") or 0) for a in week_activities), 1)
+    # Preserve the None-vs-0 distinction: a prescribed 0 is a legitimate
+    # rest-week plan, not a missing plan. Falsy-check would collapse both.
+    # ONE NAME PER QUESTION (src/facts.py): `planned_tss` is what the week's
+    # sessions add up to, which is what the rides are compared against. The
+    # ramp's allowance is `tss_budget` and is a different number.
+    tss_target = plan.get("planned_tss")
+    # Summed by its owner, not here: the calendar sums the same rides in
+    # merge_plan_with_rides, and two independent loops agreeing is agreement
+    # by coincidence.
+    import week_view as _wv
+    tss_done = _wv.week_done(week_activities, week_start, week_end)
     if tss_target is not None and tss_target > 0:
         # WEEK2: cap overshoot at 150% so the rollup bar doesn't stretch
         # indefinitely and numbers like "312%" don't dominate the UI.
@@ -9282,7 +9289,7 @@ def api_week_summary(week_offset: int = Query(0)):
         "week_start": week_start_str,
         "week_end": week_end_str,
         "today": today_str,
-        "tss_target": tss_target,
+        "planned_tss": tss_target,
         "tss_done": tss_done,
         "tss_adherence_pct": tss_adherence_pct,
         "duration_min_done": duration_min_done,
@@ -10530,6 +10537,14 @@ def api_plan():
                 # (zone_dist / score / content_class / display_name /
                 # zwo_duration_min / card_state) come from the helper below.
                 for w in plan_data.get("weeks", []):
+                    # ONE NAME PER QUESTION (src/facts.py). The STORED key
+                    # `tss_target` is the ramp's budget for the week, while
+                    # every other endpoint uses that name for the prescribed
+                    # sum -- 500 against 447 on the same week. The stored file
+                    # keeps its key (no migration, no risk to a rider's plan);
+                    # the response says which number it is.
+                    if "tss_target" in w:
+                        w["tss_budget"] = w.pop("tss_target")
                     # v1.0.6 IMPL-3D-DASHBOARD: per-week 3D XSS mirrors.
                     # PRIMARY weekly_tss is preserved untouched. Mirrors are
                     # aggregated from session-level wprime_*/pmax_* fields

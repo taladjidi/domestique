@@ -53,13 +53,11 @@ def _describe(found: list) -> str:
     return "\n".join(out)
 
 
-# The one question the app still answers two ways, pinned so the gate can be
-# green about everything else. `tss_target` means the ramp's BUDGET in
-# /api/plan (the stored plan week) and the PRESCRIBED sum everywhere else --
-# 500 against 447 on this fixture. Fixing it is a rename with a migration for
-# stored plans, not a one-liner, so it is named here and asserted to still be
-# broken below: the day it is fixed, that test fails and this list shrinks.
-KNOWN_GAPS = {"week_prescribed"}
+# Nothing pinned. `week_prescribed` was here: `tss_target` meant the ramp's
+# budget in /api/plan and the prescribed sum everywhere else, 500 against 447.
+# The responses now name the two questions apart (tss_budget, planned_tss)
+# and the list is empty. Adding to it needs a reason in writing.
+KNOWN_GAPS: set = set()
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
@@ -72,10 +70,8 @@ def test_one_question_one_answer(scenario):
         f"endpoints disagree in the {scenario!r} state:\n{_describe(found)}")
 
 
-def test_the_known_gap_is_still_exactly_one_question():
-    """A pinned gap that quietly grows is worse than no pin. This fails both
-    ways: when a second quantity joins the list, and when the week-load rename
-    lands and the list should shrink."""
+def test_nothing_is_pinned_that_should_not_be():
+    """A pinned gap that quietly grows is worse than no pin."""
     observations, _ = _run("normal")
     disagreeing = {f["quantity"] for f in Q.disagreements(observations)}
     assert disagreeing == KNOWN_GAPS, (

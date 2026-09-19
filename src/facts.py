@@ -136,26 +136,23 @@ FACTS: "dict[str, Fact]" = {
     "week_budget": Fact(
         "week_budget", owner="week_view", store="plan:current_plan.json",
         accessor="week_view.WeekView.budget", scope="week", tol=0.5,
-        api_keys=("budget", "weekly_tss_target", "target_tss"),
-        note="What the ramp allows this week. week_view already keeps this "
-             "apart from what the sessions add up to; the API does not, which "
-             "is the open half of this row."),
+        api_keys=("tss_budget", "weekly_tss_target", "target_tss"),
+        note="What the ramp allows this week. The stored plan calls this "
+             "`tss_target`; the responses call it tss_budget, because every "
+             "other endpoint used `tss_target` for the prescribed sum."),
     "week_prescribed": Fact(
         "week_prescribed", owner="week_view", store="plan:current_plan.json",
         accessor="week_view.WeekView.planned_tss", scope="week", tol=0.5,
-        api_keys=("tss_target", "planned_tss"),
+        api_keys=("planned_tss",),
         note="What the week's sessions actually add up to. The rollup divides "
-             "the rides by THIS. /api/plan serves the STORED tss_target, which "
-             "is the budget, under the same name -- 500 against 447 on the "
-             "probe's fixture. Fixing it means one name per quantity in the "
-             "responses, and the dashboard reading the new one."),
+             "the rides by THIS."),
     "week_done": Fact(
-        "week_done", owner="", store="profile:rides/",
-        accessor="", scope="week", tol=0.5,
+        "week_done", owner="week_view", store="profile:rides/",
+        accessor="week_view.week_done", scope="week", tol=0.5,
         api_keys=("tss_done", "actual_tss", "tss_actual"),
-        note="NO OWNER YET. Summed independently by /api/week-summary and by "
-             "the calendar's own merge. Both sum rides over the calendar week, "
-             "so they agree today; nothing makes them."),
+        note="What the rider rode in the calendar week. A consumer of the ride "
+             "facts, not a store of its own: the rollup and the calendar each "
+             "summed it and agreed by coincidence."),
 
     # ── one planned session ──────────────────────────────────────────────
     "session_planned_tss": Fact(

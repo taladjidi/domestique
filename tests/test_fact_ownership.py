@@ -93,7 +93,7 @@ def _unpaired_config_assignments(tree: ast.AST) -> list:
 # Facts that have no single accessor yet, each one a piece of work rather
 # than a mistake. Pinned so the list can shrink but never grow quietly: a new
 # fact arriving without an owner fails the test below.
-OWNERLESS = {"week_done"}
+OWNERLESS = set()          # every fact has an owner
 
 
 def test_every_accessor_in_the_registry_exists():

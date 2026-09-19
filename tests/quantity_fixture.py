@@ -118,6 +118,7 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
       * HRV and sleep rows are present, so the readiness composite is awake
         rather than dark.
     """
+    import cache
     import clock
     import db
     import ride_storage
@@ -125,6 +126,14 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
     from fastapi.testclient import TestClient
 
     clock.freeze(TODAY)
+    # `cache._cache` is a process-global with a 300 s TTL. A `training` entry
+    # left by any earlier test in the same worker is served instead of this
+    # fixture's ICU stub, and the probe then compares the app against numbers
+    # nobody in this file chose: in one parallel run the live readers said CTL
+    # 50 while the fixture's own store said 42, and the probe reported the app
+    # disagreeing with itself. A probe that does not control its inputs
+    # measures the suite, not the app.
+    cache.clear_cache()
     tmp = Path(tempfile.mkdtemp(prefix="quantities_"))
     plan_dir, rides_dir = tmp / "plan", tmp / "rides" / "icu"
     plan_dir.mkdir(parents=True), rides_dir.mkdir(parents=True)
@@ -265,4 +274,5 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
             p.stop()
         db.set_db_path(original_db)
         db.close_all_connections()
+        cache.clear_cache()          # leave nothing behind either
         clock.unfreeze()

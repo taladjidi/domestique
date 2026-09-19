@@ -13743,7 +13743,66 @@ def regenerate_from_today(
         _future_weeks, library,
         plan_start_date=(phase_start_date if new_phases else today),
         seed_salt=seed_salt, micro_only=bool(getattr(goal, "vo2_microintervals_only", False)))
+
+    # LAST, after every pass above: the days already behind the rider come
+    # back. Nothing here may reshape them, which is why this runs at the end.
+    _keep_elapsed_days(all_weeks, old_plan_weeks, today)
     return new_phases, all_weeks, regen_info
+
+
+def _keep_elapsed_days(all_weeks: list, old_plan_weeks: list, today: date) -> None:
+    """Replanning mid-week keeps the days already ridden.
+
+    A regen keeps weeks that ENDED before today and rebuilds the rest from a
+    cursor at today. The week today sits in has not ended, so it is not kept,
+    and its Monday-to-yesterday is dropped with it: the rider replans on
+    Thursday and loses what they were asked for, and did, on Monday.
+
+    What that cost: the weekly rollup divides a Monday-to-Sunday RIDE total by
+    the sessions the plan still holds for that week, so a Thursday replan read
+    "499 TSS done / 138 planned" where intervals.icu, which keeps what was
+    pushed at the time, read 499/387. Neither number was wrong; they covered
+    different halves of the week.
+
+    So the elapsed part of the old week is moved onto the rebuilt row and the
+    row's start moves back with it. One row per calendar week either way -- a
+    second, stub row would double-count in every by-date reader.
+
+    ``tss_target`` grows by what those days asked for, because every consumer
+    that prorates a week (plan_invariants.budget: ``target - behind``) derives
+    the remainder by SUBTRACTING the days behind today. Leaving the target at
+    the remainder would make budget() subtract them twice, and a week whose
+    budget reads 0 while it prescribes 138 TSS is a weekly_volume violation
+    invented out of arithmetic.
+    """
+    old_cur = next((w for w in (old_plan_weeks or [])
+                    if w.start <= today <= w.end), None)
+    if old_cur is None or old_cur.start >= today:
+        return                      # nothing elapsed in it: a Monday replan
+    new_cur = next((w for w in all_weeks if w.start <= today <= w.end), None)
+    if new_cur is None or new_cur.start <= old_cur.start:
+        return                      # already covers the days behind today
+    if new_cur.end > old_cur.end:
+        # The rebuilt row runs past the old week's Sunday, so it is not on the
+        # Monday grid: a reconditioning ramp (built today..+6 after an
+        # absence) or a taper row, which is laid backward from race day and
+        # exempt from the grid by design (_next_week_cursor). Widening the
+        # start would make one row span ten days and every Monday-to-Sunday
+        # reader would then divide by the wrong span. A rider who was absent
+        # long enough to earn a ramp is a different case from this one.
+        return
+    elapsed = [s for s in old_cur.sessions
+               if getattr(s, "day", None) is not None
+               and old_cur.start <= s.day < today]
+    if not elapsed:
+        return
+    kept = {getattr(s, "day", None) for s in new_cur.sessions}
+    elapsed = [s for s in elapsed if s.day not in kept]
+    new_cur.sessions = sorted(elapsed + list(new_cur.sessions),
+                              key=lambda s: (getattr(s, "day", None) or today))
+    new_cur.start = old_cur.start
+    new_cur.tss_target = round(float(new_cur.tss_target or 0)
+                               + sum(float(s.tss_estimate or 0) for s in elapsed))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

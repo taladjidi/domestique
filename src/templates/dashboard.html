@@ -7970,7 +7970,11 @@ async function loadLastWeekFeedback() {
     // tss_budget, which this card does not use, is what the ramp allowed.
     const noPlan = d.planned_tss === null;
     const tssTgt = Number(d.planned_tss || 0);
-    const tssDone = Number(d.tss_done || 0);
+    // Graded over the days the plan covered, so the TSS row and the adherence
+    // percentage beside it describe the same days. `tss_done` is the whole
+    // week and is the wrong numerator whenever the plan covered part of it.
+    const tssDone = Number(d.tss_done_in_plan != null ? d.tss_done_in_plan
+                                                      : d.tss_done || 0);
     const adherence = Number(d.tss_adherence_pct || 0);
     const exp = d.exposure_minutes || {};
     const expP = d.exposure_minutes_planned || {};
@@ -17356,9 +17360,27 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
       <div class="wr-copy" style="margin-left:auto;">${plannedDone} of ${plannedWith} planned sessions done</div>
     </div>`;
 
-  // ── TSS bar (row 2) ────────────────────────────────────────────────────
+  // ── TSS bar (row 2): ADHERENCE, not the week's total ───────────────────
+  // The bar grades the rider against their plan, so both sides cover the same
+  // days. A plan can start mid-week (a replan), end mid-week (an event), or
+  // cover a single day, and dividing a seven-day ride total by a three-day
+  // plan is not a percentage of anything: that is the "499 / 138" a rider
+  // reported while intervals.icu, which kept what was pushed, said 499/387.
+  // `tss_done_in_plan` is the ride total over the days the plan covers; the
+  // week's own total is shown beside it, labelled, because it is still what
+  // the rider did with their week.
   const target = Math.max(0, Number(s.planned_tss || 0));
-  const done = Math.max(0, Number(s.tss_done || 0));
+  const weekTotal = Math.max(0, Number(s.tss_done || 0));
+  const done = Math.max(0, Number(
+    s.tss_done_in_plan != null ? s.tss_done_in_plan : s.tss_done || 0));
+  const coversDays = Number(s.plan_covers_days || 0);
+  const partialWeek = coversDays > 0 && coversDays < 7;
+  const dayName = iso => iso
+    ? new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short' })
+    : '';
+  const spanNote = partialWeek
+    ? `plan covers ${coversDays} of 7 days (${dayName(s.plan_covers_from)}–${dayName(s.plan_covers_to)})`
+    : '';
   const pct = Number.isFinite(s.tss_adherence_pct)
     ? Number(s.tss_adherence_pct)
     : (target > 0 ? Math.round(done / target * 100) : 0);
@@ -17391,19 +17413,21 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
   // ARIA progressbar (QA-EDGE #4) — screen readers now convey the value.
   const tssHtml = `
     <div class="wr-row">
-      <div class="wr-label">TSS this week</div>
+      <div class="wr-label">TSS vs plan</div>
       <div class="wr-tss-bar" role="progressbar"
            aria-valuenow="${done}" aria-valuemin="0"
            aria-valuemax="${Math.max(target, done)}"
-           aria-label="Weekly TSS ${done} of ${target || 'no target'}"
-           title="${done} / ${target || '—'} TSS">
+           aria-label="TSS ridden on planned days, ${done} of ${target || 'no target'}${partialWeek ? ', ' + spanNote : ''}"
+           title="${done} / ${target || '—'} TSS on the days the plan covers${partialWeek ? ' · ' + spanNote : ''}">
         <div class="wr-tss-fill" style="width:${fillPct}%;background:${tssColor};"></div>
         ${overshoot ? `<div class="wr-tss-over" style="left:${targetPct}%;width:${fillPct - targetPct}%;background:${tssColor};filter:brightness(0.65);"></div>` : ''}
         ${target > 0 ? `<div class="wr-tss-target" style="left:${targetPct}%;"></div>` : ''}
       </div>
       <div class="wr-tss-num" style="color:${tssColor};">${done} / ${target || '—'} <span style="color:var(--text2);font-weight:500;">(${target > 0 ? pct + '%' : '—'})</span></div>
     </div>
-    <div class="wr-row" style="margin-top:-4px;"><div class="wr-label"></div><div class="wr-copy">${tssCopy}</div></div>
+    <div class="wr-row" style="margin-top:-4px;"><div class="wr-label"></div><div class="wr-copy">${tssCopy}${
+      partialWeek ? ` <span style="color:var(--text3);">· ${spanNote}</span>` : ''}${
+      weekTotal !== done ? ` <span style="color:var(--text3);">· ${weekTotal} TSS ridden this week</span>` : ''}</div></div>
   `;
 
   // ── Exposure stacked bars (row 3) — Planned vs Actual ────────────────

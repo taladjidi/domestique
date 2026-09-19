@@ -9081,21 +9081,30 @@ def api_week_summary(week_offset: int = Query(0)):
     # by coincidence.
     import week_view as _wv
     tss_done = _wv.week_done(week_activities, week_start, week_end)
+    # THE GRADE IS TAKEN OVER THE OVERLAP. A plan does not always cover a
+    # calendar week: it can start mid-week (a replan), end mid-week (the last
+    # week before an event), or cover a single day. The week's ride total is
+    # what the rider did with their week and is worth showing; dividing it by
+    # what a three-day plan asked for is not a percentage of anything. That is
+    # the reported "499 / 138" -- seven days of riding over three days of plan.
+    _covered = _wv.covered_days(plan.get("sessions"))
+    tss_done_in_plan = _wv.week_done(week_activities, week_start, week_end,
+                                     days=_covered)
     if tss_target is not None and tss_target > 0:
         # WEEK2: cap overshoot at 150% so the rollup bar doesn't stretch
         # indefinitely and numbers like "312%" don't dominate the UI.
-        tss_adherence_pct = round(min(150.0, tss_done / tss_target * 100))
+        tss_adherence_pct = round(min(150.0, tss_done_in_plan / tss_target * 100))
     elif tss_target == 0:
         # WEEK2: rest-week grading. Zero load → perfect 100%. Light load
         # (≤50 TSS of accidental activity) scales down linearly; anything
         # beyond 50 TSS of "rest" is a 0% violation. Previously flipped to
         # 0% at the first joule, making every recovery ride catastrophic.
-        if tss_done <= 0:
+        if tss_done_in_plan <= 0:
             tss_adherence_pct = 100
         else:
             tss_adherence_pct = max(
                 0,
-                round(100.0 - min(100.0, (tss_done / 50.0) * 100.0)),
+                round(100.0 - min(100.0, (tss_done_in_plan / 50.0) * 100.0)),
             )
     else:
         tss_adherence_pct = None      # no plan on record: nothing to adhere to
@@ -9291,6 +9300,10 @@ def api_week_summary(week_offset: int = Query(0)):
         "today": today_str,
         "planned_tss": tss_target,
         "tss_done": tss_done,
+        "tss_done_in_plan": tss_done_in_plan,
+        "plan_covers_days": len(_covered),
+        "plan_covers_from": min(_covered) if _covered else None,
+        "plan_covers_to": max(_covered) if _covered else None,
         "tss_adherence_pct": tss_adherence_pct,
         "duration_min_done": duration_min_done,
         "duration_min_planned": duration_min_planned,

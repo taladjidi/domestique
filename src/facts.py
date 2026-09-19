@@ -146,6 +146,14 @@ FACTS: "dict[str, Fact]" = {
         api_keys=("planned_tss",),
         note="What the week's sessions actually add up to. The rollup divides "
              "the rides by THIS."),
+    "week_done_in_plan": Fact(
+        "week_done_in_plan", owner="week_view", store="profile:rides/",
+        accessor="week_view.week_done", scope="week", tol=0.5,
+        api_keys=("tss_done_in_plan",),
+        note="What the rider rode on the days the plan actually covers. The "
+             "grade is this against week_prescribed, never the week's total "
+             "against a plan that covers three days of it: that is the "
+             "reported 499/138, where intervals.icu said 499/387."),
     "week_done": Fact(
         "week_done", owner="week_view", store="profile:rides/",
         accessor="week_view.week_done", scope="week", tol=0.5,

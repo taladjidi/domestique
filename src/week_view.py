@@ -41,7 +41,20 @@ TYPE_BAND = {
 }
 
 
-def week_done(rides, start: date, end: date) -> float:
+def covered_days(sessions) -> "list[str]":
+    """The days in the week the plan actually covers, as ISO strings.
+
+    A plan is not always a calendar week. It can start mid-week (a replan, a
+    first plan, an entry backdated from a past date), stop mid-week (the last
+    week before an event), or cover a single day. `on_record` is already the
+    per-day answer -- a stored row covers that day -- and it is what makes the
+    grade comparable: rides are counted over the same days the plan asked for.
+    """
+    return [s["day"] for s in sessions or []
+            if s.get("on_record") and s.get("day")]
+
+
+def week_done(rides, start: date, end: date, days=None) -> float:
     """What the rider actually rode in the week [start, end], in TSS.
 
     The third of the week's three numbers, and the last one to get an owner.
@@ -54,12 +67,21 @@ def week_done(rides, start: date, end: date) -> float:
 
     ``rides`` are the ride records ride_storage owns, or the flatter activity
     dicts /api/activities serves; both carry a date and a tss.
+
+    ``days`` narrows it to a set of ISO days -- the overlap with what the plan
+    covers (see covered_days). Without it the answer is the whole week, which
+    is the right number to SHOW and the wrong one to GRADE against a plan that
+    starts on Friday: 499 ridden over seven days against 138 prescribed over
+    three is how the rollup read 362% and displayed its 150% cap.
     """
     lo, hi = start.isoformat(), end.isoformat()
+    only = set(days) if days is not None else None
     total = 0.0
     for ride in rides or []:
         day = str(ride.get("date") or ride.get("started_at") or "")[:10]
         if not day or not (lo <= day <= hi):
+            continue
+        if only is not None and day not in only:
             continue
         try:
             total += float(ride.get("tss") or 0)

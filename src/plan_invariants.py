@@ -29,6 +29,7 @@ prescriptions.
 from __future__ import annotations
 
 import json
+import availability
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -123,16 +124,19 @@ def _ahead(s, today) -> bool:
 
 
 def _is_available(day, goal) -> bool:
-    wd = day.weekday()
-    if wd in (getattr(goal, "rest_days", None) or []):
-        return False
-    avail = getattr(goal, "available_days", None)
-    return not avail or wd in avail
+    return availability.trains_on(goal, day.weekday())
 
 
 def _day_cap_h(day, goal):
-    fn = getattr(goal, "max_hours_for_day", None)
-    return fn(day.weekday()) if fn else (goal.daily_max_hours or {}).get(day.weekday())
+    """The day's cap, from the one rule (src/availability.py).
+
+    This used to read ONLY goal.daily_max_hours when the goal had no
+    max_hours_for_day method -- returning None for any goal that is a dict or
+    a namespace rather than a real Goal. Its consumer skips the check on None,
+    so the auditor meant to CATCH an over-cap session was itself blind for
+    exactly the goals the week view was blind for.
+    """
+    return availability.day_cap_hours(goal, day.weekday())
 
 
 def _ride_tss(rides, lo, hi) -> float:

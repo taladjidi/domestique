@@ -349,8 +349,7 @@ class TrainingWeek:
         if self.ctx.unavailable and self.ctx.unavailable(session.day):
             return self._accept(self._as_rest(session, REST_UNAVAILABLE))
         wd = session.day.weekday()
-        if wd in (goal.rest_days or []) or (
-                goal.available_days and wd not in goal.available_days):
+        if not availability.trains_on(goal, wd):
             return self._accept(self._as_rest(session, "Rest -- recovery takes priority"))
 
         if session.session_type == "rest":
@@ -466,7 +465,7 @@ class TrainingWeek:
         v = ceilings.get(cc) or ceilings.get(session.session_type)
         return float(v) if v else None
 
-    def _day_cap_min(self, day) -> float | None:
+    def _day_cap_min(self, day) -> float:
         """The day's cap in minutes, from the one rule (src/availability.py).
 
         This used to return None when the goal carried no cap, and None meant

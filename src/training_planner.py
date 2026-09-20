@@ -8993,7 +8993,7 @@ def generate_plan(
     # duration (+25 min/wk from current longest), capped at 5h + weekend hours,
     # ×0.72 on stepback, STOPPING ≥3 weeks out so the taper owns the long ride.
     if event_targets is not None:
-        _mw_min = int(round((goal.max_weekend_hours or 0) * 60))
+        _mw_min = availability.weekend_cap_minutes(goal)
         for _wi, _w in enumerate(weeks):
             if getattr(_w, "phase", "") == "taper":
                 continue
@@ -13232,7 +13232,10 @@ def build_recovery_ramp(
             day_date = week_start + timedelta(days=d)
             weekday = day_date.weekday()  # 0=Mon..6=Sun (from actual date)
 
-            if weekday in rest_days:
+            # ...and a day the rider marked UNAVAILABLE is a rest day too.
+            # Only the cap half was corrected downstream by _future_weeks'
+            # clamp; this half reached the rider.
+            if weekday in rest_days or (goal and not availability.trains_on(goal, weekday)):
                 sessions.append(PlannedSession(
                     day=day_date, day_name=day_date.strftime("%a"),
                     session_type="rest", duration_min=0, tss_estimate=0,
@@ -13241,7 +13244,9 @@ def build_recovery_ramp(
                 continue
 
             is_weekend = weekday >= 5
-            max_dur = (goal.max_weekend_hours if is_weekend else goal.max_weekday_hours) * 60 if goal else 120
+            # The one rule: this used to ignore daily_max_hours entirely and
+            # hardcode 120, so a rider who capped Saturday at 45 min got 90.
+            max_dur = availability.day_cap_minutes(goal, weekday) if goal else 120
 
             if is_z2_only:
                 # Pure Z2 reconditioning (Mujika 2001)
@@ -13673,7 +13678,7 @@ def regenerate_from_today(
     # Applied AFTER all session-duration / re-match passes; regenerate_from_today
     # has no authoritative availability clamp, so this runs just before assembly.
     if event_targets is not None:
-        _mw_min = int(round((goal.max_weekend_hours or 0) * 60))
+        _mw_min = availability.weekend_cap_minutes(goal)
         # v2.0.3 F7: generate_plan ramps _wi over the FULL plan; here new_weeks
         # is future-only, so offset _wi by the already-elapsed weeks (past +
         # recovery, the same count week_num is seeded from above) — otherwise a
@@ -14331,7 +14336,7 @@ def recalculate_plan(
     # resetting to long_start_h. Stops ≥3 weeks out so the taper owns the long
     # ride (the <= 21 gate matches both other sites).
     if event_targets is not None:
-        _mw_min = int(round((goal.max_weekend_hours or 0) * 60))
+        _mw_min = availability.weekend_cap_minutes(goal)
         _elapsed_weeks = len(past_weeks)
         for _wi, _w in enumerate(new_weeks):
             if getattr(_w, "phase", "") == "taper":

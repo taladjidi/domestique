@@ -61,17 +61,45 @@ def day_cap_hours(goal, weekday: int) -> float:
 
     The cap alone: it does not ask whether the rider trains that day at all.
     Callers that need that ask trainable_minutes().
+
+    A malformed per-day entry falls back to the SAME default as a missing one.
+    The first version fell back to 0.0 here and to 2.0/3.5 below, so a single
+    corrupt entry turned a training day into a rest day -- in the one module
+    whose stated purpose is that a missing cap is never read as "no training".
     """
-    per_day = getattr(goal, "daily_max_hours", None) or {}
-    if weekday in per_day:
-        return _hours(per_day[weekday], 0.0)
     if weekday >= 5:
-        return _hours(getattr(goal, "max_weekend_hours", None), DEFAULT_WEEKEND_HOURS)
-    return _hours(getattr(goal, "max_weekday_hours", None), DEFAULT_WEEKDAY_HOURS)
+        default = _hours(getattr(goal, "max_weekend_hours", None),
+                         DEFAULT_WEEKEND_HOURS)
+    else:
+        default = _hours(getattr(goal, "max_weekday_hours", None),
+                         DEFAULT_WEEKDAY_HOURS)
+    per_day = getattr(goal, "daily_max_hours", None) or {}
+    hours = _hours(per_day[weekday], default) if weekday in per_day else default
+    # A negative cap is not a shorter day; it is nonsense that flows into
+    # week_plan._commit's min() as a negative limit. Clamp it here, once.
+    return max(0.0, hours)
 
 
 def day_cap_minutes(goal, weekday: int) -> int:
-    return int(day_cap_hours(goal, weekday) * 60)
+    # round, not truncate: the dashboard sends hours as minutes/60, so a
+    # rider's 2h03 arrives as 2.05 and int() handed it back as 122, then wrote
+    # 2.0333 back into the plan -- a minute lost on every regeneration.
+    return int(round(day_cap_hours(goal, weekday) * 60))
+
+
+def weekend_cap_hours(goal) -> float:
+    """The longest a weekend day may be -- the ceiling on the long ride.
+
+    Three sites in the planner read ``(goal.max_weekend_hours or 0)`` for this,
+    which ignores a per-day Saturday/Sunday override and, on ``or 0``, hands
+    _apply_long_ride_target a ceiling of ZERO minutes for a goal carrying no
+    weekend default.
+    """
+    return max(day_cap_hours(goal, 5), day_cap_hours(goal, 6))
+
+
+def weekend_cap_minutes(goal) -> int:
+    return int(round(weekend_cap_hours(goal) * 60))
 
 
 def trains_on(goal, weekday: int) -> bool:
@@ -79,11 +107,17 @@ def trains_on(goal, weekday: int) -> bool:
 
     A rest day is not a small day, and neither is a day outside the rider's
     available days.
+
+    An EMPTY available_days means "no restriction", not "no day available".
+    Every legacy reader agreed on that -- week_available_minutes wrote
+    ``or range(7)``, plan_invariants ``not avail or wd in avail``, week_plan
+    ``goal.available_days and wd not in ...`` -- and the first version of this
+    module flipped it, turning a 900-minute week into a 0-minute one.
     """
     if weekday in set(getattr(goal, "rest_days", None) or []):
         return False
     available = getattr(goal, "available_days", None)
-    if available is None:
+    if not available:
         return True
     return weekday in set(available)
 

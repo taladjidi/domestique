@@ -11266,8 +11266,7 @@ async def api_plan_generate(request: Request):
         # blocked (holiday / injury / illness / unavailable), which are kept.
         # (_EXPLICIT_BLOCK defined once above, where the same set gates which
         # old rows are fed to generate_plan — 3.3.3 keeps both in lockstep.)
-        _daily = goal.daily_max_hours or {}
-
+    
         def _default_hours_for_weekday(wd: int) -> float:
             # The one rule (src/availability.py): rest and unavailable days
             # get nothing, everything else gets its own cap or the
@@ -13341,7 +13340,7 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
         avail_days_idx = set(d for d in range(7) if d not in rest_days_idx)
     else:
         avail_days_idx = set(int(d) for d in avail_days_raw)
-    availability = plan.get("availability", {}) or {}
+    avail_by_day = plan.get("availability", {}) or {}
 
     try:
         classifications = tp._load_content_classifications() or {}
@@ -13432,7 +13431,7 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
                 extra_hard_days=placed_hard)
             if not _ok:
                 return False
-        entry = availability.get(d_iso)
+        entry = avail_by_day.get(d_iso)
         if isinstance(entry, dict) and entry.get("type") == "unavailable":
             return False
         # The C2 rule (a re-owed HARD session keeps 48 h from every hard session

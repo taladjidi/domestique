@@ -793,6 +793,7 @@ from hr import (  # noqa: F401
 # caches (_ROUTES_CACHE, _SURFACE_TYPES_CACHE and their mtimes/locks) and
 # they are deliberately NOT re-exported: importing them here would bind the
 # objects, and rebinding app.X would leave routes_lib reading its own.
+import routes_lib                      # crs_profile: one reader of a course
 from routes_lib import (  # noqa: F401
     _slugify_route_name,
     _route_key_for,
@@ -3053,16 +3054,14 @@ def api_rider_stats():
         # eFTP — latest ICU wellness sportInfo[0].eftp (synced store).
         eftp_triple = dict(_PROV_EMPTY)
         try:
-            import ride_storage as _rs
-            wl = _rs.load_recent_wellness(days=90) or []
-            for w in sorted(wl, key=lambda x: str(x.get("id") or ""),
-                            reverse=True):
-                si = w.get("sportInfo") or []
-                ef = si[0].get("eftp") if si and isinstance(si[0], dict) else None
-                if ef:
-                    eftp_triple = _prov(round(float(ef)), "icu",
-                                        str(w.get("id") or "")[:10] or None)
-                    break
+            _ef = ride_storage.latest_eftp()
+            if _ef is not None:
+                _when = next((str(w.get("id") or "")[:10]
+                              for w in sorted(ride_storage.load_recent_wellness(days=90),
+                                              key=lambda x: str(x.get("id") or ""),
+                                              reverse=True)
+                              if (w.get("sportInfo") or [{}])[0].get("eftp")), None)
+                eftp_triple = _prov(round(_ef), "icu", _when or None)
         except Exception as e:
             _fail("eftp", e)
         power["eftp"] = eftp_triple
@@ -6215,43 +6214,17 @@ def api_courses(region: str = Query(None)):
         except Exception:
             pass
 
-        # Always compute km + climb from the CRS data itself — NEVER trust the
-        # DESCRIPTION header text as a source of truth. Loop-extended routes
-        # keep the original "5km" text in their header while the actual
-        # CRS data is 15km long, so reading from desc gives the wrong km
-        # and a wildly inflated avg_grad.
-        km = 0.0
-        climb = 0
-        max_grade = 0.0
-        try:
-            in_data = False
-            cum_elev = 0.0
-            cum_km = 0.0
-            max_g = 0.0
-            with open(crs, encoding="utf-8") as f2:
-                for line2 in f2:
-                    s = line2.strip()
-                    if s == "[COURSE DATA]": in_data = True; continue
-                    if s == "[END COURSE DATA]": break
-                    if in_data and s and not s.startswith("DIST"):
-                        parts = s.split()
-                        if len(parts) >= 2:
-                            try:
-                                delta_km = float(parts[0])
-                                grade = float(parts[1])
-                            except ValueError:
-                                continue
-                            cum_km += delta_km
-                            elev_change = delta_km * 10.0 * grade
-                            if elev_change > 0:
-                                cum_elev += elev_change
-                            if abs(grade) > max_g:
-                                max_g = abs(grade)
-            km = round(cum_km, 1)
-            climb = round(cum_elev)
-            max_grade = round(max_g, 1)
-        except Exception:
-            pass
+        # One reader for a course's shape: routes_lib.crs_profile. This was an
+        # inline copy, and /api/routes served routes.json's stored numbers
+        # instead, so the two screens disagreed on 74 of 622 routes -- worst
+        # by 1,148 m of climbing. The comment that used to live here was
+        # right and is now next to the implementation: never trust the
+        # DESCRIPTION header, a loop-extended route keeps the original text
+        # while its data grew.
+        _profile = routes_lib.crs_profile(crs) or {}
+        km = _profile.get("distance_km", 0.0)
+        climb = _profile.get("climb_m", 0)
+        max_grade = _profile.get("max_grade", 0.0)
 
         # Fallback to description-parse only if CRS had zero data (corrupt file)
         if km == 0:
@@ -8166,15 +8139,12 @@ def api_settings():
     from profile_manager import ProfileManager
     pm = ProfileManager.get()
 
-    # Get eFTP from intervals.icu
-    wellness = cached("wellness_7", lambda: fetch_wellness(7))
-    eftp = None
-    if wellness:
-        for w in reversed(wellness):
-            si = w.get("sportInfo", [])
-            if si and si[0].get("eftp"):
-                eftp = round(si[0]["eftp"])
-                break
+    # eFTP through its one reader (ride_storage.latest_eftp). This used to
+    # fetch the LIVE last 7 days here and show blank whenever the network was
+    # down or that week held no estimate, while /api/rider-stats and
+    # /api/wellness read the stored archive and showed a number.
+    _eftp_val = ride_storage.latest_eftp()
+    eftp = round(_eftp_val) if _eftp_val is not None else None
 
     p_zones = _power_zones(pm.ftp)
     h_zones = _hr_zones(pm.lthr, pm.max_hr, pm=pm)
@@ -13198,7 +13168,13 @@ def api_plan_daily_adapt():
             return {"action": "no_current_week", "projection_only": True}
 
         actual = _collect_week_activities(current_week, today, include_today=False)
-        _unchanged, info = tp.daily_adapt_plan(current_week, actual, today)
+        # The rider's TSB, from its owner. It was not passed, so the
+        # TSB-aware de-load inside daily_adapt_plan -- ease the hard days when
+        # form is below -30 -- could never fire on the only path that calls
+        # it: the parameter defaulted to None and the branch was dead in
+        # production while every card on the page showed the number.
+        _unchanged, info = tp.daily_adapt_plan(
+            current_week, actual, today, tsb=_fitness_state()["tsb"])
         info["projection_only"] = True  # defensive: re-mark in case caller strips
         return info
 
@@ -13459,25 +13435,12 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
         entry = availability.get(d_iso)
         if isinstance(entry, dict) and entry.get("type") == "unavailable":
             return False
-        # C2 (v3.12.0, merge contract): a re-owed HARD session keeps 48 h from
-        # every hard session that was ridden or is still planned, on ANY
-        # destination -- a free rest slot included, not only an easy-day
-        # takeover (the guard below used to live in that branch alone, so a
-        # missed VO2 could land the day after a ridden threshold). A missed or
-        # dismissed neighbour does not count (D6): it will not be ridden.
-        if (missed_sess is not None and tp._session_is_hit(missed_sess)
-                and not missed_sess.get("is_opener")):
-            for nb in (d - timedelta(days=1), d + timedelta(days=1)):
-                nb_iso = nb.isoformat()
-                if nb_iso == missed_iso:
-                    continue
-                if nb_iso in placed_hard:
-                    return False  # a hard session this pass has already placed
-                nb_sess = sess_by_day.get(nb_iso)
-                if (nb_sess and tp._session_is_hit(nb_sess)
-                        and (nb_sess.get("status") or "pending") not in ("missed", "dismissed")
-                        and not str(nb_sess.get("status") or "").startswith("moved_from:")):
-                    return False
+        # The C2 rule (a re-owed HARD session keeps 48 h from every hard session
+        # ridden or still planned, on ANY destination) lived here as a
+        # hand-written loop. It is the same rule as the hard_gap_ok call above,
+        # which is why deleting that call left every test green: this copy went
+        # on enforcing it. Keeping the shared call and dropping this loop is
+        # resolution 1 of the #14 review; the loop outlived the agreement.
         sess = sess_by_day.get(d_iso)
         if sess is None:
             return False

@@ -78,6 +78,41 @@ def test_a_race_flag_survives_the_next_sync(fresh_db):
         "default, and the rider's race became an ordinary ride")
 
 
+WELLNESS_DAY = "2026-09-15"
+
+
+def _sync_wellness(rows):
+    with patch.object(db, "fetch_wellness", return_value=rows):
+        return db.sync_wellness(days=30)
+
+
+def test_a_hand_typed_hrv_survives_a_sync_that_has_none(fresh_db):
+    """The rider takes their own HRV reading on a morning intervals.icu knows
+    nothing about. The sync must not treat silence as an answer."""
+    _sync_wellness([{"id": WELLNESS_DAY, "ctl": 40.0, "atl": 30.0}])
+    db.get_db().execute("UPDATE wellness SET hrv = ? WHERE date = ?",
+                        (62.0, WELLNESS_DAY))
+    db.get_db().commit()
+
+    _sync_wellness([{"id": WELLNESS_DAY, "ctl": 41.0, "atl": 31.0}])   # no hrv
+    row = db.get_db().execute(
+        "SELECT hrv, ctl FROM wellness WHERE date = ?", (WELLNESS_DAY,)).fetchone()
+    assert row["hrv"] == 62.0, (
+        "the sync erased the rider's own HRV reading: INSERT OR REPLACE "
+        "re-inserts the row, so a field intervals.icu does not have goes back "
+        "to NULL")
+    assert row["ctl"] == 41.0, "intervals.icu's own numbers must still update"
+
+
+def test_intervals_icu_wins_when_it_does_have_the_reading(fresh_db):
+    """The guard on the guard: preserving local values must not freeze ICU's."""
+    _sync_wellness([{"id": WELLNESS_DAY, "hrv": 55.0}])
+    _sync_wellness([{"id": WELLNESS_DAY, "hrv": 71.0}])
+    row = db.get_db().execute(
+        "SELECT hrv FROM wellness WHERE date = ?", (WELLNESS_DAY,)).fetchone()
+    assert row["hrv"] == 71.0
+
+
 def test_the_sync_still_updates_what_intervals_icu_owns(fresh_db):
     """The guard must not turn into 'never overwrite anything'."""
     _sync()

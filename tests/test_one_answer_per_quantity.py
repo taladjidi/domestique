@@ -57,7 +57,15 @@ def _describe(found: list) -> str:
 # budget in /api/plan and the prescribed sum everywhere else, 500 against 447.
 # The responses now name the two questions apart (tss_budget, planned_tss)
 # and the list is empty. Adding to it needs a reason in writing.
-KNOWN_GAPS: set = set()
+# Two facts where a DEFAULT is served as if it were an answer. `pm.lthr`
+# returns 170 when the rider has never set one and `pm.max_hr` returns 190;
+# /api/settings serves those, while /api/rider-stats serves blank, which is
+# the honest answer and the one the profile itself can tell apart
+# (`lthr_is_set`). The week view already holds this rule -- "no plan on record"
+# is None, never 0 -- and the athlete numbers do not. Pinned rather than
+# papered over: fixing it changes what the settings form shows, which is a
+# decision about the UI, not a rename.
+KNOWN_GAPS: set = {"lthr", "max_hr"}
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)

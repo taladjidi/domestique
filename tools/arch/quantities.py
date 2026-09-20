@@ -116,8 +116,17 @@ _EXCLUDED_PATHS = (
     ".components.",       # readiness sub-scores, 0..100, not the quantity
 )
 
+# Endpoints that answer about SOMEONE ELSE. /api/icu/athlete-numbers reports
+# what intervals.icu holds, so the setup wizard can offer to prefill from it;
+# a blank there means "ICU does not have this", which is a fact about ICU and
+# not a second answer about the rider. Anything added here is a hole in the
+# comparison, so it names its reason.
+_EXCLUDED_ENDPOINTS = ("/api/icu/athlete-numbers",)
 
-def _excluded(path: str) -> bool:
+
+def _excluded(path: str, endpoint: str = "") -> bool:
+    if any(endpoint.startswith(e) for e in _EXCLUDED_ENDPOINTS):
+        return True
     return any(frag in path for frag in _EXCLUDED_PATHS)
 
 
@@ -130,10 +139,15 @@ def _kind_of(payload: dict, when: str, scope: str) -> "tuple[str, str]":
     belongs to that ride, and a bare number at the top of a response is about
     the athlete today.
     """
+    _facts_here = payload
+    if isinstance(payload.get("summary"), dict):
+        # /api/rides/<id> keeps the ride's numbers one level down. Reading only
+        # the top level filed them under the athlete and dropped them.
+        _facts_here = {**payload.get("summary"), **payload}
     for k in _RIDE_ID_KEYS:
         if isinstance(payload.get(k), (str, int)) and (
-                "duration_min" in payload or "moving_s" in payload
-                or "tss" in payload):
+                "duration_min" in _facts_here or "moving_s" in _facts_here
+                or "tss" in _facts_here or "duration_sec" in _facts_here):
             return "ride", f"ride:{payload[k]}"
     if ("session_type" in payload or "zwo_file" in payload
             or "tss_estimate" in payload):
@@ -143,6 +157,10 @@ def _kind_of(payload: dict, when: str, scope: str) -> "tuple[str, str]":
         # minutes and TSS were compared with nothing.
         day = when or _when_from_scope(scope) or TODAY[0]
         return ("session", f"session:{day}") if day else ("other", scope)
+    if ("climb_m" in payload or "distance_km" in payload) and (
+            payload.get("id") or payload.get("file") or payload.get("name")):
+        rid = payload.get("id") or payload.get("file") or payload.get("name")
+        return "route", f"route:{rid}"
     if isinstance(payload.get("week_start"), str):
         return "week", f"week:{payload['week_start']}"
     if isinstance(payload.get("start"), str) and "sessions" in payload:
@@ -160,9 +178,21 @@ def _kind_of(payload: dict, when: str, scope: str) -> "tuple[str, str]":
     return "athlete", scope
 
 
+BLANK = "blank"          # the door answered, and its answer was "nothing"
+
+
 def _num(v):
-    if isinstance(v, bool) or v is None:
+    """The number a door served, BLANK when it served null, None when the
+    value is not an answer at all (a string, a bool, a nested object).
+
+    Blanks are answers. "eFTP 250 here, blank there" is what a rider reports,
+    and a probe that drops nulls can never see it -- this one could not, while
+    /api/settings.eftp served null beside /api/rider-stats' 250.
+    """
+    if isinstance(v, bool):
         return None
+    if v is None:
+        return BLANK
     if isinstance(v, (int, float)):
         return float(v)
     return None
@@ -197,7 +227,7 @@ def walk(payload, endpoint: str, path: str = "", scope: str = "",
                 n = _num(v.get("value"))
                 if n is not None and q is None:
                     q = _KEY_TO_QUANTITY.get(("athlete", k))
-            if q is not None and n is not None and not _excluded(f"{path}.{k}"):
+            if q is not None and n is not None and not _excluded(f"{path}.{k}", endpoint):
                 sc = (f"athlete@{when or TODAY[0] or 'today'}"
                       if QUANTITIES[q]["scope"] == "athlete" else here)
                 out.append(Observation(q, n, endpoint, f"{path}.{k}", sc))
@@ -220,14 +250,32 @@ def disagreements(observations: list, only: str = "") -> list[dict]:
         if len({o.endpoint for o in obs}) < 2:
             continue                           # one door, nothing to compare
         tol = QUANTITIES[quantity]["tol"]
-        lo, hi = min(o.value for o in obs), max(o.value for o in obs)
+        numbers = [o for o in obs if o.value is not BLANK]
+        blanks = [o for o in obs if o.value is BLANK]
+        if blanks and numbers:
+            # One door knows and another does not. Report it with both sides;
+            # this is a disagreement about whether the app has the value at
+            # all, which is worse than two numbers that differ slightly.
+            found.append({
+                "quantity": quantity, "scope": scope, "spread": "blank vs value",
+                "answers": ([{"value": "blank", "endpoint": o.endpoint, "path": o.path}
+                             for o in blanks]
+                            + [{"value": o.value, "endpoint": o.endpoint, "path": o.path}
+                               for o in sorted(numbers, key=lambda x: x.value)]),
+            })
+            continue
+        if not numbers:
+            continue                     # every door agrees it has nothing
+        if len({o.endpoint for o in numbers}) < 2:
+            continue
+        lo, hi = min(o.value for o in numbers), max(o.value for o in numbers)
         if hi - lo <= tol:
             continue
         found.append({
             "quantity": quantity, "scope": scope, "spread": round(hi - lo, 3),
             "answers": sorted(
                 ({"value": o.value, "endpoint": o.endpoint, "path": o.path}
-                 for o in obs), key=lambda a: a["value"]),
+                 for o in numbers), key=lambda a: a["value"]),
         })
     return found
 

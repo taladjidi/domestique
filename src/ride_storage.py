@@ -1812,6 +1812,33 @@ def persist_wellness(record: dict) -> Path | None:
     return path
 
 
+def latest_eftp(days: int = 90) -> "float | None":
+    """intervals.icu's most recent eFTP estimate, or None when there is none.
+
+    THE ONE READER. It was three: /api/settings fetched the LIVE last 7 days
+    and showed blank whenever the network was down or that week held no
+    estimate, while /api/rider-stats and /api/wellness read the stored archive
+    and showed 250. A rider comparing two screens saw a number on one and
+    nothing on the other, for the same fact, on the same day.
+
+    The archive is what the sync writes, so reading it is reading what
+    intervals.icu said -- with the last estimate still available when the
+    network is not. Same shape as the fitness ladder: live values land in the
+    store, and every reader reads the store.
+    """
+    for w in sorted(load_recent_wellness(days=days),
+                    key=lambda x: str(x.get("id") or ""), reverse=True):
+        info = w.get("sportInfo") or []
+        if info and isinstance(info[0], dict):
+            value = info[0].get("eftp")
+            if value:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+    return None
+
+
 def load_recent_wellness(days: int = 90) -> list[dict]:
     """v4.5.0 — load up to N most recent wellness records (newest first).
 

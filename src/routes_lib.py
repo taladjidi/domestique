@@ -20,6 +20,7 @@ rebinding app's name would leave this module still reading its own. Anything
 that needs to reset them (the tests do) must set them on THIS module.
 """
 import json
+import pathlib
 import os
 import re
 import threading
@@ -27,7 +28,7 @@ from pathlib import Path
 
 from cache import cached
 from obs import _log
-from paths import ROUTE_DATA, ROUTE_PROFILES_DIR, ROUTE_PROFILES_INDEX
+from paths import COURSE_DIR, ROUTE_DATA, ROUTE_PROFILES_DIR, ROUTE_PROFILES_INDEX
 
 
 def _slugify_route_name(name: str) -> str:
@@ -221,6 +222,100 @@ def _build_routes_index(routes: list[dict]) -> dict:
         "by_finish": by_finish,
     }
 
+def crs_profile(crs_path) -> "dict | None":
+    """A course's shape, read from the course file: distance, climb, max grade.
+
+    THE ONE READER of a .crs profile. /api/courses computed this inline and
+    /api/routes served whatever routes.json stored, and the two disagreed for
+    74 of the 622 routes that have a course file -- worst by 1,148 m of
+    climbing (Mallorca 312: 3,503 stored against 4,651 in the course data,
+    where the event itself advertises about 4,700). The inline version's own
+    comment says never to trust the DESCRIPTION header, because a
+    loop-extended route keeps the original text while the data grew; the
+    stored index inherited exactly that kind of number.
+
+    Returns None when the file cannot be read, so a caller can fall back to
+    what it has rather than show nothing.
+    """
+    try:
+        in_data = False
+        cum_elev = cum_km = 0.0
+        max_g = 0.0
+        with open(crs_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                s = line.strip()
+                if s == "[COURSE DATA]":
+                    in_data = True
+                    continue
+                if s == "[END COURSE DATA]":
+                    break
+                if not (in_data and s) or s.startswith("DIST"):
+                    continue
+                parts = s.split()
+                if len(parts) < 2:
+                    continue
+                try:
+                    delta_km, grade = float(parts[0]), float(parts[1])
+                except ValueError:
+                    continue
+                cum_km += delta_km
+                rise = delta_km * 10.0 * grade
+                if rise > 0:
+                    cum_elev += rise
+                max_g = max(max_g, abs(grade))
+    except OSError:
+        return None
+    return {"distance_km": round(cum_km, 1), "climb_m": round(cum_elev),
+            "max_grade": round(max_g, 1)}
+
+
+def _profile_from_disk(route: dict) -> "dict | None":
+    """The stored route's profile, recomputed from its course file."""
+    rel = route.get("crs_path") or ""
+    if not rel:
+        return None
+    path = COURSE_DIR / rel if not str(rel).startswith("/") else pathlib.Path(rel)
+    if not path.exists():
+        base = pathlib.Path(rel).name
+        hits = list(COURSE_DIR.rglob(base))
+        if not hits:
+            return None
+        path = hits[0]
+    return crs_profile(path)
+
+
+def _reconcile_with_course_files(routes: list) -> int:
+    """Make the index agree with the course files it indexes.
+
+    routes.json is shipped data; the .crs files beside it are the thing a
+    rider actually rides. Where they disagree the course file wins, because
+    it IS the course. Returns how many entries moved, which the test pins so
+    the number can go down and not up.
+
+    Cheap enough to do on every load: 622 course files parse in under a third
+    of a second, and this runs once per routes.json mtime.
+    """
+    moved = 0
+    for route in routes:
+        profile = _profile_from_disk(route)
+        if not profile:
+            continue
+        for key in ("climb_m", "distance_km", "max_grade"):
+            fresh = profile.get(key)
+            if fresh is None:
+                continue
+            stored = route.get(key)
+            try:
+                differs = stored is None or abs(float(stored) - float(fresh)) > 5.0
+            except (TypeError, ValueError):
+                differs = True
+            if differs:
+                route[key] = fresh
+                if key == "climb_m":
+                    moved += 1
+    return moved
+
+
 def _load_routes_v2(force: bool = False) -> tuple[list[dict], dict]:
     """Load routes.json v2 with mtime-based invalidation.
 
@@ -245,6 +340,7 @@ def _load_routes_v2(force: bool = False) -> tuple[list[dict], dict]:
             # Accept either flat list (v2) or legacy dict shape — normalize.
             if isinstance(data, list):
                 _ROUTES_CACHE = data
+                _reconcile_with_course_files(_ROUTES_CACHE)
             else:
                 # Legacy shape: {"worlds": [...]}; flatten best-effort so the
                 # cache never ends up in a broken intermediate state.

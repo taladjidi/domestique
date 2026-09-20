@@ -10162,7 +10162,8 @@ _VOLUME_MIN_SESSION_MIN = 30
 _VOLUME_CEILING_TOLERANCE = 1.05
 
 
-def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False) -> None:
+def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
+                                   ridden=None, from_day: "date | None" = None) -> None:
     """v2.1.0 (E1) — cap each week's summed planned TSS at its load-based ceiling.
 
     The ceiling is the week's own ``tss_target``, the LoadRamp's budget (Step
@@ -10204,6 +10205,15 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False) -> Non
     # TAPER_FRACS × the ACTUAL pre-taper reference; the reference is frozen at
     # the first taper row, AFTER the loop has already trimmed the build weeks
     # above ("at trim time").
+    def _in_scope(s) -> bool:
+        """Days this pass may count and shrink. With ``from_day`` the elapsed
+        part of a partly-run week is out of scope: it is a record of what was
+        asked and ridden, not volume to shed."""
+        if from_day is None:
+            return True
+        day = getattr(s, "day", None)
+        return day is None or day >= from_day
+
     _taper_rows = [w for w in weeks if getattr(w, "phase", "") == "taper"]
     # identity-keyed (PlannedWeek is a dataclass — .index() would deep-compare)
     _taper_pos = {id(w): i for i, w in enumerate(_taper_rows)}
@@ -10236,6 +10246,18 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False) -> Non
             ceiling = getattr(wk, "tss_target", 0) or 0
             if ceiling <= 0:
                 continue
+            if ridden is not None:
+                # A PARTLY ELAPSED week: the rider has already spent part of
+                # the week's ask, so what is left to prescribe is the target
+                # MINUS WHAT THEY RODE -- not the whole target again. Without
+                # this a mid-week replan re-prescribed a full week's load onto
+                # the days that remained, on top of the load already in the
+                # rider's legs. Measured against rides, not against the
+                # sessions the old plan happened to carry: a day ridden harder
+                # or easier than prescribed counts as it was ridden.
+                ceiling = max(0.0, ceiling - float(ridden(wk) or 0.0))
+                if ceiling <= 0:
+                    continue        # the week's ask is already spent
         budget = ceiling * _VOLUME_CEILING_TOLERANCE
         _shrink_order = _VOLUME_SHRINK_ORDER_TAPER if _is_taper else _VOLUME_SHRINK_ORDER
 
@@ -10247,6 +10269,8 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False) -> Non
             for idx, s in enumerate(_wk.sessions):
                 if s is None or s.session_type == "rest":
                     continue
+                if not _in_scope(s):
+                    continue        # a day already behind the rider is history
                 if (s.duration_min or 0) <= 0:
                     continue
                 if _session_is_hit(s):
@@ -10276,7 +10300,8 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False) -> Non
             # estimate would strip every other session in the week).
             total = sum(s.tss_estimate or 0 for s in wk.sessions
                         if s and s.session_type != "rest"
-                        and not getattr(s, "is_race", False))
+                        and not getattr(s, "is_race", False)
+                        and _in_scope(s))
             if total <= budget:
                 break
             overage = total - ceiling
@@ -13764,6 +13789,14 @@ def regenerate_from_today(
 
     # R4/R5 (2026-07-07) — R4a: slot/file coherence, ONCE, LAST (grill A2).
     # Future weeks only; same seed anchor as this path's fallback matches.
+    # The rider's "microintervals only" preference, on this path too. It was
+    # honoured in generate, recalculate and extend and NOT here, so a replan --
+    # the thing a rider does most -- served long-rep VO2 sessions to someone
+    # who had asked for none. match_zwo alone is not enough: the sampler and
+    # the floor passes place sessions of their own, which is why this is a
+    # pass over the built weeks rather than a flag on one call.
+    _enforce_microintervals_only(_future_weeks, library, _micro_only_goal(goal),
+                                 seed_salt=seed_salt)
     _enforce_slot_file_coherence(
         _future_weeks, library,
         plan_start_date=(phase_start_date if new_phases else today),
@@ -13772,6 +13805,18 @@ def regenerate_from_today(
     # LAST, after every pass above: the days already behind the rider come
     # back. Nothing here may reshape them, which is why this runs at the end.
     _keep_elapsed_days(all_weeks, old_plan_weeks, today)
+    # And then the week the rider is standing in gets re-sized against what
+    # they actually rode. Carrying the elapsed days back in widens the week to
+    # its full ask; without this the days that remain would be sized as if the
+    # whole ask were still to come, and the rider would be handed a full week's
+    # load on top of the three days already in their legs. The same shrink
+    # pass as everywhere else, told where the week starts being the future.
+    _cur = next((w for w in all_weeks if w.start <= today <= w.end), None)
+    if _cur is not None and _cur.start < today:
+        _enforce_weekly_volume_ceiling(
+            [_cur], ridden=lambda wk: _completed_tss_in(
+                activities, wk.start, today - timedelta(days=1)),
+            from_day=today)
     return new_phases, all_weeks, regen_info
 
 

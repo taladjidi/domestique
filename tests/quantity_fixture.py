@@ -118,12 +118,15 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
       * HRV and sleep rows are present, so the readiness composite is awake
         rather than dark.
     """
+    import os
+
     import cache
     import clock
     import db
     import ride_storage
     import app as app_module
     from fastapi.testclient import TestClient
+    from profile_manager import ProfileManager
 
     clock.freeze(TODAY)
     # `cache._cache` is a process-global with a 300 s TTL. A `training` entry
@@ -143,23 +146,6 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
     for rec in records:
         (rides_dir / f"{rec['external_id']}.json").write_text(
             json.dumps(rec), encoding="utf-8")
-
-    # The fixture owns its database, so the probe is the same run to run and
-    # standalone runs (no conftest sandbox) work. set_db_path is paired with
-    # close_all_connections because on this branch the version bump is still
-    # the caller's job -- the very footgun the db patch on upstream#14 removes.
-    original_db = db.DB_PATH
-    db.set_db_path(tmp / "health_tracker.db")
-    db.close_all_connections()
-    db.init_db()
-
-    conn = db.get_db()
-    conn.execute("DELETE FROM wellness")
-    for i in range(45):
-        d = (TODAY - timedelta(days=i)).isoformat()
-        conn.execute("INSERT OR REPLACE INTO wellness (date, ctl, atl) VALUES (?,?,?)",
-                     (d, CTL, ATL))
-    conn.commit()
 
     # The profile's own wellness archive, written by the lazy sync on every
     # home-page load, while the SQLite table above is written by the 30-minute
@@ -199,6 +185,41 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
             raise __import__("training").ICUNetworkError("network unreachable")
         return dict(icu_metrics)
 
+    # THE PROFILE IS THE FIXTURE'S, NOT THE DEVELOPER'S. Without this,
+    # ProfileManager reads the real ~/.domestique and every athlete number in
+    # the probe -- FTP, LTHR, weight, the zones derived from them -- belongs to
+    # whoever is running the tests. It was measured: setting the real profile's
+    # FTP to 313 moved every FTP door in the probe, while this file said 250.
+    # A probe that reads the developer's own data is measuring the developer.
+    os.environ["DOMESTIQUE_HOME"] = str(tmp)
+    _prev_instance = ProfileManager._instance
+    ProfileManager._instance = None
+    _pm = ProfileManager.get()
+    _pm.switch(_pm.create_profile("Probe"))
+    _pm.update_ftp(FTP, source="manual")
+    # app resolves some paths from its own DATA_DIR rather than through the
+    # profile, so it has to point at this fixture's home too.
+    _prev_data_dir = app_module.DATA_DIR
+    app_module.DATA_DIR = tmp / ".domestique"
+
+    # AFTER the switch, and this order is load-bearing: ProfileManager.switch()
+    # repoints the database at the profile's own file, so rows seeded before it
+    # land in a database nothing reads. That is not hypothetical -- it happened
+    # here, and the probe then reported /api/weekly-plan at CTL 37 (the unknown
+    # sentinel) against /api/wellness at 42 (the file archive), which looks
+    # exactly like the app disagreeing with itself.
+    original_db = db.DB_PATH
+    db.set_db_path(tmp / "health_tracker.db")
+    db.close_all_connections()
+    db.init_db()
+    conn = db.get_db()
+    conn.execute("DELETE FROM wellness")
+    for i in range(45):
+        d = (TODAY - timedelta(days=i)).isoformat()
+        conn.execute("INSERT OR REPLACE INTO wellness (date, ctl, atl) VALUES (?,?,?)",
+                     (d, CTL, ATL))
+    conn.commit()
+
     patches = [
         patch.object(app_module, "_plan_dir", return_value=plan_dir),
         # EVERY profile-scoped archive, not just the rides. Redirecting
@@ -210,8 +231,6 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
         patch.object(ride_storage, "_icu_rides_dir", return_value=rides_dir),
         patch.object(app_module, "_kick_lazy_icu_sync", return_value=False),
         patch("training.get_today_metrics", _today_metrics),
-        patch.object(app_module, "_settings_ftp", return_value=FTP)
-        if hasattr(app_module, "_settings_ftp") else None,
     ]
     if shift_one_endpoint:
         # The control: ONE door answers differently. /api/readiness reports a
@@ -261,6 +280,41 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
                 raise AssertionError(               # up is not a passing probe
                     f"replan fixture failed: HTTP {resp.status_code} {resp.text[:200]}")
     try:
+        # The fixture asserts its own setup, INSIDE the try so a failure still
+        # unwinds everything below. (It was outside, once: when it fired it
+        # left this fixture's DOMESTIQUE_HOME, singleton, database path and
+        # DATA_DIR in place for every later test in the worker, and one honest
+        # error became 65.)
+        #
+        # When a probe says the app disagrees with itself, the first question
+        # is whether the app was asked about the fixture's rider at all: a
+        # stale singleton or another test's home leaves some doors reading a
+        # profile with no athlete.json, whose FTP is the 200 default, and the
+        # probe prints a 200-against-250 split that is not about the app.
+        import config as _config
+        if _config.ATHLETE_FTP_W != FTP:
+            # Re-assert ownership once. Another test in this worker can leave
+            # a shadow on config (a real attribute beats the proxy) or a
+            # ProfileManager instance built from a different home, and the
+            # symptom is this fixture's rider reading as the 200 default.
+            # Healing beats skipping: the probe's whole value is that its
+            # numbers are the fixture's.
+            vars(_config).pop("ATHLETE_FTP_W", None)
+            ProfileManager._instance = None
+            _pm2 = ProfileManager.get()
+            if _pm2.active_id is None or _pm2.ftp != FTP:
+                _pm2.switch(_pm2.create_profile("Probe2"))
+                _pm2.update_ftp(FTP, source="manual")
+        if _config.ATHLETE_FTP_W != FTP:
+            _pm3 = ProfileManager.get()
+            raise AssertionError(
+                f"the fixture's profile is not the one the app reads: "
+                f"config.ATHLETE_FTP_W is {_config.ATHLETE_FTP_W}, fixture FTP "
+                f"is {FTP}. active profile={_pm3.active_id!r}, its ftp="
+                f"{_pm3.ftp!r}, home={os.environ.get('DOMESTIQUE_HOME')!r}, "
+                f"config shadow={'ATHLETE_FTP_W' in vars(_config)}. The probe's "
+                f"numbers would be about someone else's rider.")
+
         yield TestClient(app_module.app), {
             "ride_id": records[0]["ride_id"],
             "activity_id": records[0]["external_id"],
@@ -275,4 +329,7 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
         db.set_db_path(original_db)
         db.close_all_connections()
         cache.clear_cache()          # leave nothing behind either
+        ProfileManager._instance = _prev_instance
+        app_module.DATA_DIR = _prev_data_dir
+        os.environ.pop("DOMESTIQUE_HOME", None)
         clock.unfreeze()

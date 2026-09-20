@@ -33,6 +33,8 @@ pass lists did not have.
 """
 from __future__ import annotations
 
+import availability  # the one per-day training cap (src/availability.py)
+
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -465,14 +467,16 @@ class TrainingWeek:
         return float(v) if v else None
 
     def _day_cap_min(self, day) -> float | None:
-        goal = self.ctx.goal
-        caps = getattr(goal, "daily_max_hours", None) or {}
-        h = caps.get(day.weekday())
-        if h is None:
-            h = (getattr(goal, "max_weekend_hours", None)
-                 if day.weekday() >= 5 else
-                 getattr(goal, "max_weekday_hours", None))
-        return None if h is None else float(h) * 60.0
+        """The day's cap in minutes, from the one rule (src/availability.py).
+
+        This used to return None when the goal carried no cap, and None meant
+        NO LIMIT here while the sampler's copy of the same rule treated a
+        missing cap as zero. So the week view failed OPEN exactly where the
+        planner failed CLOSED, and an audit reproduced a 173-minute session
+        against a 120-minute cap. The shared rule always answers with a
+        number.
+        """
+        return float(availability.day_cap_minutes(self.ctx.goal, day.weekday()))
 
     def _rescale(self, session, new_min, why):
         """Change a session's length, keeping TSS proportional.

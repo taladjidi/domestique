@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from training import get_today_metrics, fetch_wellness, fetch_activities, TRIMP_TO_TSS_FACTOR
 from sleep import get_sleep_metrics
 from readiness import compute_readiness
+import availability   # the one per-day training cap
 import config
 import db
 import zones as _zones_mod
@@ -11268,11 +11269,10 @@ async def api_plan_generate(request: Request):
         _daily = goal.daily_max_hours or {}
 
         def _default_hours_for_weekday(wd: int) -> float:
-            if wd in (goal.rest_days or []):
-                return 0.0
-            if wd in _daily:
-                return float(_daily[wd])
-            return float(goal.max_weekend_hours if wd >= 5 else goal.max_weekday_hours)
+            # The one rule (src/availability.py): rest and unavailable days
+            # get nothing, everything else gets its own cap or the
+            # weekday/weekend default.
+            return availability.trainable_minutes(goal, wd) / 60.0
 
         if weeks:
             _new_avail: dict = {}

@@ -33,6 +33,7 @@ Usage:
   python3 training_planner.py --reforecast
 """
 
+import availability  # the one per-day training cap (see src/availability.py)
 import clock  # the one clock every module reads (see src/clock.py)
 import argparse
 import hashlib
@@ -1920,11 +1921,13 @@ class Goal:
     vo2_microintervals_only: bool = False
 
     def max_hours_for_day(self, weekday: int) -> float:
-        """Get max training hours for a specific weekday (0=Mon..6=Sun)."""
-        if self.daily_max_hours and weekday in self.daily_max_hours:
-            return self.daily_max_hours[weekday]
-        # Fallback to aggregate max
-        return self.max_weekend_hours if weekday >= 5 else self.max_weekday_hours
+        """Max training hours for a weekday (0=Mon..6=Sun).
+
+        The rule lives in `availability`, which week_plan and app read too.
+        It was written out five times and three of the copies disagreed about
+        a missing cap and about rest days.
+        """
+        return availability.day_cap_hours(self, weekday)
 
     def weeks_available(self) -> int:
         # 3.4.0 W1: an open-ended continuous goal has no end to count toward —
@@ -2545,21 +2548,7 @@ def week_available_minutes(goal, week_start: date) -> int:
     default, and nothing for a rest or unavailable day. Duplicating the rule
     would let the clamp and the slots disagree about how big a week is.
     """
-    rest = set(getattr(goal, "rest_days", []) or [])
-    avail = set(getattr(goal, "available_days", list(range(7))) or range(7))
-    dmh = getattr(goal, "daily_max_hours", None) or {}
-    wd_h = float(getattr(goal, "max_weekday_hours", 0) or 0)
-    we_h = float(getattr(goal, "max_weekend_hours", 0) or 0)
-    total = 0.0
-    for off in range(7):
-        wd = (week_start + timedelta(days=off)).weekday()
-        if wd in rest or wd not in avail:
-            continue
-        if wd in dmh:
-            total += float(dmh[wd]) * 60.0
-        else:
-            total += (we_h if wd >= 5 else wd_h) * 60.0
-    return int(round(total))
+    return availability.week_trainable_minutes(goal, week_start)
 
 
 # Below this many minutes of z3+ a "hard session" is not delivering the
@@ -7177,9 +7166,7 @@ def expand_blueprint_week(ctx: "week_plan.WeekContext",
     daily_max_hours = goal.daily_max_hours
     max_weekday_hours, max_weekend_hours = goal.max_weekday_hours, goal.max_weekend_hours
     def _cap_min(weekday: int) -> int:
-        if daily_max_hours and weekday in daily_max_hours:
-            return int(daily_max_hours[weekday] * 60)
-        return int((max_weekend_hours if weekday >= 5 else max_weekday_hours) * 60)
+        return availability.day_cap_minutes(goal, weekday)
 
     bp_hit = _blueprint_hit_for(goal, phase.name, week_num)
     # Lay rest vs train by offset from week_start (matches plan_week + the caller).
@@ -7345,9 +7332,7 @@ def sample_week_workouts(ctx: "week_plan.WeekContext", state: "week_plan.PlanSta
 
     # Resolve per-day max minutes
     def _max_min_for(weekday: int) -> int:
-        if daily_max_hours and weekday in daily_max_hours:
-            return int(daily_max_hours[weekday] * 60)
-        return int((max_weekend_hours if weekday >= 5 else max_weekday_hours) * 60)
+        return availability.day_cap_minutes(goal, weekday)
 
     # Build slot list: (idx, date, day_name, weekday, max_min, is_rest)
     slots: list[tuple[int, date, str, int, int, bool]] = []

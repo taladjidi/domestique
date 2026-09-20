@@ -26,6 +26,8 @@ Calendar output is PINNED byte-for-byte: the renderCalDay refactor onto
 plannedCardParts must not change a single character of calendar cells
 (score badge included — the calendar is not in scope of the removal).
 """
+import unittest
+import shutil
 import json
 import re
 import subprocess
@@ -54,7 +56,16 @@ def _extract_const(src: str, name: str) -> str:
     return src[i:j + 2]
 
 
+def _require_node():
+    """Skip, not error: without node on PATH subprocess raises
+    FileNotFoundError, which reads as a real failure and hides that the
+    assertion never ran."""
+    if shutil.which("node") is None:
+        raise unittest.SkipTest("node not installed")
+
+
 def _run_node(harness: str) -> str:
+    _require_node()
     res = subprocess.run(["node", "-e", harness], capture_output=True,
                          text=True, timeout=30)
     assert res.returncode == 0, f"node harness failed:\n{res.stderr}\n{res.stdout}"

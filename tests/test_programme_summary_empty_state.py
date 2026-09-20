@@ -9,6 +9,8 @@ state now states what is missing and when it fills in.
 Node-harness style follows tests/test_day_modal_file_tss.py: run the REAL
 _psRender out of templates/dashboard.html against a stub DOM.
 """
+import unittest
+import shutil
 import json
 import subprocess
 from pathlib import Path
@@ -59,6 +61,14 @@ const window = {};
 """
 
 
+def _require_node():
+    """Skip, not error: without node on PATH subprocess raises
+    FileNotFoundError, which reads as a real failure and hides that the
+    assertion never ran."""
+    if shutil.which("node") is None:
+        raise unittest.SkipTest("node not installed")
+
+
 def _render(summary: dict) -> dict:
     """Run the real _psRender over a stub DOM; return the resulting state."""
     harness = (
@@ -80,6 +90,7 @@ def _render(summary: dict) -> dict:
           "totalsDisplay: _el('ps-totals').style.display,"
           "pngDisplay: _el('ps-png-link').style.display}));\n"
     )
+    _require_node()
     res = subprocess.run(["node", "-e", harness], capture_output=True,
                          text=True, timeout=30)
     assert res.returncode == 0, f"node harness failed:\n{res.stderr}"

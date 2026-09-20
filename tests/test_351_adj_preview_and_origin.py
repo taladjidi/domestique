@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -85,8 +86,7 @@ def _extract_js_function(src: str, name: str) -> str:
     return src[k:j]
 
 
-@pytest.mark.skipif(subprocess.run(["which", "node"], capture_output=True).returncode != 0,
-                    reason="node not installed")
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_loader_behaviour_lazy_once_and_failure_path():
     fn = _extract_js_function(DASH, "_loadAdjOrigPreview")
     harness = fn + """

@@ -11,6 +11,8 @@ Node harness style follows tests/test_344_plan_grid_parity.py: extract the
 REAL ``dayModalTssStat`` from templates/dashboard.html and run it under node
 against fixtures.
 """
+import unittest
+import shutil
 import json
 import subprocess
 from pathlib import Path
@@ -32,7 +34,16 @@ def _extract_js_function(src: str, name: str) -> str:
     raise AssertionError(f"unbalanced braces for {name}")
 
 
+def _require_node():
+    """Skip, not error: without node on PATH subprocess raises
+    FileNotFoundError, which reads as a real failure and hides that the
+    assertion never ran."""
+    if shutil.which("node") is None:
+        raise unittest.SkipTest("node not installed")
+
+
 def _run_node(harness: str) -> str:
+    _require_node()
     res = subprocess.run(["node", "-e", harness], capture_output=True,
                          text=True, timeout=30)
     assert res.returncode == 0, f"node harness failed:\n{res.stderr}\n{res.stdout}"

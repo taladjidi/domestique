@@ -7,7 +7,9 @@ ends. Pins: the handler uses the CTM inverse, keeps the linear fallback,
 and the letterboxed arithmetic itself.
 """
 import re
+import shutil
 import subprocess
+import unittest
 from pathlib import Path
 
 _SRC = (Path(__file__).resolve().parent.parent / "src" / "templates" / "dashboard.html"
@@ -26,6 +28,15 @@ def test_ff_hover_maps_through_screen_ctm():
     assert "(e.clientX - ctm.e) / ctm.a" in fn, "CTM inverse arithmetic missing"
     # Linear fallback stays for detached-svg edge (and ONLY as fallback).
     assert "rect.width) * W" in fn
+
+
+def _require_node():
+    """Skip, not error. Without this a runner with no node on PATH turns a
+    JS-harness test into a FileNotFoundError, which reads like a real failure
+    and hides the fact that the assertion never ran. SkipTest is raised rather
+    than pytest.skip so the unittest classes in this tree honour it too."""
+    if shutil.which("node") is None:
+        raise unittest.SkipTest("node not installed")
 
 
 def test_ctm_inverse_arithmetic_letterboxed():
@@ -56,6 +67,8 @@ const oldAtPlotLeft = oldMap(elementLeft + gutter + PAD_L * a);
 if (Math.abs(oldAtPlotLeft - PAD_L) < 50) throw new Error('old map should be badly off (was the bug)');
 console.log('OK');
 """
-    res = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    _require_node()
+    res = subprocess.run(["node", "-e", harness], capture_output=True, text=True,
+                         timeout=30)
     assert res.returncode == 0, res.stderr
     assert "OK" in res.stdout

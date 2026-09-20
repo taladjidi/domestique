@@ -20,6 +20,7 @@ Three layers under test:
 from __future__ import annotations
 
 import datetime as _dt
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -55,11 +56,22 @@ globalThis._profileLsKey = base => base + ':' + globalThis.__PROFILE;
 """
 
 
+def _require_node():
+    """Skip, not error. Without this a runner with no node on PATH turns a
+    JS-harness test into a FileNotFoundError, which reads like a real failure
+    and hides the fact that the assertion never ran. SkipTest is raised rather
+    than pytest.skip so the unittest classes in this tree honour it too."""
+    if shutil.which("node") is None:
+        raise unittest.SkipTest("node not installed")
+
+
 def _run_node(body: str, tmp_path: Path, name: str = "harness.js") -> str:
     js = _LS_STUB + "\n" + _pure_helpers_src() + "\n" + body
     f = tmp_path / name
     f.write_text(js, encoding="utf-8")
-    res = subprocess.run(["node", str(f)], capture_output=True, text=True)
+    _require_node()
+    res = subprocess.run(["node", str(f)], capture_output=True, text=True,
+                         timeout=30)
     assert res.returncode == 0, f"node harness failed:\n{res.stderr}"
     return res.stdout
 
@@ -428,6 +440,8 @@ console.log('OK');
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "stacking.js"
             f.write_text(harness, encoding="utf-8")
-            res = subprocess.run(["node", str(f)], capture_output=True, text=True)
+            _require_node()
+            res = subprocess.run(["node", str(f)], capture_output=True,
+                                 text=True, timeout=30)
         assert res.returncode == 0, res.stderr
         assert "OK" in res.stdout

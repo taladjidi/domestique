@@ -65,7 +65,7 @@ def test_the_derived_caches_are_not_tracked():
     tracked = subprocess.run(
         ["git", "ls-files", "src/workouts/.library_index.json",
          "src/workouts/.workout_facts.json"],
-        cwd=ROOT, capture_output=True, text=True).stdout.split()
+        cwd=ROOT, capture_output=True, text=True, timeout=30).stdout.split()
     assert tracked == [], f"derived caches are tracked again: {tracked}"
 
 

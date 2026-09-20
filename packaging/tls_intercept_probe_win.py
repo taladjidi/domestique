@@ -37,6 +37,10 @@ Exit 1 on any deviation.
 """
 from __future__ import annotations
 
+# Bounded: certutil can block on a corporate policy prompt and ipconfig on
+# a wedged DNS client; unbounded, the probe hangs with nothing on stdout.
+WIN_TOOL_TIMEOUT = 60
+
 import datetime as dt
 import http.server
 import ipaddress
@@ -142,11 +146,12 @@ def install_root(tmp: Path, root, cn: str):
     cer = tmp / (re.sub(r"[^A-Za-z0-9]+", "_", cn) + ".cer")
     cer.write_bytes(root.public_bytes(ser.Encoding.DER))
     subprocess.run(["certutil", "-addstore", "-f", "Root", str(cer)], check=True,
-                   stdout=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, timeout=WIN_TOOL_TIMEOUT)
 
 
 def remove_root(cn: str):
-    subprocess.run(["certutil", "-delstore", "Root", cn], check=False, stdout=subprocess.DEVNULL)
+    subprocess.run(["certutil", "-delstore", "Root", cn], check=False,
+                   stdout=subprocess.DEVNULL, timeout=WIN_TOOL_TIMEOUT)
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -368,7 +373,8 @@ def serve_fake_icu() -> int:
     install_root(tmp, root, cn)
     with HOSTS.open("a", encoding="ascii") as h:
         h.write("\r\n127.0.0.1 intervals.icu\r\n")
-    subprocess.run(["ipconfig", "/flushdns"], check=False, stdout=subprocess.DEVNULL)
+    subprocess.run(["ipconfig", "/flushdns"], check=False,
+                   stdout=subprocess.DEVNULL, timeout=WIN_TOOL_TIMEOUT)
     srv = _QuietServer(("127.0.0.1", 443), _FakeIcuHandler)
     sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     sctx.load_cert_chain(pem, key)

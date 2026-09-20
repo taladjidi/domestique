@@ -18,6 +18,10 @@ with Microsoft's roots, see the report.
 """
 import sys, os, json, marshal, hashlib, subprocess, zipfile, urllib.request, struct, types
 from pathlib import Path
+
+# Bounded: a wedged pip or git here used to hang the audit with no output.
+PIP_TIMEOUT = 300   # a wheel download over a slow link
+GIT_TIMEOUT = 60    # local object reads
 from PyInstaller.archive.readers import CArchiveReader
 W = sys.argv[1]; ROOT = Path.cwd(); EXE = ROOT / "unz/Domestique.exe"; INTERNAL = ROOT / "unz/_internal"
 PYV = "3.12.10"
@@ -39,10 +43,11 @@ for nv in versions:
         r = subprocess.run([sys.executable, "-m", "pip", "download", "-q", "--no-deps", "--only-binary=:all:",
                             "--platform", "win_amd64", "--python-version", "3.12", "--implementation", "cp",
                             "--abi", "cp312", "--abi", "abi3", "--abi", "none", f"{name}=={ver}", "-d", str(WD)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, timeout=PIP_TIMEOUT)
         have = [p for p in WD.glob("*.whl") if matches(p, name, ver)]
         if not have:  # pure-python sdist only (proxy_tools)
-            subprocess.run([sys.executable, "-m", "pip", "download", "-q", "--no-deps", "--no-binary=:all:", f"{name}=={ver}", "-d", str(WD)], capture_output=True, text=True)
+            subprocess.run([sys.executable, "-m", "pip", "download", "-q", "--no-deps", "--no-binary=:all:", f"{name}=={ver}", "-d", str(WD)],
+                           capture_output=True, text=True, timeout=PIP_TIMEOUT)
             have = [p for p in WD.glob("*.tar.gz") if matches(p, name, ver)]
         if not have:
             wheel_status[nv] = "DOWNLOAD FAILED"; continue
@@ -82,9 +87,9 @@ P("stdlib Lib at", LIB)
 
 # ── 3. source roots for module resolution ────────────────────────────────────
 TAG = ROOT / "tagsrc"; TAG.mkdir(exist_ok=True)
-for n in subprocess.run(["git", "-C", W, "ls-tree", "--name-only", "v3.11.4", "src/"], capture_output=True, text=True).stdout.split():
+for n in subprocess.run(["git", "-C", W, "ls-tree", "--name-only", "v3.11.4", "src/"], capture_output=True, text=True, timeout=GIT_TIMEOUT).stdout.split():
     if n.endswith(".py"):
-        (TAG / Path(n).name).write_bytes(subprocess.run(["git", "-C", W, "show", f"v3.11.4:{n}"], capture_output=True).stdout)
+        (TAG / Path(n).name).write_bytes(subprocess.run(["git", "-C", W, "show", f"v3.11.4:{n}"], capture_output=True, timeout=GIT_TIMEOUT).stdout)
 PYI = WX / "pyinstaller"
 roots = [TAG, LIB] + sorted(WX.iterdir()) + [PYI / "PyInstaller/loader", PYI / "PyInstaller/hooks/rthooks", PYI / "PyInstaller/fake-modules"]
 def find_source(mod):

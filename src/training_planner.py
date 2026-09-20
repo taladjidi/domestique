@@ -6377,16 +6377,23 @@ _GEN_MIN_SHARE_MIN = 5.0          # below this the band's budget is spent
 def _zwo_scanner():
     """The library scanner, for measuring a file we just wrote.
 
-    app._scan_zwo_for_library, reached by a function-local import because app
-    imports this module at module scope. It is the SECOND implementation of
-    this scan -- the first is inline in the library loader below -- and
-    tests/test_zone_binning.py pins the two as producing identical numbers on
-    every file in the library. Measuring a generated file with anything other
-    than the scanner that measures every other file would reintroduce exactly
-    the divergence this branch has spent its time removing.
+    `zwo_parse.scan_zwo`, the same function the library loader uses, imported
+    at module scope above as `_scan_zwo`.
+
+    It used to reach this through `app._scan_zwo_for_library` with a
+    function-local `import app`, because app imports this module at module
+    scope and a top-level import would not load. But app does not own that
+    name: `app.py` gets it from the same leaf (`from zwo_parse import scan_zwo
+    as _scan_zwo_for_library`). So the planner was importing a 20,000-line
+    module to fetch a name that module had imported from a 350-line one.
+
+    That single line was half the import problem: with function-level imports
+    counted, this package had ONE cycle of 19 modules -- 74% of src -- and
+    cutting this edge leaves 8. The docstring it replaces also described a
+    second implementation of the scan, which stopped being true when the two
+    scanners were merged.
     """
-    import app as _app
-    return _app._scan_zwo_for_library
+    return _scan_zwo
 
 
 def _budget_fit_weight(fit: float) -> float:

@@ -218,7 +218,12 @@ def compare(want, got):
         # A new invariant hit fails the compare like a fingerprint change:
         # until 2026-09-14 it was only printed, and 93 hits were blessed
         # into the golden without the gate ever refusing one.
-        if added or removed or changed or inv_new:
+        # inv_GONE fails too. A rule that stops firing is exactly as much of a
+        # change as one that starts: it means an enforcement pass was removed,
+        # unwired or silently weakened, and the old behaviour printed it while
+        # the gate stayed green. Blessing is how a deliberate improvement is
+        # recorded; staying quiet is how one gets lost.
+        if added or removed or changed or inv_new or inv_gone:
             rc = 1
         print(f"  {section}: {len(changed)} changed ({len(changed) - len(content_only)} load, "
               f"{len(content_only)} content only), {len(added)} added, "

@@ -13,6 +13,9 @@ from datetime import date, timedelta
 import pytest
 
 import plan_invariants as pi
+
+# Every rule name the auditor can emit, so a filter cannot outlive a rename.
+_ALL_RULE_NAMES = [(n, n) for n, _fn in pi.ALL_CHECKS]
 import training_planner as tp
 
 WEEK = [date(2026, 9, 7) + timedelta(days=k) for k in range(7)]
@@ -31,5 +34,12 @@ def test_the_floor_holds_on_every_start_day(start, monkeypatch):
                                   for w in weeks for s in w.sessions
                                   if s.session_type != "rest")
     assert classes["anaerobic"] >= 1 and classes["neuromuscular"] >= 1, dict(classes)
-    spacing = [str(v) for v in pi.audit(weeks, goal, today=start) if v.rule == "spacing"]
+    # The rule is "hard_day_spacing". Filtering on "spacing" -- a name
+    # plan_invariants has never emitted -- made this assertion `[] == []` for
+    # every one of the seven start days, so the 48 h check it claims to make
+    # was never made here.
+    assert "hard_day_spacing" in {r for _n, r in _ALL_RULE_NAMES}, (
+        "the rule was renamed; this filter would silently pass again")
+    spacing = [str(v) for v in pi.audit(weeks, goal, today=start)
+               if v.rule == "hard_day_spacing"]
     assert not spacing, spacing

@@ -8411,13 +8411,37 @@
   "cont/every-day/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     365.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       60,
+       47.0,
+       "endurance_steady_74pct_65min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "recovery",
+       48,
+       30.0,
+       "threshold_1x2min_81pct_48min.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "vo2max",
@@ -8428,18 +8452,18 @@
       ],
       [
        "2026-09-18",
-       "z2",
-       48,
-       39.0,
-       "threshold_ladder3_95pct_48min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
        "2026-09-19",
-       "recovery",
-       46,
-       29.0,
-       "threshold_1x2min_81pct_46min_v3.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -10583,13 +10607,37 @@
   "cont/every-day/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     441.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       71,
+       52.0,
+       "endurance_5x1min-1min_88pct_70min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       75,
+       104.0,
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       60,
+       47.0,
+       "tempo_steady_71pct_60min_v2.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "threshold",
@@ -10609,8 +10657,8 @@
       [
        "2026-09-19",
        "recovery",
-       60,
-       50.0,
+       36,
+       30.0,
        "tempo_ladder3_90pct_60min.zwo",
        "pending"
       ],
@@ -10823,9 +10871,7 @@
      ]
     ]
    ],
-   "inv": [
-    "weekly_volume:1"
-   ]
+   "inv": []
   },
   "cont/focus-ftp/generate": {
    "fp": [
@@ -11368,13 +11414,37 @@
   "cont/focus-ftp/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     381.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       82,
+       51.0,
+       "endurance_steady_61pct_82min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min_v2.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "threshold",
@@ -12151,13 +12221,37 @@
   "cont/focus-vo2/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     381.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       82,
+       51.0,
+       "endurance_steady_61pct_82min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min_v2.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "vo2max",
@@ -14318,13 +14412,37 @@
   "cont/mon-fri/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     186.0,
+     325.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       55,
+       41.0,
+       "endurance_steady_68pct_55min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "recovery",
+       48,
+       30.0,
+       "threshold_1x2min_81pct_48min.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "vo2max",
@@ -14559,7 +14677,6 @@
     ]
    ],
    "inv": [
-    "hard_share:1",
     "weekly_volume:1"
    ]
   },
@@ -16378,13 +16495,37 @@
   "cont/mon-fri/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     414.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       105,
+       77.0,
+       "endurance_3x6min-5min_80pct_105min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       60,
+       49.0,
+       "tempo_progression_3x20s-4min_150pct_60min.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "threshold",
@@ -17078,6 +17219,7 @@
     ]
    ],
    "inv": [
+    "hard_share:2",
     "weekly_volume:2"
    ]
   },
@@ -17874,13 +18016,37 @@
   "cont/three-day/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     111.0,
+     221.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       60,
+       42.0,
+       "endurance_6x1min-1min_85pct_60min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
       [
        "2026-09-17",
        "sprint",
@@ -19250,13 +19416,37 @@
   "cont/three-day/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     328.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "recovery",
+       45,
+       22.0,
+       "recovery_steady_56pct_45min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
       [
        "2026-09-17",
        "sprint",
@@ -19490,9 +19680,7 @@
      ]
     ]
    ],
-   "inv": [
-    "under_delivery:1"
-   ]
+   "inv": []
   },
   "cont/weekend-rider/1h/extend@9": {
    "fp": [
@@ -20615,13 +20803,37 @@
   "cont/weekend-rider/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     223.0,
+     312.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       48,
+       39.0,
+       "threshold_ladder3_95pct_48min.zwo",
+       "dismissed"
+      ],
       [
        "2026-09-17",
        "vo2max",
@@ -20632,18 +20844,18 @@
       ],
       [
        "2026-09-18",
-       "z2",
-       48,
-       39.0,
-       "threshold_ladder3_95pct_48min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
        "2026-09-19",
-       "recovery",
-       48,
-       30.0,
-       "threshold_1x2min_81pct_48min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -20856,7 +21068,6 @@
     ]
    ],
    "inv": [
-    "hard_share:1",
     "weekly_volume:1"
    ]
   },
@@ -21985,13 +22196,37 @@
   "cont/weekend-rider/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     330.0,
      null,
      false,
      [
+      [
+       "2026-09-14",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min_v2.zwo",
+       "dismissed"
+      ],
       [
        "2026-09-17",
        "threshold",
@@ -22002,18 +22237,18 @@
       ],
       [
        "2026-09-18",
-       "z2",
-       55,
-       42.0,
-       "tempo_steady_69pct_55min_v2.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
        "2026-09-19",
-       "z2",
-       39,
-       31.0,
-       "endurance_steady_65pct_40min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -22226,7 +22461,6 @@
     ]
    ],
    "inv": [
-    "hard_share:1",
     "weekly_volume:1"
    ]
   },
@@ -42477,13 +42711,37 @@
   "cont/every-day/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     365.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       60,
+       47.0,
+       "endurance_steady_74pct_65min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "recovery",
+       48,
+       30.0,
+       "threshold_1x2min_81pct_48min.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -44652,13 +44910,37 @@
   "cont/every-day/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     466.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       105,
+       77.0,
+       "endurance_3x6min-5min_80pct_105min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       75,
+       104.0,
+       "anaerobic_6x1min-1min_115pct_79min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       60,
+       47.0,
+       "tempo_steady_71pct_60min_v2.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -45437,13 +45719,37 @@
   "cont/focus-ftp/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     381.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       82,
+       51.0,
+       "endurance_steady_61pct_82min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min_v2.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -46222,13 +46528,37 @@
   "cont/focus-vo2/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     381.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       82,
+       51.0,
+       "endurance_steady_61pct_82min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min_v2.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -48120,9 +48450,7 @@
      ]
     ]
    ],
-   "inv": [
-    "hard_share:4"
-   ]
+   "inv": []
   },
   "cont/mon-fri/1h/refit@3": {
    "fp": [
@@ -48396,13 +48724,37 @@
   "cont/mon-fri/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     186.0,
+     325.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       55,
+       41.0,
+       "endurance_steady_68pct_55min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "recovery",
+       48,
+       30.0,
+       "threshold_1x2min_81pct_48min.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -50458,13 +50810,37 @@
   "cont/mon-fri/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     414.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       105,
+       77.0,
+       "endurance_3x6min-5min_80pct_105min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       60,
+       49.0,
+       "tempo_progression_3x20s-4min_150pct_60min.zwo",
+       "pending"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -51949,13 +52325,37 @@
   "cont/three-day/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     111.0,
+     225.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "z2",
+       60,
+       42.0,
+       "endurance_6x1min-1min_85pct_60min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       60,
+       72.0,
+       "vo2max_5x150s-3min_115pct_60min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
       [
        "2026-09-17",
        "vo2max",
@@ -53324,13 +53724,37 @@
   "cont/three-day/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     328.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "recovery",
+       45,
+       22.0,
+       "recovery_steady_56pct_45min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-15",
+       "vo2max",
+       50,
+       68.0,
+       "anaerobic_5x90s-270s_133pct_46min.zwo",
+       "dismissed"
+      ],
+      [
+       "2026-09-16",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
       [
        "2026-09-17",
        "sprint",
@@ -53564,9 +53988,7 @@
      ]
     ]
    ],
-   "inv": [
-    "under_delivery:1"
-   ]
+   "inv": []
   },
   "cont/weekend-rider/1h/extend@9": {
    "fp": [
@@ -54692,13 +55114,37 @@
   "cont/weekend-rider/1h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     223.0,
+     312.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       48,
+       39.0,
+       "threshold_ladder3_95pct_48min.zwo",
+       "dismissed"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -54932,9 +55378,7 @@
      ]
     ]
    ],
-   "inv": [
-    "under_delivery:1"
-   ]
+   "inv": []
   },
   "cont/weekend-rider/3h/extend@9": {
    "fp": [
@@ -56062,13 +56506,37 @@
   "cont/weekend-rider/3h/regenerate@3": {
    "fp": [
     [
-     "2026-09-17",
+     "2026-09-14",
      "2026-09-20",
      "continuous",
-     238.0,
+     330.0,
      0.0,
      false,
      [
+      [
+       "2026-09-14",
+       "rest",
+       0,
+       0.0,
+       "",
+       "pending"
+      ],
+      [
+       "2026-09-15",
+       "sprint",
+       45,
+       50.0,
+       "neuromuscular_6x30s_160pct_42min.zwo",
+       "done"
+      ],
+      [
+       "2026-09-16",
+       "z2",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min_v2.zwo",
+       "dismissed"
+      ],
       [
        "2026-09-17",
        "rest",
@@ -56302,9 +56770,7 @@
      ]
     ]
    ],
-   "inv": [
-    "under_delivery:1"
-   ]
+   "inv": []
   },
   "ctl/target60/generate": {
    "fp": [

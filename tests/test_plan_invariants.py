@@ -300,6 +300,27 @@ def test_a_recovery_week_with_a_hard_session_is_not_lighter_by_load_type():
     assert not ok, why
 
 
+def test_the_rule_is_wired_into_audit_not_only_callable():
+    """Through `audit()`, the way production would reach it.
+
+    Every other test in this group calls `stepback_looks_lighter` directly, so
+    a mutation sweep found the whole rule could be deleted from ALL_CHECKS
+    with the entire suite green: the helper was covered and its WIRING was
+    not. A rule nothing routes to is a rule nothing enforces.
+    """
+    build = week([sess(i, "z2", 60, 40, EASY_FILE) for i in range(4)]
+                 + [sess(4, "vo2max", 60, 90, HARD_FILE)],
+                 target=250, n=1, first=0, last=6)
+    # The same week again, flagged as the recovery: same rides, same rest
+    # days, its own hard session. Nothing about it is lighter.
+    deload = week([sess(i + 7, "z2", 60, 40, EASY_FILE) for i in range(4)]
+                  + [sess(11, "vo2max", 60, 90, HARD_FILE)],
+                  target=250, n=2, first=7, last=13, stepback=True)
+    assert "stepback_looks_lighter" in rules([build, deload], today=day(0)), (
+        "audit() did not report a recovery week that is no lighter than its "
+        "build week; the rule is not reachable through ALL_CHECKS")
+
+
 def test_more_rest_days_is_enough_on_its_own():
     import plan_invariants as pi
     rest = ("rest", 0, 0)

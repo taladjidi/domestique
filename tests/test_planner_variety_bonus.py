@@ -261,16 +261,11 @@ class TestBuild2PeakPhaseFloors:
             f"neuromuscular={counts['neuromuscular']} (want ≥1 between them)")
         assert counts["vo2_short"] >= 2, f"build2 vo2_short={counts['vo2_short']} (≥2)"
 
-    @pytest.mark.xfail(
-        reason="W8 pinned-env measurement (ctl=50, weekly_tss=650, "
-               "today=2026-01-05, seed_salt=12345): 0 neuromuscular picks "
-               "land in build2 — the plan's two sprint sessions land in "
-               "build1 wk15 and peak wk23, so the per-phase ≥1 floor cannot "
-               "be made true-with-margin without collapsing to ≥0 "
-               "(always-true). Kept as the documented target; re-measure "
-               "after the event-planner fix wave.",
-        strict=False,
-    )
+    # Was xfail(strict=False) on a W8 measurement -- "0 neuromuscular picks
+    # land in build2" -- which stopped being true and nobody noticed, because
+    # a non-strict xfail that starts passing says nothing. Re-measured
+    # 2026-09-20: the floor holds. It is a real test again, and if the sampler
+    # regresses it fails instead of going quiet.
     def test_build2_neuromuscular_floor(self, plan_24w):
         """build2 phase: ≥1 neuromuscular (sprint) pick — planner-side gap."""
         _, weeks = plan_24w

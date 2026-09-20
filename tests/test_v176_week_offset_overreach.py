@@ -112,7 +112,9 @@ def test_week_summary_default_offset_zero(tmp_path, monkeypatch):
 import pytest
 
 
-@pytest.mark.xfail(reason="api_activities monkeypatch doesn't reach handler closure; feature works in live testing", strict=False)
+# Was xfail(strict=False): "the monkeypatch doesn't reach the handler closure;
+# feature works in live testing". It reaches it now, so the flag is asserted
+# rather than taken on trust.
 def test_overreach_flag_set_when_tss_exceeds_130pct(tmp_path, monkeypatch):
     """Inject a single big-TSS ride into last week + assert overreach=true."""
     _isolate_plan_dir(tmp_path, monkeypatch)
@@ -162,7 +164,11 @@ def test_overreach_flag_clear_when_load_in_range(tmp_path, monkeypatch):
     assert body["overreach"] is False
 
 
-@pytest.mark.xfail(reason="api_activities monkeypatch doesn't reach handler closure; feature works in live testing", strict=False)
+@pytest.mark.xfail(
+    strict=True,
+    reason="the monkeypatch does not reach the handler closure for the "
+           "unplanned-intensity path; its sibling above now does. STRICT so "
+           "the day it works, this marker has to go rather than hide a pass.")
 def test_overreach_unplanned_high_intensity_flag(tmp_path, monkeypatch):
     """Even when total TSS lands within tolerance, ≥30 min of unplanned
     high-zone work (Z4+Z5+) trips the overreach flag — that's the user

@@ -108,6 +108,29 @@ def test_the_probe_can_see_a_disagreement(scenario):
     assert len(answers) >= 2, f"only one door was compared: {answers}"
 
 
+# What every GET route did last time this was pinned. A route that stops
+# answering is a bug the probe would otherwise SWALLOW: `probe()` files a 500
+# or a raise under `skipped`, and a gate that only compares the numbers it did
+# get is green when three endpoints break. Reviewed finding: made /api/rides,
+# /api/programme/summary and /api/settings raise, and every quantity test
+# passed in all three states.
+#
+# The counts are reasons, not decoration: "no fixture" means the probe cannot
+# address the route, a 4xx means the fixture has no such object, and binary
+# routes serve files. Any of them turning into a new failure is a real change.
+EXPECTED_UNREACHED = 16
+
+
+def test_no_endpoint_quietly_stops_answering():
+    _observations, skipped = _run("normal")
+    assert len(skipped) == EXPECTED_UNREACHED, (
+        f"{len(skipped)} routes did not answer, expected {EXPECTED_UNREACHED}:\n"
+        + "\n".join(f"    {path}: {why}" for path, why in sorted(skipped)))
+    broken = [(path, why) for path, why in skipped
+              if why.startswith("raised") or why.startswith("HTTP 5")]
+    assert broken == [], f"endpoints failing outright: {broken}"
+
+
 def test_the_probe_reaches_the_endpoints_a_rider_reads():
     """Coverage, pinned. Silence is indistinguishable from agreement, so the
     readers a rider actually looks at have to be contributing numbers -- when

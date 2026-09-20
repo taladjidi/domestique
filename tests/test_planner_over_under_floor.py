@@ -99,16 +99,29 @@ def _build_seen(seed_salt: int) -> set:
     return seen
 
 
-@pytest.mark.parametrize("seed_salt", _SEEDS)
-@pytest.mark.xfail(
-    strict=False,
-    reason="v3.0.0 audit finding (pinned, reproducible): the sampler's hard-type "
-           "balance drifted — build weeks emit vo2max:9 / threshold:1 / sweetspot:1 "
-           "(measured, seed 1, pinned env), so the canonical-4 coverage floor "
-           "can't hold. PRE-DATES the event-fix wave (fails identically at the "
-           "prior HEAD). Tracked for a sampler root-cause fix; the over_under "
-           "floor itself still asserts green below.",
-)
+# The seeds where the canonical-4 coverage floor still does not hold. Measured
+# on 2026-09-20: nine of the twelve seeds now PASS, and a blanket
+# `xfail(strict=False)` over all of them meant none could ever fail the build
+# again -- including the nine that had quietly started working. Listed
+# individually and STRICT, so a seed that starts passing has to be struck from
+# this list, and one that regresses turns the build red.
+#
+# The original finding (v3.0.0): the sampler's hard-type balance drifted, so
+# build weeks emitted vo2max:9 / threshold:1 / sweetspot:1 and the floor could
+# not hold. Still true for the three below; the fix is a sampler root cause.
+_SEEDS_WITHOUT_THE_FULL_ROTATION = {42, 8675, 31415}
+
+
+def _seed_param(seed):
+    marks = [pytest.mark.xfail(
+        strict=True,
+        reason="sampler hard-type balance (v3.0.0): the canonical-4 rotation "
+               "does not appear for this seed")] if (
+        seed in _SEEDS_WITHOUT_THE_FULL_ROTATION) else []
+    return pytest.param(seed, marks=marks)
+
+
+@pytest.mark.parametrize("seed_salt", [_seed_param(s) for s in _SEEDS])
 def test_over_under_and_all_four_hard_types_present(seed_salt):
     """over_under + the full canonical 4-shape rotation appear in build1+build2
     for every tested seed."""

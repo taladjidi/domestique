@@ -373,15 +373,34 @@ def check_easy_slot_content(weeks) -> list[Violation]:
 
 
 def check_hard_share(weeks, rides=None, today=None, tolerance=1.10) -> list[Violation]:
-    """Hard work stays within its share of the week's budget, outside the taper."""
+    """Hard work stays within its share of the week's budget, outside the taper.
+
+    A PARTLY RIDDEN week is judged whole. The share is a property of the week,
+    not of whatever is left of it: once the rider has done the easy volume,
+    the days that remain are naturally the hard ones, and grading the
+    remainder alone calls a normal week a violation. A mid-week replan made
+    this visible -- carrying the elapsed days back into the week (so every
+    reader covers the same days) also handed this rule a remainder to judge,
+    and three of the characterization's riders failed a week they had ridden
+    correctly.
+
+    So when today falls inside the week, the comparison is the hard work of
+    the WHOLE week -- ridden and still to come -- against the week's own ask.
+    """
     out = []
     for w in _weeks_ahead(weeks, today):
         if str(getattr(w, "phase", "")).lower() == "taper":
             continue
-        ceil = budget(w, rides, today)
+        partly_ridden = today is not None and w.start < today <= w.end
+        if partly_ridden:
+            ceil = float(getattr(w, "tss_target", 0) or 0)
+            hard = sum(float(s.tss_estimate or 0) for s in w.sessions
+                       if _hard(s) and not _is_race(s))
+        else:
+            ceil = budget(w, rides, today)
+            hard = _load(w, rides, today, hard_only=True)
         if ceil < 60:
             continue
-        hard = _load(w, rides, today, hard_only=True)
         if hard > HARD_SHARE * ceil * tolerance:
             out.append(Violation(
                 "hard_share", w.week_num,

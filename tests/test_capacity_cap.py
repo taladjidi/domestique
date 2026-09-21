@@ -99,11 +99,71 @@ class TestCapRatioUnit:
             assert r >= C.VO2_FLOOR - 1e-9
             assert r < 1.19
 
-    def test_boundary_continuity_at_120s_and_120ratio(self):
-        # Just inside the qualification boundary produces a cap or None, but
-        # never an exception, and the transition is not a cliff.
-        for t in (119, 120):
-            C._cap_ratio(1.25, t, FTP, CP, PMAX_LOW)  # no raise
+    def test_the_120s_edge_is_a_step_and_this_is_how_big(self):
+        """The old version of this test called _cap_ratio twice and asserted
+        NOTHING, under a comment claiming "the transition is not a cliff".
+
+        Measuring it: the transition IS a cliff, because t > QUAL_MAX_ON_S
+        leaves the rep untouched while t == QUAL_MAX_ON_S caps it. That is the
+        qualification window working as designed -- but the SIZE of the step
+        is rider-visible and nothing pinned it, so the comment was free to be
+        wrong for as long as it liked.
+        """
+        edge = C.QUAL_MAX_ON_S
+        inside = C._cap_ratio(1.25, edge, FTP, CP, PMAX_LOW)
+        outside = C._cap_ratio(1.25, edge + 0.1, FTP, CP, PMAX_LOW)
+        assert inside is not None, "a rep AT the window edge must still qualify"
+        assert outside is None, "a rep past the window edge must not be touched"
+        # effective prescription each side of the edge
+        step = 1.25 - inside
+        assert step > 0.3, (
+            f"the step at t={edge}s is {step:.3f}x FTP. If a change made it "
+            f"small, the window or the envelope moved -- say which in the "
+            f"commit message.")
+
+    def test_approaching_the_edge_from_inside_is_smooth(self):
+        """Within the window the cap IS continuous in t -- that half of the
+        old comment was true, and is now actually checked."""
+        caps = [C._cap_ratio(1.25, t, FTP, CP, PMAX_LOW)
+                for t in (100, 105, 110, 115, 119, 120)]
+        assert all(c is not None for c in caps)
+        assert caps == sorted(caps, reverse=True), "cap must fall as t grows"
+        steps = [abs(b - a) for a, b in zip(caps, caps[1:])]
+        assert max(steps) < 0.02, f"jump inside the window: {steps}"
+
+    def test_the_ratio_edge_is_not_a_cliff(self):
+        """The other half of the old comment. Crossing QUAL_RATIO does not
+        jump, because a rep just over it is still within TOO_HARD * envelope
+        and so is left alone."""
+        lo = C._cap_ratio(C.QUAL_RATIO - 1e-6, 30, FTP, CP, PMAX_LOW)
+        hi = C._cap_ratio(C.QUAL_RATIO + 1e-6, 30, FTP, CP, PMAX_LOW)
+        assert lo is None and hi is None
+
+    def test_a_two_minute_rep_is_capped_BELOW_ftp(self):
+        """FOUND BY WRITING THE TEST ABOVE, and pinned here because it is
+        current behaviour, not because it is right.
+
+        _is_vo2_rep is `ratio < 1.20`, so the 1.06 floor protects a MILD rep
+        and abandons a hard one: 1.19x floors at 1.06, 1.21x has no floor at
+        all. At 90-120 s the Pmax envelope has decayed to about CP, so
+        CAP_FRAC * env lands under 1.00x -- a 2-minute VO2 rep rewritten to an
+        endurance effort.
+
+        Measured on the live profile (FTP 247, Pmax 1048): 1.21x @ 120 s ->
+        0.88x = 218 W, at every plausible CP.
+
+        If this is fixed -- most likely by flooring every qualifying rep, not
+        just the sub-1.20 ones -- this test fails and should be deleted.
+        """
+        capped = C._cap_ratio(1.21, 120, FTP, CP, PMAX_LOW)
+        assert capped is not None
+        assert capped < 1.0, (
+            "a 2-minute rep is no longer driven below FTP -- if that was "
+            "deliberate, delete this test and say so")
+        # and the mild rep right below the band IS protected, which is the
+        # asymmetry itself
+        mild = C._cap_ratio(1.19, 120, FTP, CP, PMAX_LOW)
+        assert mild is None or mild >= C.VO2_FLOOR - 1e-9
 
 
 class TestCapZwoTextPure:

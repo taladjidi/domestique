@@ -13641,7 +13641,13 @@ def api_plan_daily_adapt():
             return {"action": "no_current_week", "projection_only": True}
 
         actual = _collect_week_activities(current_week, today, include_today=False)
-        _unchanged, info = tp.daily_adapt_plan(current_week, actual, today)
+        # The rider's TSB, from its owner. It was not passed, so the
+        # TSB-aware de-load inside daily_adapt_plan -- ease the hard days when
+        # form is below -30 -- could never fire on the only path that calls
+        # it: the parameter defaulted to None and the branch was dead in
+        # production while every card on the page showed the number.
+        _unchanged, info = tp.daily_adapt_plan(
+            current_week, actual, today, tsb=_fitness_state()["tsb"])
         info["projection_only"] = True  # defensive: re-mark in case caller strips
         return info
 

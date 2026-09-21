@@ -397,9 +397,25 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                 si = w.get("sportInfo") or []
                 eftp = si[0].get("eftp") if len(si) > 0 else None
                 db.execute(
-                    """INSERT OR REPLACE INTO wellness
+                    # An UPSERT that keeps what only Domestique knows, the same
+                    # fix `activities` got for `is_race`. INSERT OR REPLACE is
+                    # a DELETE plus an INSERT on a primary-key conflict, so a
+                    # day intervals.icu has no HRV for wiped the reading the
+                    # rider typed in themselves (/api/wellness/manual-hrv).
+                    # COALESCE is the rule: ICU's value wins when ICU HAS one,
+                    # and silence from ICU is not an answer that overwrites.
+                    """INSERT INTO wellness
                        (date, ctl, atl, hrv, rhr, sleep_secs, sleep_score, eftp, raw_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(date) DO UPDATE SET
+                           ctl         = COALESCE(excluded.ctl, wellness.ctl),
+                           atl         = COALESCE(excluded.atl, wellness.atl),
+                           hrv         = COALESCE(excluded.hrv, wellness.hrv),
+                           rhr         = COALESCE(excluded.rhr, wellness.rhr),
+                           sleep_secs  = COALESCE(excluded.sleep_secs, wellness.sleep_secs),
+                           sleep_score = COALESCE(excluded.sleep_score, wellness.sleep_score),
+                           eftp        = COALESCE(excluded.eftp, wellness.eftp),
+                           raw_json    = excluded.raw_json""",
                     (
                         dt,
                         w.get("ctl"),
@@ -768,10 +784,31 @@ def sync_activities(days: int = 90, _snapshot=None) -> int:
                 calories = a.get("calories")
                 elevation_gain = a.get("total_elevation_gain")
                 db.execute(
-                    """INSERT OR REPLACE INTO activities
+                    # An UPSERT, not INSERT OR REPLACE. On a primary-key
+                    # conflict SQLite implements OR REPLACE as DELETE then
+                    # INSERT, so every column this statement does not name
+                    # went back to its schema default -- and `is_race`, which
+                    # only Domestique knows, was reset to 0 on every sync for
+                    # every ride. Naming the columns intervals.icu owns means
+                    # the local ones are preserved by default, so the next
+                    # locally-decided column cannot be erased by omission.
+                    """INSERT INTO activities
                        (id, date, name, sport, duration_sec, tss, avg_power, avg_hr,
                         distance_km, kilojoules, calories, elevation_gain, raw_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                           date = excluded.date,
+                           name = excluded.name,
+                           sport = excluded.sport,
+                           duration_sec = excluded.duration_sec,
+                           tss = excluded.tss,
+                           avg_power = excluded.avg_power,
+                           avg_hr = excluded.avg_hr,
+                           distance_km = excluded.distance_km,
+                           kilojoules = excluded.kilojoules,
+                           calories = excluded.calories,
+                           elevation_gain = excluded.elevation_gain,
+                           raw_json = excluded.raw_json""",
                     (
                         str(aid),
                         dt,

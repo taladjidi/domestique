@@ -77,6 +77,12 @@ if _REAL_USER_SITE and os.path.isdir(_REAL_USER_SITE):
         if os.environ.get("PYTHONPATH") else "")
 os.environ["HOME"] = _SANDBOX_HOME
 
+# Contract 7.2: the app answers 400 to a Host it does not know. TestClient
+# sends Host "testserver"; allow it here, in the test environment, through
+# the same variable a deployment uses -- never as an app default.
+os.environ["DOMESTIQUE_ALLOWED_HOSTS"] = ",".join(
+    h for h in (os.environ.get("DOMESTIQUE_ALLOWED_HOSTS", ""), "testserver") if h)
+
 import hashlib
 import pathlib
 import pytest

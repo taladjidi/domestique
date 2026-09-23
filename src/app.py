@@ -913,6 +913,43 @@ async def _security_headers(request, call_next):
     return resp
 
 
+# ── Host allow-list (contract 7.2: DNS rebinding) ────────────────────────────
+# A page on attacker.example whose name later resolves to 127.0.0.1 is
+# same-origin with this app in the victim's browser and could read every GET
+# past the nginx login. The Host header is what that request cannot fake.
+# Loopback names on any port are always allowed (the webview, the SSH tunnel,
+# the stack's own jobs on http://127.0.0.1:22400); a reverse proxy's vhost is
+# listed in DOMESTIQUE_ALLOWED_HOSTS (comma-separated; production nginx sends
+# Host: domestique.aladjidi.xyz). Read per request so the deployment's value
+# and the test environment's apply without an import-order dance.
+# Not Starlette's TrustedHostMiddleware: it splits the port off at the first
+# ":", so "[::1]:22400" becomes "[" and IPv6 loopback could not be allowed.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+
+
+def _host_name(host: str) -> str:
+    """The Host header without its port, lowercased ("[::1]:80" -> "[::1]")."""
+    host = host.strip().lower()
+    if host.startswith("["):
+        return host[:host.find("]") + 1] if "]" in host else ""
+    return host.rsplit(":", 1)[0]
+
+
+def _host_allowed(host: str) -> bool:
+    name = _host_name(host)
+    if name in _LOOPBACK_HOSTS:
+        return True
+    extra = os.environ.get("DOMESTIQUE_ALLOWED_HOSTS", "")
+    return bool(name) and name in {_host_name(h) for h in extra.split(",") if h.strip()}
+
+
+@app.middleware("http")
+async def _allowed_host_check(request, call_next):
+    if not _host_allowed(request.headers.get("host", "")):
+        return StarletteJSONResponse({"error": "host not allowed"}, status_code=400)
+    return await call_next(request)
+
+
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 _static_dir = Path(__file__).parent / "static"
 _static_dir.mkdir(exist_ok=True)

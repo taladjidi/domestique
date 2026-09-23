@@ -510,3 +510,27 @@ def test_the_boot_passes_still_heal_the_plan_under_the_guard() -> None:
               if s["day"] > today.isoformat() and s["session_type"] != "rest"]
     assert future and all(s["zwo_file"] for s in future), \
         [s["day"] for s in future if not s["zwo_file"]]
+
+
+def test_the_post_write_callback_runs_inside_update_plans_lock(tmp_path, monkeypatch) -> None:
+    """Fix-forward F8 pins what the comment on post_write_callback says: a
+    write through the store calls it while the plan lock is still held (it
+    read "OUTSIDE the write lock"); a bare atomic_write_plan does not."""
+    p = tmp_path / "current_plan.json"
+    held = []
+
+    def probe(_path):
+        got = []
+
+        def try_take():
+            got.append(tp._plan_write_lock.acquire(timeout=0.2))
+            if got[0]:
+                tp._plan_write_lock.release()
+        t = threading.Thread(target=try_take)
+        t.start()
+        t.join(5)
+        held.append(not got[0])
+    monkeypatch.setattr(tp, "post_write_callback", probe)
+    tp.atomic_write_plan(p, {"v": 1})
+    tp.update_plan(p, lambda plan: {**plan, "v": 2})
+    assert held == [False, True]

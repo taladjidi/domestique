@@ -546,8 +546,12 @@ def _rotate_plan_backups(plan_path: "Path", snapshot: "Path | None" = None) -> N
 # debounced ICU-calendar push scheduler here at boot (AFTER the boot-time
 # restore/rewrite writes); the CLI path never registers, so plain
 # `python training_planner.py` stays network-silent. Called with the plan
-# Path AFTER the atomic rename, OUTSIDE the write lock; failures are logged
-# and swallowed — a broken callback must never break a plan write.
+# Path AFTER the atomic rename, past atomic_write_plan's own hold of the
+# write lock -- but a write through update_plan (every read-modify-write)
+# runs it while update_plan still holds the lock, so it must stay quick and
+# must never wait on another thread that writes the plan (app's callback
+# only re-arms a timer). Failures are logged and swallowed — a broken
+# callback must never break a plan write.
 post_write_callback = None
 
 

@@ -264,26 +264,62 @@ class TestFix4AtomicWrites(unittest.TestCase):
     guard and by ``test_no_inline_tmp_rename_pattern`` below.
     """
 
-    def test_all_sites_use_atomic_write_plan_helper(self):
-        """Every plan-mutation endpoint must call ``tp.atomic_write_plan``
-        instead of inlining tmp+rename. Count 16 (v1.8.24) → 18 (v3.0.0:
-        two new plan-writing endpoints in the hrTSS/event tranches) → 19
-        (v3.2.0: /api/plan/ftp-test-type, the per-session ramp/20-min
-        chooser) → 20 (3.3.1 hotfix B2: /api/plan/re-draw no longer
-        delegates to the legacy rematch-day endpoint — it persists its own
-        accept-redraw apply, correctly through the helper) → 22 (2026-09-16:
-        the legacy /api/plan/rematch/{day} endpoint itself was deleted, no
-        client having called it since re-draw stopped delegating, and its
-        write site went with it)."""
+    def test_every_plan_read_modify_write_goes_through_the_store(self):
+        """Contracts 4.1 / 4.2 (2026-09-23). The count this replaced (22
+        ``tp.atomic_write_plan(json_path, plan)`` sites) was the problem: 24
+        read-modify-writes, 6 of them locked, so a move-session and an
+        auto-recalc racing each other lost one write. Every writer now calls
+        ``tp.update_plan`` (read -> mutate -> write under the plan lock), and
+        no ``async def`` waits on that lock itself -- it calls the store
+        through ``run_in_threadpool``, or a slow writer stalls the event loop.
+
+        What is left of the old primitives in app.py, and why:
+          - the boot-time adoption of the legacy root plan (whole-file copy,
+            before the server serves) takes ``plan_write_lock()``;
+          - ``_generate_into_store`` replaces an UNREADABLE plan (generate is
+            the action that repairs it), under the lock, from a sync def."""
+        import ast
         src = APP_PY.read_text()
-        helper_calls = re.findall(
-            r"tp\.atomic_write_plan\(\s*json_path\s*,\s*(plan|plan_dict)\s*\)",
-            src,
-        )
-        self.assertEqual(
-            len(helper_calls), 22,  # -1: the deleted rematch-day endpoint
-            f"Expected 22 tp.atomic_write_plan() sites, found {len(helper_calls)}",
-        )
+        tree = ast.parse(src)
+        lock_or_write = {"atomic_write_plan", "plan_write_lock", "update_plan"}
+
+        def _tp_calls(node):
+            for n in ast.walk(node):
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and isinstance(n.func.value, ast.Name) and n.func.value.id == "tp"
+                        and n.func.attr in lock_or_write):
+                    yield n.func.attr, n.lineno
+
+        # 1. No async def (nested defs included) calls the blocking primitives.
+        on_the_loop = []
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.AsyncFunctionDef):
+                # the coroutine's own statements; nested defs run elsewhere
+                stack = list(fn.body)
+                while stack:
+                    n = stack.pop()
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                        continue
+                    if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                            and isinstance(n.func.value, ast.Name) and n.func.value.id == "tp"
+                            and n.func.attr in lock_or_write):
+                        on_the_loop.append(f"{fn.name}:{n.lineno} tp.{n.func.attr}")
+                    stack.extend(ast.iter_child_nodes(n))
+        self.assertEqual(on_the_loop, [], "blocking plan-store call on the event loop")
+
+        # 2. atomic_write_plan / plan_write_lock survive only where named above.
+        allowed = {"_adopt_legacy_root_plan", "_generate_into_store"}
+        stray = []
+        for fn in tree.body:
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name not in allowed:
+                for name, line in _tp_calls(fn):
+                    if name in ("atomic_write_plan", "plan_write_lock"):
+                        stray.append(f"{fn.name}:{line} tp.{name}")
+        self.assertEqual(stray, [], "a plan write outside the store")
+
+        # 3. ...and the store is what the writers use.
+        store_calls = len(re.findall(r"tp\.update_plan\b", src))
+        self.assertGreaterEqual(store_calls, 20, store_calls)
 
     def test_no_inline_tmp_rename_pattern(self):
         """v1.6.2: the legacy inline ``tmp_path = json_path.with_suffix('.tmp')``

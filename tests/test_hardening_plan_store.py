@@ -146,12 +146,6 @@ def test_rewrite_stale_does_not_overwrite_a_concurrent_write(tmp_path, monkeypat
 
 # ── the app-level contract (Wave 2) ──────────────────────────────────────────
 
-WAVE2 = pytest.mark.xfail(
-    strict=True,
-    reason="Wave 2: app.py's plan writers move onto tp.update_plan "
-           "(notes/hardening-interfaces-planio.md); remove this marker then")
-
-
 def _week(monday, n):
     types = ["rest", "z2", "tempo", "z2", "rest", "long_z2", "rest"]
     dur = [0, 60, 75, 60, 0, 120, 0]
@@ -190,7 +184,6 @@ def app_plan(tmp_path, monkeypatch):
     return A, jp, src, dst, moved_on_disk
 
 
-@WAVE2
 def test_move_racing_auto_recalc_both_persist(app_plan, monkeypatch) -> None:
     """4.1: auto-recalc (threadpool) is inside its rebuild when a
     move-session arrives; after both return, the move is on disk."""
@@ -225,7 +218,6 @@ def test_move_racing_auto_recalc_both_persist(app_plan, monkeypatch) -> None:
         "the recalc was overwritten by the move's stale copy"
 
 
-@WAVE2
 def test_event_loop_answers_while_a_slow_writer_holds_the_plan(app_plan) -> None:
     """4.2: a move-session waiting on the plan lock must wait in the
     threadpool, not on the event loop: /api/version answers in < 0.5 s."""

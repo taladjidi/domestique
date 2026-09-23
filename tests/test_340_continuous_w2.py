@@ -299,11 +299,23 @@ class DeloadAdvanceBase(unittest.TestCase):
         return p
 
     def _advance(self, plan, rides):
+        """As its caller (_maybe_auto_reforecast) runs it since contract 4.1:
+        inside the plan store's read-modify-write, which persists what the
+        helper put in the plan it was handed."""
         path = self._write(plan)
+        out = {}
+
+        def _m(p):
+            before = p.get("deload_advance")
+            out["chip"] = app_module._maybe_advance_continuous_deload(
+                p, path, today=self.today)
+            return p if p.get("deload_advance") is not before else None
+
         with patch.object(app_module, "_load_all_rides_safe", return_value=rides):
-            chip = app_module._maybe_advance_continuous_deload(
-                plan, path, today=self.today)
-        return chip, path
+            tp.update_plan(path, _m)
+        plan.clear()
+        plan.update(json.loads(path.read_text()))
+        return out["chip"], path
 
 
 class TestTodayCardShowsTheFreshDeload(DeloadAdvanceBase):

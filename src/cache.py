@@ -44,6 +44,23 @@ def _defensive_copy(value):
     return value
 
 
+class Unavailable(dict):
+    """An empty answer that means "could not ask", not "there is nothing".
+
+    A fill function returns this instead of raising when its own callers
+    need an empty dict (training.get_today_metrics: the planner calls it
+    directly and tests `if not metrics`). The cache treats it as a failed
+    fill -- stale value served, failure held 30 s -- where a plain `{}` is
+    stored as the answer. Without it, one intervals.icu blip replaced the
+    last good CTL/ATL with `{}` for the full 300 s TTL (audit 2026-09-23,
+    integ #3).
+    """
+
+
+class _FillFailed(Exception):
+    pass
+
+
 _locks: dict = {}
 _locks_guard = threading.Lock()
 
@@ -74,6 +91,8 @@ def _fill(key, fn, ttl):
         return _defensive_copy(_cache[key])
     try:
         result = fn()
+        if isinstance(result, Unavailable):
+            raise _FillFailed(f"{key}: the fill could not reach its source")
     except Exception as e:
         # If API call fails (no internet, DNS error), return stale cache.
         if key in _cache:

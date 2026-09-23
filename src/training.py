@@ -759,8 +759,11 @@ def compute_monotony_strain(wellness: list[dict]) -> tuple[float | None, float |
 def get_today_metrics() -> dict:
     """Return all training load metrics for today.
 
-    Returns {} gracefully if ICU credentials are missing, or on any ICU API
-    failure — FastAPI callers want a no-data result, not a 500.
+    Returns {} if ICU credentials are missing (the true answer: no data),
+    and cache.Unavailable() -- also an empty dict, so `if not metrics` reads
+    it as no data -- on an ICU API failure, so the `training` cache serves
+    its last good value instead of storing the failure as the answer.
+    FastAPI callers want a no-data result, not a 500.
     """
     try:
         _require_credentials()
@@ -770,7 +773,8 @@ def get_today_metrics() -> dict:
         wellness = fetch_wellness(days=42)
     except (ICUAuthError, ICURateLimitError, ICUServerError, ICUNetworkError) as e:
         _log.warning("get_today_metrics: ICU fetch failed (%s) — returning empty", e)
-        return {}
+        from cache import Unavailable
+        return Unavailable()
     if not wellness:
         return {}
 

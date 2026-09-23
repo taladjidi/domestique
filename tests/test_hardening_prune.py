@@ -31,6 +31,15 @@ from profile_manager import ProfileManager
 
 # ── the pruner on its own ────────────────────────────────────────────────────
 
+
+def _drop_icu_creds():
+    for k in ("ICU_ATHLETE_ID", "ICU_API_KEY"):
+        try:
+            delattr(config, k)
+        except AttributeError:
+            pass
+
+
 @pytest.fixture()
 def icu_dir(tmp_path, monkeypatch):
     d = tmp_path / "rides" / "icu"
@@ -94,9 +103,13 @@ def test_a_real_upstream_deletion_is_still_pruned(icu_dir):
 # ── the fetch no longer turns a failure into [] ──────────────────────────────
 
 @pytest.fixture()
-def creds(monkeypatch):
-    monkeypatch.setattr(config, "ICU_ATHLETE_ID", "i1", raising=False)
-    monkeypatch.setattr(config, "ICU_API_KEY", "k", raising=False)
+def creds(monkeypatch, request):
+    # Not monkeypatch.setattr: config resolves ICU_* through a module
+    # __getattr__, so monkeypatch would record the RESOLVED value and restore
+    # it as a real attribute, shadowing the resolver for every later test
+    # (it made test_issue11's run_sync skip for want of an athlete id).
+    config.ICU_ATHLETE_ID, config.ICU_API_KEY = "i1", "k"
+    request.addfinalizer(_drop_icu_creds)
 
 
 @pytest.mark.parametrize("body", [None, {"error": "x"}, "oops", 7],

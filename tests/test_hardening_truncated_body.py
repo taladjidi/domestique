@@ -33,10 +33,22 @@ class _Resp:
         raise self.exc
 
 
+def _drop_icu_creds():
+    for k in ("ICU_ATHLETE_ID", "ICU_API_KEY"):
+        try:
+            delattr(config, k)
+        except AttributeError:
+            pass
+
+
 @pytest.fixture()
-def wired(monkeypatch):
-    monkeypatch.setattr(config, "ICU_ATHLETE_ID", "i1", raising=False)
-    monkeypatch.setattr(config, "ICU_API_KEY", "k", raising=False)
+def wired(monkeypatch, request):
+    # Not monkeypatch.setattr: config resolves ICU_* through a module
+    # __getattr__, so monkeypatch would record the RESOLVED value and restore
+    # it as a real attribute, shadowing the resolver for every later test
+    # (it made test_issue11's run_sync skip for want of an athlete id).
+    config.ICU_ATHLETE_ID, config.ICU_API_KEY = "i1", "k"
+    request.addfinalizer(_drop_icu_creds)
     monkeypatch.setattr(tr.time, "sleep", lambda s: None)
     calls = []
 

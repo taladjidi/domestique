@@ -659,8 +659,9 @@ def _extract_efforts_from_streams(streams: dict) -> list[dict]:
 
 def _mark_no_streams(ride_path: Path, data: dict, sync_snapshot=None) -> None:
     """3.4.1 ① — persist a TERMINAL ``no_streams_available`` marker on the
-    envelope when a backfill pass could not derive efforts for the ride
-    (fetch raised / ICU returned an empty envelope / no watts channel).
+    envelope when intervals.icu answered and a backfill pass still could not
+    derive efforts for the ride (not found / no data / an empty envelope /
+    no watts channel). A fetch that could not ask is never marked.
 
     ``_needs_refetch`` returns False for marked rides and
     ``count_rides_missing_efforts`` counts them as done, so the cached-%
@@ -876,9 +877,9 @@ def backfill_icu_history(profile_id: "str | None" = None,
     try:
         # ICU fetcher — patched in tests.
         try:
-            from training import fetch_activity_streams
+            from training import fetch_activity_streams_result
         except Exception:
-            fetch_activity_streams = None  # type: ignore[assignment]
+            fetch_activity_streams_result = None  # type: ignore[assignment]
 
         delay = 1.0 / max(1, int(max_per_second))
         last_call = 0.0
@@ -916,21 +917,26 @@ def backfill_icu_history(profile_id: "str | None" = None,
                 time.sleep(wait)
             last_call = time.time()
 
-            # 3.4.1 ① — all three failure paths below persist the terminal
-            # no_streams_available marker so the ride counts as DONE from
-            # now on (see _mark_no_streams). Previously nothing was written:
-            # the ride stayed "needs refetch" forever, the cached-% never
-            # reached 100, and every GET relaunched the worker over the
-            # same dead rides.
+            # 3.4.1 ① — when intervals.icu ANSWERED with nothing usable
+            # (not found, no data, an empty envelope, no watts) the ride
+            # gets the terminal no_streams_available marker so it counts as
+            # DONE from now on (see _mark_no_streams). Previously nothing was
+            # written: the ride stayed "needs refetch" forever, the cached-%
+            # never reached 100, and every GET relaunched the worker over
+            # the same dead rides. A fetch that could not ask (network,
+            # 429, 5xx) marks nothing: marking it blanked the ride's power
+            # curve forever after a Wi-Fi blip (fix-forward F2).
             streams = None
-            if fetch_activity_streams is not None:
+            if fetch_activity_streams_result is not None:
                 try:
-                    streams = fetch_activity_streams(str(ext))
-                except Exception as e:
+                    r = fetch_activity_streams_result(str(ext))
+                except Exception as e:  # noqa: BLE001 — could not ask: retry
+                    r = None
                     log.warning(f"backfill: streams fetch {ext} failed: {e}")
-                    _mark_no_streams(ride_path, data, sync_snapshot)
+                if r is None or r.status == "failed":
                     failed += 1
                     continue
+                streams = r.data if r.status == "ok" else None
             if not isinstance(streams, dict) or not streams:
                 _mark_no_streams(ride_path, data, sync_snapshot)
                 failed += 1

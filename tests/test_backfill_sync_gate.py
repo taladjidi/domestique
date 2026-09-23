@@ -56,10 +56,10 @@ def test_profile_flip_mid_backfill_stops_writes(rides_dir, monkeypatch):
             # Identity flips between fetch #2 and its write — the gate must
             # refuse that write and every one after it.
             db._sync_epoch += 1
-        return {"watts": [200, 500], "time": [0, 1]}
+        return training.Fetched("ok", {"watts": [200, 500], "time": [0, 1]})
 
     import training
-    monkeypatch.setattr(training, "fetch_activity_streams", fake_streams)
+    monkeypatch.setattr(training, "fetch_activity_streams_result", fake_streams)
 
     snap = db.snapshot_sync_identity()
     result = power_curve.backfill_icu_history(sync_snapshot=snap)
@@ -75,8 +75,8 @@ def test_no_flip_backfills_everything_gated(rides_dir, monkeypatch):
     for i in range(3):
         _mk_envelope(rides_dir, f"ride_{i}.json", f"i{i}")
     import training
-    monkeypatch.setattr(training, "fetch_activity_streams",
-                        lambda ext: {"watts": [200, 500], "time": [0, 1]})
+    monkeypatch.setattr(training, "fetch_activity_streams_result",
+                        lambda ext: training.Fetched("ok", {"watts": [200, 500], "time": [0, 1]}))
 
     result = power_curve.backfill_icu_history(
         sync_snapshot=db.snapshot_sync_identity())
@@ -88,8 +88,8 @@ def test_no_flip_backfills_everything_gated(rides_dir, monkeypatch):
 def test_no_snapshot_keeps_legacy_ungated_path(rides_dir, monkeypatch):
     _mk_envelope(rides_dir, "ride_0.json", "i0")
     import training
-    monkeypatch.setattr(training, "fetch_activity_streams",
-                        lambda ext: {"watts": [200, 500], "time": [0, 1]})
+    monkeypatch.setattr(training, "fetch_activity_streams_result",
+                        lambda ext: training.Fetched("ok", {"watts": [200, 500], "time": [0, 1]}))
 
     result = power_curve.backfill_icu_history()  # sync_snapshot=None
 

@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 import app as app_module
 import power_curve
+import training
 from fitness_estimation import STANDARD_DURATIONS
 
 
@@ -222,7 +223,8 @@ class BackfillEndToEndTests(unittest.TestCase):
         def _streams(_id):
             return {"watts": powers, "heartrate": hrs}
 
-        with patch("training.fetch_activity_streams", side_effect=_streams):
+        with patch("training.fetch_activity_streams_result",
+                   side_effect=lambda _id: training.Fetched("ok", _streams(_id))):
             # Kick off the backfill via the POST endpoint.
             r_post = self.client.post("/api/profile/backfill-history")
             self.assertEqual(r_post.status_code, 200)

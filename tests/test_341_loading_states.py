@@ -133,7 +133,7 @@ def rides_dir(tmp_path, monkeypatch):
 
 def test_backfill_marks_all_three_failure_paths_terminal(rides_dir,
                                                          monkeypatch):
-    """fetch-raises / empty-envelope / no-derivable-efforts each persist the
+    """not-found / empty-envelope / no-derivable-efforts each persist the
     marker; a second pass touches NONE of them (already_cached) — the
     infinite relaunch loop dies at the source."""
     import power_curve
@@ -148,12 +148,12 @@ def test_backfill_marks_all_three_failure_paths_terminal(rides_dir,
     def fake_streams(ext):
         calls["n"] += 1
         if ext == "i1":
-            raise RuntimeError("ICU 404")
+            return training.Fetched("not_found")        # ICU 404
         if ext == "i2":
-            return {}                       # ICU empty envelope
-        return {"watts": [], "time": []}    # no watts → no efforts
+            return training.Fetched("ok", {})           # ICU empty envelope
+        return training.Fetched("ok", {"watts": [], "time": []})  # no watts → no efforts
 
-    monkeypatch.setattr(training, "fetch_activity_streams", fake_streams)
+    monkeypatch.setattr(training, "fetch_activity_streams_result", fake_streams)
 
     result = power_curve.backfill_icu_history(max_per_second=1000)
     assert result["failed"] == 3
@@ -184,8 +184,8 @@ def test_successful_fetch_heals_stale_marker(rides_dir, monkeypatch):
                      streams_fetch_failed_at="2026-07-01T00:00:00Z")
     # Force the pass to reconsider it (marker normally short-circuits).
     monkeypatch.setattr(power_curve, "_needs_refetch", lambda _p: True)
-    monkeypatch.setattr(training, "fetch_activity_streams",
-                        lambda ext: {"watts": [200, 500], "time": [0, 1]})
+    monkeypatch.setattr(training, "fetch_activity_streams_result",
+                        lambda ext: training.Fetched("ok", {"watts": [200, 500], "time": [0, 1]}))
     result = power_curve.backfill_icu_history(max_per_second=1000)
     assert result["backfilled"] == 1
     data = json.loads(p.read_text(encoding="utf-8"))

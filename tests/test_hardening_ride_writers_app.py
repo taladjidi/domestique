@@ -153,8 +153,8 @@ def test_rider_input_saved_during_the_dfa_fetch_survives_its_write_back(ride, mo
 
 def test_rider_input_saved_during_a_power_curve_backfill_survives_it(ride, monkeypatch):
     n = 700
-    paused, release = _pause_inside(monkeypatch, tr, "fetch_activity_streams",
-                                    {"watts": [200] * n, "heartrate": [140] * n})
+    paused, release = _pause_inside(monkeypatch, tr, "fetch_activity_streams_result",
+                                    tr.Fetched("ok", {"watts": [200] * n, "heartrate": [140] * n}))
     c = TestClient(app_module.app)
     _while_paused(paused, release,
                   lambda: power_curve.backfill_icu_history("default", max_per_second=100),
@@ -163,15 +163,59 @@ def test_rider_input_saved_during_a_power_curve_backfill_survives_it(ride, monke
     assert rec.get("efforts"), "the backfill's own merge was lost"
 
 
-def test_rider_input_saved_during_a_failed_backfill_fetch_survives_the_marker(ride, monkeypatch):
-    paused, release = _pause_inside(monkeypatch, tr, "fetch_activity_streams",
-                                    RuntimeError("503"))
+@pytest.mark.parametrize("gated", [False, True])
+def test_rider_input_saved_during_a_failed_backfill_fetch_survives_the_marker(ride, monkeypatch, gated):
+    """Both write paths of _mark_no_streams (with and without the sync
+    gate) merge the marker into the record as it is now. The gated one
+    was untested: writing its stale copy there failed nothing (fix-forward
+    F2 evaluator)."""
+    paused, release = _pause_inside(monkeypatch, tr, "fetch_activity_streams_result",
+                                    tr.Fetched("not_found"))
     c = TestClient(app_module.app)
+    snap = db.snapshot_sync_identity() if gated else None
     _while_paused(paused, release,
-                  lambda: power_curve.backfill_icu_history("default", max_per_second=100),
+                  lambda: power_curve.backfill_icu_history(
+                      "default", max_per_second=100, sync_snapshot=snap),
                   lambda: _rate_and_review(c))
     rec = _assert_rider_input_kept(ride)
     assert rec.get("no_streams_available") is True
+
+
+@pytest.mark.parametrize("status,terminal", [
+    ("not_found", True),    # 404/410: intervals.icu says it is gone
+    ("no_data", True),      # 422 & co: it exists, we cannot have its streams
+    ("failed", False),      # network, timeout, 429, 5xx: ask again next pass
+])
+def test_only_an_answer_marks_a_ride_as_having_no_streams(ride, monkeypatch, status, terminal):
+    monkeypatch.setattr(tr, "fetch_activity_streams_result", lambda _id: tr.Fetched(status))
+    r = power_curve.backfill_icu_history("default", max_per_second=100)
+    rec = json.loads(ride.read_text())
+    assert (rec.get("no_streams_available") is True) is terminal, rec
+    assert r["failed"] == 1
+
+
+def test_a_network_blip_does_not_blank_the_power_curve_forever(ride, monkeypatch):
+    """Fix-forward F2 (the evaluator's p_pc_terminal): the backfill used the
+    legacy fetch_activity_streams (None on ANY failure) and stamped the
+    terminal no_streams_available on a network error, so the ride never
+    got a power curve. A failed fetch is now retried by the next pass."""
+    monkeypatch.setattr(tr, "_require_credentials", lambda: None)
+    n = 700
+
+    def down(path, params=None):
+        raise tr.ICUNetworkError("URL error: Network is unreachable")
+
+    def up(path, params=None):
+        return [{"type": "watts", "data": [200 + i % 50 for i in range(n)]},
+                {"type": "time", "data": list(range(n))}]
+    monkeypatch.setattr(tr, "_get", down)
+    power_curve.backfill_icu_history("default", max_per_second=100)
+    rec = json.loads(ride.read_text())
+    assert rec.get("no_streams_available") is not True, "a network blip was marked terminal"
+    monkeypatch.setattr(tr, "_get", up)
+    power_curve.backfill_icu_history("default", max_per_second=100)
+    rec = json.loads(ride.read_text())
+    assert rec.get("efforts") and (rec.get("streams") or {}).get("watts")
 
 
 def test_rider_input_saved_during_the_lazy_pr_compute_survives_its_persist(ride, monkeypatch):

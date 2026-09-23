@@ -38,6 +38,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import power_curve
+import training
 from fitness_estimation import STANDARD_DURATIONS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -394,13 +395,13 @@ class BackfillTests(unittest.TestCase):
         ride["streams"] = {"watts": [200] * 60, "heartrate": [140] * 60}
         _write_rides_to_dir([ride], self._tmp_rides)
 
-        # No streams fetcher should ever be called — patch fetch_activity_streams
+        # No streams fetcher should ever be called — patch fetch_activity_streams_result
         # to raise to make the test loud if backfill misclassifies coverage.
         called = []
         def _fail_streams(_id):
             called.append(_id)
             raise AssertionError(f"streams fetched for {_id} despite full coverage")
-        with patch("training.fetch_activity_streams", side_effect=_fail_streams):
+        with patch("training.fetch_activity_streams_result", side_effect=_fail_streams):
             result = power_curve.backfill_icu_history("default", max_per_second=100)
 
         self.assertEqual(result["status"], "ok")
@@ -445,7 +446,8 @@ class BackfillTests(unittest.TestCase):
                 raise OSError("simulated crash mid-rename")
             return real_replace(src, dst)
 
-        with patch("training.fetch_activity_streams", side_effect=_streams), \
+        with patch("training.fetch_activity_streams_result",
+                   side_effect=lambda _id: training.Fetched("ok", _streams(_id))), \
              patch("os.replace", side_effect=_broken_replace):
             result = power_curve.backfill_icu_history("default", max_per_second=100)
 
@@ -489,7 +491,8 @@ class BackfillTests(unittest.TestCase):
             n = 700
             return {"watts": [200] * n, "heartrate": [140] * n}
 
-        with patch("training.fetch_activity_streams", side_effect=_streams):
+        with patch("training.fetch_activity_streams_result",
+                   side_effect=lambda _id: training.Fetched("ok", _streams(_id))):
             result = power_curve.backfill_icu_history("default", max_per_second=100)
 
         self.assertEqual(result["status"], "ok")

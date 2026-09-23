@@ -11,6 +11,10 @@ from __future__ import annotations
 import clock  # the one clock every module reads (see src/clock.py)
 import json
 import logging
+import os
+import re
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -150,6 +154,109 @@ def _wellness_dir() -> Path:
     base = _active_profile_dir() / "wellness"
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+# ── the one writer path for ride records ────────────────────────────────────
+# Every ride record (icu/<id>.json, a FIT's <stem>.load.json) is written by a
+# locked read -> mutate -> temp file -> os.replace. Before, each writer did
+# its own read and `write_text` with no lock (audit 2026-09-23, data #2):
+# persist_icu_activity's second write, from its own copy, erased an RPE the
+# rider saved while PRs were computing; the DFA write-back did the same over
+# up to 45 s of fetches; and write_text truncates first, so a concurrent
+# reader (or a crash) got an empty or torn file.
+# ponytail: one lock per record path for the life of the process -- a few
+# thousand small objects at most; evict if archives ever reach 10^5 rides.
+_record_locks: dict = {}
+_record_locks_guard = threading.Lock()
+
+
+def _record_lock(path: Path) -> "threading.RLock":
+    key = str(path)
+    with _record_locks_guard:
+        lock = _record_locks.get(key)
+        if lock is None:
+            lock = _record_locks[key] = threading.RLock()
+        return lock
+
+
+def _write_json_atomic(path: Path, data) -> None:
+    """Unique temp file in the same directory, fsync, os.replace: a reader
+    sees the old record or the new one, never a partial one. The temp name
+    starts with "." and ends ".tmp", so no `*.json` listing picks it up."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def update_json_record(path: Path, mutator) -> "dict | None":
+    """Locked read-modify-write of one record file.
+
+    ``mutator(current)`` gets the parsed record (None when the file is absent
+    or unreadable) and returns the record to write, or None to write nothing.
+    Returns what was written, or None. A failed write raises and leaves the
+    file as it was.
+    """
+    path = Path(path)
+    with _record_lock(path):
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = None
+        if current is not None and not isinstance(current, dict):
+            current = None
+        new = mutator(current)
+        if new is None:
+            return None
+        _write_json_atomic(path, new)
+        return new
+
+
+_RIDE_ID_RE = re.compile(r"^[\w\-]{1,80}$")
+
+
+def ride_record_path(ride_id) -> "Path | None":
+    """The file that holds a ride's record: ``icu_<id>`` or a bare ICU id ->
+    ``rides/icu/<id>.json``; ``fit_<stem>`` -> the FIT's load sidecar.
+    None for a malformed id, no active profile, or a FIT that does not
+    exist. The ICU record need not exist (update_ride's mutator sees None)."""
+    if not isinstance(ride_id, str) or not _RIDE_ID_RE.match(ride_id):
+        return None
+    try:
+        if ride_id.startswith("fit_"):
+            fit = _fit_rides_dir() / f"{ride_id[4:]}.fit"
+            return _fit_load_sidecar_path(fit) if fit.exists() else None
+        ext = ride_id[4:] if ride_id.startswith("icu_") else ride_id
+        return _icu_rides_dir() / f"{ext}.json" if ext else None
+    except RuntimeError:
+        return None  # no active profile
+
+
+def update_ride(ride_id, mutator) -> "dict | None":
+    """THE writer for a ride record that already exists: the rider's RPE and
+    FTP-test verdict, DFA results, PRs, a sync's re-persist.
+
+    ``mutator(record) -> record | None`` runs under the record's lock on a
+    fresh read, so it must be quick: fetch and compute first, then merge the
+    result in here. It is never called for a missing record (a ride that
+    does not exist cannot be updated -- create it with persist_icu_activity).
+    Returns the written record, or None when nothing was written.
+    """
+    path = ride_record_path(ride_id)
+    if path is None:
+        return None
+    return update_json_record(
+        path, lambda cur: None if cur is None else mutator(cur))
 
 
 def _pick_first(d: dict, *keys):
@@ -709,17 +816,16 @@ def backfill_icu_sports_from_db() -> int:
         # contexted sync heal.
         return 0
     healed = 0
+
+    def _heal(data):
+        if data is None or data.get("sport"):
+            return None
+        sport = sport_by_id.get(str(data.get("external_id") or p.stem))
+        return {**data, "sport": sport} if sport else None
     for p in icu_dir.glob("*.json"):
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or data.get("sport"):
-                continue
-            sport = sport_by_id.get(str(data.get("external_id") or p.stem))
-            if not sport:
-                continue
-            data["sport"] = sport
-            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            healed += 1
+            if update_json_record(p, _heal) is not None:
+                healed += 1
         except Exception as e:  # noqa: BLE001 — skip the file, heal the rest
             log.debug(f"sport backfill: {p.name}: {e}")
     # Stamp the marker only when every envelope now carries a sport — a
@@ -771,76 +877,78 @@ def persist_icu_activity(activity: dict, carry_hydrated: bool = True) -> Path | 
     # augment budget then only recomputed a few, collapsing the DFA threshold
     # aggregate to "no thresholds detected". Carrying them forward keeps the
     # augment's sticky-skip working too (already-computed rides stay fast).
-    prior_prs = None
-    prior_dfa: dict = {}
-    if path.exists():
-        try:
-            prior = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(prior, dict):
-                if isinstance(prior.get("prs"), list):
-                    prior_prs = prior["prs"]
-                for k in _DFA_CARRY_KEYS:
+    def _carry(prior):
+        # Runs under the record's lock (update_json_record), on the record as
+        # it is on disk NOW -- not a copy read before the fetch.
+        prior_prs = None
+        prior_dfa: dict = {}
+        if isinstance(prior, dict):
+            if isinstance(prior.get("prs"), list):
+                prior_prs = prior["prs"]
+            for k in _DFA_CARRY_KEYS:
+                if prior.get(k) is not None:
+                    prior_dfa[k] = prior[k]
+            if carry_hydrated:
+                for k in _BACKFILL_CARRY_KEYS:
                     if prior.get(k) is not None:
                         prior_dfa[k] = prior[k]
-                if carry_hydrated:
-                    for k in _BACKFILL_CARRY_KEYS:
-                        if prior.get(k) is not None:
-                            prior_dfa[k] = prior[k]
-                    # `efforts` IS a norm key (ICU intervals-derived), so
-                    # setdefault can't carry it — but the backfill's version
-                    # (derived from full 1 Hz streams) is strictly richer
-                    # than a fresh payload's empty list. Only prefer prior
-                    # when the fresh normalization produced nothing.
-                    if prior.get("efforts") and not norm.get("efforts"):
-                        norm["efforts"] = prior["efforts"]
-                    # v3.5.6 — same for `intervals` (the rider's Garmin laps).
-                    # Laps only arrive via the /intervals subpath on a DETAIL
-                    # fetch (fetch_activity_full); the activity-LIST payload the
-                    # hourly sync uses has none. So a re-sync used to overwrite
-                    # a lap-carrying envelope with an empty list and silently
-                    # destroy them — measured: a 61-lap ride went to 0 laps on
-                    # one forced sync. Laps are the primary signal for
-                    # block-by-block ride evaluation, so losing them is not
-                    # cosmetic. Prefer prior only when the fresh payload brought
-                    # nothing, so a genuine detail refresh still wins.
-                    if prior.get("intervals") and not norm.get("intervals"):
-                        norm["intervals"] = prior["intervals"]
-                # The rider's own RPE always survives — carried even when
-                # carry_hydrated is False (that flag exists so a fresh DETAIL
-                # fetch can replace stale ICU-derived data; it must never
-                # discard something only the rider could provide).
-                for k in _RIDER_INPUT_CARRY_KEYS:
-                    if prior.get(k) is not None:
-                        norm.setdefault(k, prior[k])
-                # W2a: locally-computed FTP-test detection (payload-wins) +
-                # the rider's review verdict (unconditional, like RPE).
-                for k in _FTP_TEST_CARRY_KEYS:
-                    if prior.get(k) is not None:
-                        norm.setdefault(k, prior[k])
-                for k in _FTP_TEST_REVIEW_CARRY_KEYS:
-                    if prior.get(k) is not None:
-                        norm.setdefault(k, prior[k])
-        except (json.JSONDecodeError, OSError) as e:
-            log.debug(f"persist_icu_activity({icu_id}) prior read: {e}")
-    if prior_prs is not None:
-        norm["prs"] = prior_prs
-    # Only fill DFA keys the fresh ICU payload didn't already provide.
-    for k, v in prior_dfa.items():
-        norm.setdefault(k, v)
+                # `efforts` IS a norm key (ICU intervals-derived), so
+                # setdefault can't carry it — but the backfill's version
+                # (derived from full 1 Hz streams) is strictly richer
+                # than a fresh payload's empty list. Only prefer prior
+                # when the fresh normalization produced nothing.
+                if prior.get("efforts") and not norm.get("efforts"):
+                    norm["efforts"] = prior["efforts"]
+                # v3.5.6 — same for `intervals` (the rider's Garmin laps).
+                # Laps only arrive via the /intervals subpath on a DETAIL
+                # fetch (fetch_activity_full); the activity-LIST payload the
+                # hourly sync uses has none. So a re-sync used to overwrite
+                # a lap-carrying envelope with an empty list and silently
+                # destroy them — measured: a 61-lap ride went to 0 laps on
+                # one forced sync. Laps are the primary signal for
+                # block-by-block ride evaluation, so losing them is not
+                # cosmetic. Prefer prior only when the fresh payload brought
+                # nothing, so a genuine detail refresh still wins.
+                if prior.get("intervals") and not norm.get("intervals"):
+                    norm["intervals"] = prior["intervals"]
+            # The rider's own RPE always survives — carried even when
+            # carry_hydrated is False (that flag exists so a fresh DETAIL
+            # fetch can replace stale ICU-derived data; it must never
+            # discard something only the rider could provide).
+            for k in _RIDER_INPUT_CARRY_KEYS:
+                if prior.get(k) is not None:
+                    norm.setdefault(k, prior[k])
+            # W2a: locally-computed FTP-test detection (payload-wins) +
+            # the rider's review verdict (unconditional, like RPE).
+            for k in _FTP_TEST_CARRY_KEYS:
+                if prior.get(k) is not None:
+                    norm.setdefault(k, prior[k])
+            for k in _FTP_TEST_REVIEW_CARRY_KEYS:
+                if prior.get(k) is not None:
+                    norm.setdefault(k, prior[k])
+        if prior_prs is not None:
+            norm["prs"] = prior_prs
+        # Only fill DFA keys the fresh ICU payload didn't already provide.
+        for k, v in prior_dfa.items():
+            norm.setdefault(k, v)
+        return norm
+
     try:
-        path.write_text(json.dumps(norm, indent=2), encoding="utf-8")
+        update_json_record(path, _carry)
     except OSError as e:
         log.warning(f"persist_icu_activity({icu_id}) failed: {e}")
         return None
     # v1.3.0 PR-DETECTION final step (audit §4): compute PRs against the
     # 90-day rolling window after the envelope is on disk so compute_ride_prs
-    # can read the just-written ride_id from cache. On failure keep
-    # `prior_prs` (already in `norm`) so we don't lose data.
+    # can read the just-written ride_id from cache. On failure keep the prior
+    # PRs (already carried) so we don't lose data.
+    # The PRs are MERGED onto the record as it is after the compute, not
+    # written from `norm`: an RPE saved while PRs were computing used to be
+    # erased by this second write (audit 2026-09-23, data #2).
     try:
         import power_curve
         prs = power_curve.compute_ride_prs(norm["ride_id"])
-        norm["prs"] = prs
-        path.write_text(json.dumps(norm, indent=2), encoding="utf-8")
+        update_ride(icu_id, lambda cur: {**cur, "prs": prs})
     except Exception as e:
         log.debug(f"persist_icu_activity({icu_id}) PR compute failed: {e}")
     return path
@@ -901,19 +1009,13 @@ def _persist_rider_input(external_id, values: dict) -> None:
     """
     if not external_id or not values:
         return
+
+    def _fill(rec):
+        missing = {k: v for k, v in values.items() if rec.get(k) is None}
+        return {**rec, **missing} if missing else None
     try:
-        path = _icu_rides_dir() / f"{external_id}.json"
-        if not path.exists():
-            return
-        rec = json.loads(path.read_text(encoding="utf-8"))
-        changed = False
-        for k, v in values.items():
-            if rec.get(k) is None:
-                rec[k] = v
-                changed = True
-        if changed:
-            path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
-    except (OSError, json.JSONDecodeError, ValueError) as e:
+        update_ride(str(external_id), _fill)
+    except (OSError, ValueError) as e:
         log.debug(f"_persist_rider_input({external_id}) skipped: {e}")
 
 
@@ -1298,18 +1400,22 @@ def write_fit_load_sidecar(fit_path: Path) -> dict | None:
     if load is None:
         return None
     side = _fit_load_sidecar_path(fit_path)
+    load["reader_v"] = FIT_LOAD_READER_V
+
     # v3.6.0 — the sidecar now also holds the rider's own session-RPE, and this
     # function RECOMPUTES the whole file (a re-import calls it eagerly). Carry
     # rider input forward: it is the one thing no recompute can regenerate.
-    # Same lesson as the laps/streams carry on the ICU path.
-    prior = read_fit_load_sidecar(fit_path)
-    if isinstance(prior, dict):
-        for k in _RIDER_INPUT_CARRY_KEYS:
-            if prior.get(k) is not None:
-                load.setdefault(k, prior[k])
-    load["reader_v"] = FIT_LOAD_READER_V
+    # Same lesson as the laps/streams carry on the ICU path. The carry reads
+    # the sidecar under its lock, AFTER the (slow) compute above, so a rating
+    # saved during the compute is carried too.
+    def _carry(prior):
+        if isinstance(prior, dict):
+            for k in _RIDER_INPUT_CARRY_KEYS:
+                if prior.get(k) is not None:
+                    load.setdefault(k, prior[k])
+        return load
     try:
-        side.write_text(json.dumps(load, indent=2), encoding="utf-8")
+        update_json_record(side, _carry)
     except OSError as e:
         log.warning(f"write_fit_load_sidecar({fit_path.name}) failed: {e}")
     return load
@@ -1325,17 +1431,21 @@ def set_fit_rpe(stem: str, rpe: int | None, rpe_at: str | None) -> bool:
     fit_path = _fit_rides_dir() / f"{stem}.fit"
     if not fit_path.exists():
         return False
-    load = read_fit_load_sidecar(fit_path) or write_fit_load_sidecar(fit_path) or {}
-    if rpe is None:
-        for k in ("rpe", "rpe_at", "rpe_scale"):
-            load.pop(k, None)
-    else:
-        load["rpe"] = int(rpe)
-        load["rpe_at"] = rpe_at
-        load["rpe_scale"] = "foster_cr10"
+    if read_fit_load_sidecar(fit_path) is None:
+        write_fit_load_sidecar(fit_path)
+
+    def _rate(load):
+        load = dict(load or {})
+        if rpe is None:
+            for k in ("rpe", "rpe_at", "rpe_scale"):
+                load.pop(k, None)
+        else:
+            load["rpe"] = int(rpe)
+            load["rpe_at"] = rpe_at
+            load["rpe_scale"] = "foster_cr10"
+        return load
     try:
-        _fit_load_sidecar_path(fit_path).write_text(
-            json.dumps(load, indent=2), encoding="utf-8")
+        update_json_record(_fit_load_sidecar_path(fit_path), _rate)
     except OSError as e:
         log.warning(f"set_fit_rpe({stem}) failed: {e}")
         return False

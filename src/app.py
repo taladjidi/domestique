@@ -1073,7 +1073,12 @@ def setup_test_icu(body: dict):
         eftp = None
         weight = data.get("weight")
         try:
-            w_url = f"https://intervals.icu/api/v1/athlete/{athlete_id}/wellness?oldest=2025-01-01&newest=2026-12-31"
+            # The last year up to today (contract 7.7: the window was the
+            # fixed 2025-01-01..2026-12-31, empty from 2027).
+            from datetime import timedelta as _td
+            _today = clock.today()
+            w_url = (f"https://intervals.icu/api/v1/athlete/{athlete_id}/wellness"
+                     f"?oldest={(_today - _td(days=365)).isoformat()}&newest={_today.isoformat()}")
             w_resp = httpx.get(w_url, auth=("API_KEY", api_key), timeout=10, verify=_icu_verify())
             if w_resp.status_code == 200:
                 for w in reversed(w_resp.json()):

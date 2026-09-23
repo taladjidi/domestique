@@ -596,6 +596,8 @@ def _needs_refetch(ride_path: Path) -> bool:
         return True
     if data.get("no_streams_available") is True:
         return False  # 3.4.1 ① — permanently unfetchable, never refetch
+    if _cooling_down(data):
+        return False  # could not ask last time: wait out STREAMS_RETRY_S
     efforts = data.get("efforts") or []
     cached_secs = {e.get("secs") for e in efforts if isinstance(e, dict)}
     if not cached_secs.issuperset(set(_SD)):
@@ -607,6 +609,13 @@ def _needs_refetch(ride_path: Path) -> bool:
     if not (isinstance(watts, list) and len(watts) > 0):
         return True
     return False
+
+
+def _cooling_down(rec: dict) -> bool:
+    try:
+        return float(rec.get("streams_retry_after") or 0) > time.time()
+    except (TypeError, ValueError):
+        return False
 
 
 def _extract_efforts_from_streams(streams: dict) -> list[dict]:
@@ -657,7 +666,16 @@ def _extract_efforts_from_streams(streams: dict) -> list[dict]:
     return out
 
 
-def _mark_no_streams(ride_path: Path, data: dict, sync_snapshot=None) -> None:
+# How long a ride whose streams fetch could not ask (network, 429, 5xx,
+# auth) waits before the backfill asks again. Without it every power-curve
+# GET relaunched a pass over every such ride (review of the F2 fix: 200
+# asks for 20 rides in 10 GETs).
+# ponytail: one fixed cooldown; exponential backoff if 6 h proves wrong.
+STREAMS_RETRY_S = 6 * 3600
+
+
+def _mark_no_streams(ride_path: Path, data: dict, sync_snapshot=None,
+                     retry: bool = False) -> None:
     """3.4.1 ① — persist a TERMINAL ``no_streams_available`` marker on the
     envelope when intervals.icu answered and a backfill pass still could not
     derive efforts for the ride (not found / no data / an empty envelope /
@@ -674,9 +692,10 @@ def _mark_no_streams(ride_path: Path, data: dict, sync_snapshot=None) -> None:
     profile gate — the gate already refused the write, so nothing can land
     in the wrong profile) just leaves the ride unmarked for the next pass.
     """
-    marker = {"no_streams_available": True,
-              "streams_fetch_failed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                                       time.gmtime())}
+    marker = ({"streams_retry_after": time.time() + STREAMS_RETRY_S} if retry else
+              {"no_streams_available": True,
+               "streams_fetch_failed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                        time.gmtime())})
     data.update(marker)
     # Contract 2.2: merged into the record as it is now, under its lock --
     # ``data`` was read before the fetch, and a rating may have landed since.
@@ -934,6 +953,7 @@ def backfill_icu_history(profile_id: "str | None" = None,
                     r = None
                     log.warning(f"backfill: streams fetch {ext} failed: {e}")
                 if r is None or r.status == "failed":
+                    _mark_no_streams(ride_path, data, sync_snapshot, retry=True)
                     failed += 1
                     continue
                 streams = r.data if r.status == "ok" else None
@@ -961,6 +981,7 @@ def backfill_icu_history(profile_id: "str | None" = None,
                 # ride gained a power stream server-side).
                 cur.pop("no_streams_available", None)
                 cur.pop("streams_fetch_failed_at", None)
+                cur.pop("streams_retry_after", None)
                 # v1.8.10 Bug A — persist the full ICU streams dict, not just
                 # the derived efforts. _ride_power_stream() (and therefore
                 # compute_fatigue_resistance, the homepage power-curve render,
@@ -1067,8 +1088,8 @@ def count_rides_missing_efforts(window_days: int = 90) -> tuple[int, int]:
         n_cycling += 1
         efforts = r.get("efforts")
         if not (isinstance(efforts, list) and efforts):
-            if r.get("no_streams_available") is True:
-                continue  # terminal — treated as done
+            if r.get("no_streams_available") is True or _cooling_down(r):
+                continue  # terminal, or waiting to retry — not relaunched
             missing += 1
     return n_cycling, missing
 

@@ -212,6 +212,7 @@ def test_a_network_blip_does_not_blank_the_power_curve_forever(ride, monkeypatch
     power_curve.backfill_icu_history("default", max_per_second=100)
     rec = json.loads(ride.read_text())
     assert rec.get("no_streams_available") is not True, "a network blip was marked terminal"
+    rs.update_json_record(ride, lambda r: {**r, "streams_retry_after": 0})   # cooldown over
     monkeypatch.setattr(tr, "_get", up)
     power_curve.backfill_icu_history("default", max_per_second=100)
     rec = json.loads(ride.read_text())
@@ -235,3 +236,28 @@ def test_no_ride_writer_writes_the_file_itself():
     assert not re.search(r'_icu_rides_dir\(\)\s*/\s*f"\{ext\}\.json"', app_src)
     assert "rec_path.write_text" not in app_src
     assert "_atomic_write_json(ride_path" not in pc_src
+
+
+def test_a_failed_fetch_waits_before_it_is_asked_again(ride, monkeypatch):
+    """Review of the F2 fix: `failed` is retryable, but nothing spaced the
+    retries -- during an outage (or with a revoked key) every power-curve
+    GET relaunched a pass that asked for every ride's streams again
+    (reviewer's p_relaunch: 20 rides x 10 GETs = 200 asks, progress stuck
+    at 0 %). A failed ride now waits out a cooldown, counts as not-missing
+    meanwhile, and is asked again after it."""
+    asks = []
+    monkeypatch.setattr(tr, "fetch_activity_streams_result",
+                        lambda _id: (asks.append(_id), tr.Fetched("failed"))[1])
+    power_curve.backfill_icu_history("default", max_per_second=100)
+    power_curve.backfill_icu_history("default", max_per_second=100)
+    assert len(asks) == 1, f"asked {len(asks)}x inside the cooldown"
+    assert power_curve.count_rides_missing_efforts(3650)[1] == 0
+    rec = json.loads(ride.read_text())
+    assert rec.get("no_streams_available") is not True
+    rs.update_json_record(ride, lambda r: {**r, "streams_retry_after": 0})   # cooldown over
+    n = 700
+    monkeypatch.setattr(tr, "fetch_activity_streams_result",
+                        lambda _id: tr.Fetched("ok", {"watts": [200] * n}))
+    power_curve.backfill_icu_history("default", max_per_second=100)
+    rec = json.loads(ride.read_text())
+    assert rec.get("efforts") and "streams_retry_after" not in rec

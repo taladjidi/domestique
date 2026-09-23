@@ -109,6 +109,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from training import get_today_metrics, fetch_wellness, fetch_activities
+from training import cycling_sport_info  # the one sportInfo reader (contract 5.5)
 import config
 from user_home import domestique_home
 
@@ -15887,7 +15888,8 @@ def check_and_auto_apply_eftp(wellness_series: list[dict]) -> dict | None:
     """F5 (v4.1.0) — auto-apply eFTP after 7+ consecutive days above +3% drift.
 
     Walks back through ``wellness_series`` (newest-last) and counts the
-    consecutive trailing days where ``sportInfo[0].eftp > tested_ftp * 1.03``.
+    consecutive trailing days where the cycling sportInfo entry's eFTP
+    (``training.cycling_sport_info``) is above ``tested_ftp * 1.03``.
     When that count reaches 7, applies the NEW eFTP as the active FTP AND
     appends an ``eftp_auto`` row to ftp_test_history so the ledger captures
     the change. Returns the action dict for the caller to log + surface
@@ -15918,8 +15920,7 @@ def check_and_auto_apply_eftp(wellness_series: list[dict]) -> dict | None:
     streak = 0
     latest_eftp = None
     for rec in reversed(sorted_recs):
-        si = rec.get("sportInfo") or []
-        eftp = si[0].get("eftp") if si else None
+        eftp = cycling_sport_info(rec).get("eftp")
         if not eftp:
             break
         if latest_eftp is None:

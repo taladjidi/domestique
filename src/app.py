@@ -66,6 +66,7 @@ from fastapi.templating import Jinja2Templates
 sys.path.insert(0, str(Path(__file__).parent))
 
 from training import get_today_metrics, fetch_wellness, fetch_activities, TRIMP_TO_TSS_FACTOR
+from training import cycling_sport_info  # the one sportInfo reader (contract 5.5)
 from sleep import get_sleep_metrics
 from readiness import compute_readiness
 import availability   # the one per-day training cap
@@ -1119,9 +1120,9 @@ def setup_test_icu(body: dict):
             w_resp = httpx.get(w_url, auth=("API_KEY", api_key), timeout=10, verify=_icu_verify())
             if w_resp.status_code == 200:
                 for w in reversed(w_resp.json()):
-                    si = w.get("sportInfo", [])
-                    if si and si[0].get("eftp"):
-                        eftp = round(si[0]["eftp"])
+                    _ef = cycling_sport_info(w).get("eftp")
+                    if _ef:
+                        eftp = round(_ef)
                         break
                     if not weight and w.get("weight"):
                         weight = w["weight"]
@@ -3135,7 +3136,7 @@ def api_rider_stats():
             if ftp_set else dict(_PROV_EMPTY)
         )
 
-        # eFTP — latest ICU wellness sportInfo[0].eftp (synced store).
+        # eFTP — latest ICU wellness cycling-sportInfo eFTP (synced store).
         eftp_triple = dict(_PROV_EMPTY)
         try:
             _ef = ride_storage.latest_eftp()
@@ -3144,7 +3145,7 @@ def api_rider_stats():
                               for w in sorted(ride_storage.load_recent_wellness(days=90),
                                               key=lambda x: str(x.get("id") or ""),
                                               reverse=True)
-                              if (w.get("sportInfo") or [{}])[0].get("eftp")), None)
+                              if cycling_sport_info(w).get("eftp")), None)
                 eftp_triple = _prov(round(_ef), "icu", _when or None)
         except Exception as e:
             _fail("eftp", e)
@@ -4743,8 +4744,7 @@ def _wellness_record_to_api_dict(w: dict) -> dict:
     """
     ctl = w.get("ctl")
     atl = w.get("atl")
-    sport_info = w.get("sportInfo") or []
-    eftp = (sport_info[0].get("eftp") if sport_info and isinstance(sport_info[0], dict) else None)
+    eftp = cycling_sport_info(w).get("eftp")
     return {
         "date": w.get("id"),
         "ctl": ctl,
@@ -8082,12 +8082,12 @@ def api_icu_athlete_numbers():
             wellness = cached("wellness_7", lambda: fetch_wellness(7))
             if wellness:
                 for w in reversed(wellness):
-                    si = w.get("sportInfo", [])
-                    if si and si[0].get("eftp"):
-                        _cand = round(si[0]["eftp"])
-                        # 3.3.1 hotfix (B5): sportInfo[0] is sport-UNFILTERED
-                        # (the first entry may be a non-Ride sport) and a
-                        # sparse-data eFTP can be nonsense — this prefill is
+                    _ef = cycling_sport_info(w).get("eftp")
+                    if _ef:
+                        _cand = round(_ef)
+                        # 3.3.1 hotfix (B5): a sparse-data eFTP can be
+                        # nonsense (the Run-first sportInfo[0] half of this is
+                        # gone: cycling_sport_info, contract 5.5) — this prefill is
                         # the one path that INVENTS an FTP the rider never
                         # typed (prime suspect for the tester's ftp=122).
                         # Implausible → don't prefill; the wizard says
@@ -8441,8 +8441,7 @@ def update_settings(request_body: dict):
         try:
             wellness = cached("wellness_7", lambda: fetch_wellness(7))
             for w in reversed(wellness or []):
-                si = w.get("sportInfo", []) or []
-                e = si[0].get("eftp") if si else None
+                e = cycling_sport_info(w).get("eftp")
                 if e and abs(round(e) - new_ftp) <= 2:
                     ftp_source_for_history = "eftp_icu"
                     break
@@ -8854,9 +8853,8 @@ def api_weekly_plan(week_offset: int = Query(0)):
         wellness = cached("wellness_7", lambda: fetch_wellness(7))
         if wellness:
             for w in reversed(wellness):
-                si = w.get("sportInfo", [])
-                if si and len(si) > 0 and si[0].get("eftp"):
-                    eftp = round(si[0]["eftp"])
+                if cycling_sport_info(w).get("eftp"):
+                    eftp = round(cycling_sport_info(w)["eftp"])
                     drift = tp._check_eftp_drift(eftp)
                     if drift:
                         result["eftp_drift"] = drift
@@ -8875,7 +8873,8 @@ def api_weekly_plan(week_offset: int = Query(0)):
 # Incident: a tester's profile carried ftp=122 while his real FTP ≈258, so
 # every zone chip and watt label scaled off 122 ("Z2 68–92 W"). 122 matched
 # none of his recent eFTP series (195–263) — the plausible landing paths are
-# the sport-UNFILTERED sportInfo[0].eftp prefill/copy chains or an accepted
+# the sport-UNFILTERED sportInfo[0].eftp prefill/copy chains (read through
+# training.cycling_sport_info since contract 5.5) or an accepted
 # early-halted ramp test. Whatever the entry door, AUTOMATIC ingestion must
 # never swallow a wildly-implausible number silently.
 
@@ -8909,7 +8908,7 @@ def _guarded_check_and_auto_apply_eftp(wellness_series):
     """Plausibility gate in FRONT of the F5 auto-apply (tp owns the engine).
 
     tp.check_and_auto_apply_eftp applies the NEWEST wellness record's
-    sportInfo[0].eftp after a 7-day sustained up-drift. Pre-validate that
+    cycling-sportInfo eFTP after a 7-day sustained up-drift. Pre-validate that
     exact candidate here (same newest-record read the engine does) so an
     implausible value is rejected + logged WITHOUT touching the profile —
     training_planner stays unchanged (parallel-wave file ownership).
@@ -8918,8 +8917,7 @@ def _guarded_check_and_auto_apply_eftp(wellness_series):
         cand = None
         recs = sorted(wellness_series or [], key=lambda r: r.get("id", ""))
         if recs:
-            si = recs[-1].get("sportInfo") or []
-            ef = si[0].get("eftp") if si and isinstance(si[0], dict) else None
+            ef = cycling_sport_info(recs[-1]).get("eftp")
             if ef:
                 cand = int(round(float(ef)))
         cur = int(getattr(config, "ATHLETE_FTP_W", 0) or 0)
@@ -16581,9 +16579,8 @@ def api_plan_auto_recalc():
         wellness = cached("wellness_7", lambda: fetch_wellness(7))
         if wellness:
             for w in reversed(wellness):
-                si = w.get("sportInfo", [])
-                if si and len(si) > 0 and si[0].get("eftp"):
-                    eftp = round(si[0]["eftp"])
+                if cycling_sport_info(w).get("eftp"):
+                    eftp = round(cycling_sport_info(w)["eftp"])
                     break
 
         # v2.0.3 F5 — thread athlete (ftp + weight) so recalculate_plan can

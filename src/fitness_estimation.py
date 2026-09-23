@@ -134,7 +134,7 @@ class FitnessSignature:
         wprime_j:   v1.0.6+ W' anaerobic work capacity (joules) — Monod fit
                     value; ``None`` => fallback to ``hie * 1000``.
         pmax_w:     v1.0.6+ maximum instantaneous power (watts) — best 5 s
-                    or ICU sportInfo[0].pMax; ``None`` => downstream code
+                    or the ICU cycling sportInfo pMax; ``None`` => downstream code
                     falls back to ``int(ftp * 1.30)`` (Coggan 2-min approx).
     """
     ftp: int

@@ -247,7 +247,7 @@ class ProfileManager:
         attribution of P > CP into PCr vs glycolytic shares.
 
         Falls back to int(ftp * 1.30) — Coggan's 2-min approximation.
-        ICU exposes the real value at sportInfo[0].pMax (best 1s power);
+        ICU exposes the real value as the cycling sportInfo entry's pMax (best 1s power);
         when an ICU sync has populated athlete_metrics.pmax it gets
         mirrored into self._athlete["pmax_w"] via _set_pmax(..., "icu").
         """

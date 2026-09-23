@@ -140,9 +140,6 @@ def test_the_rows_are_what_the_collector_reads(rider, monkeypatch):
         [(ws.isoformat(), 70.0, 90.0), (today.isoformat(), 55.0, 50.0)])
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Wave 2: app._collect_week_activities must read "
-    "ride_storage.activity_rows_between (notes/hardening-interfaces-storage.md)"))
 def test_the_collector_itself_sees_a_fit_only_riders_week(rider):
     import app as app_module
     today = clock.today()

@@ -13206,9 +13206,14 @@ def _collect_week_activities(current_week, today: date, include_today: bool = Fa
             _add(a)
     except Exception as e:
         _log.debug(f"ICU activities fetch failed: {e}")
+    # The one activity source (contract 5.2): intervals.icu records AND FIT
+    # imports, deduped. list_rides() read only the legacy ride_*.json nothing
+    # writes any more, so a FIT-only rider's week was [] -- every session
+    # "missed", no rematch, no daily adapt. `_add` dedupes the ICU copies the
+    # query above already added (start time + duration).
     try:
-        from ride_storage import list_rides
-        for r in list_rides():
+        from ride_storage import activity_rows_between
+        for r in activity_rows_between(current_week.start, today + timedelta(days=1)):
             _add(r)
     except Exception as e:
         _log.debug(f"Local rides fetch failed: {e}")

@@ -53,7 +53,7 @@ def stub(tmp_path):
     old_instance = ProfileManager._instance
     old_db_path = db_module.DB_PATH
     old_data_dir = app_module.DATA_DIR
-    old_workout_dir = app_module.WORKOUT_DIR
+    old_workout_dir = app_module.tp.WORKOUT_DIR
     old_gpx_dir = app_module.GPX_DIR
     old_environ = {k: os.environ.get(k) for k in _ENV_KEYS}
     # Isolation fix (post-2fbfeb62): ProfileManager activation rewrites
@@ -81,7 +81,7 @@ def stub(tmp_path):
         patcher.stop()
         ProfileManager._instance = old_instance
         app_module.DATA_DIR = old_data_dir
-        app_module.WORKOUT_DIR = old_workout_dir
+        app_module.tp.WORKOUT_DIR = old_workout_dir
         app_module.GPX_DIR = old_gpx_dir
         db_module.set_db_path(old_db_path)
         db_module._sync_stop.clear()

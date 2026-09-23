@@ -324,7 +324,7 @@ def test_gb4_push_window_excludes_elapsed_and_past(backdated_event, tmp_path, mo
         max_hr = 190
         lthr = 170
 
-    monkeypatch.setattr(app_module, "WORKOUT_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(app_module.tp, "WORKOUT_DIR", tmp_path, raising=False)
     monkeypatch.setattr(icp, "_load_classifications", lambda _d: {})
 
     events, skipped, broken = icp._desired_events(
@@ -475,7 +475,7 @@ def test_gp5_gb4_push_window_excludes_elapsed(backdated_custom_event,
         max_hr = 190
         lthr = 170
 
-    monkeypatch.setattr(app_module, "WORKOUT_DIR", tmp_path, raising=False)
+    monkeypatch.setattr(app_module.tp, "WORKOUT_DIR", tmp_path, raising=False)
     monkeypatch.setattr(icp, "_load_classifications", lambda _d: {})
 
     events, skipped, broken = icp._desired_events(

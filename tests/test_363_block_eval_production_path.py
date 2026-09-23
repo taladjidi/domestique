@@ -48,7 +48,7 @@ def _laps(work_durations):
 @pytest.fixture()
 def workout_on_disk(tmp_path, monkeypatch):
     (tmp_path / "vo2max_6x1min_test.zwo").write_text(_ZWO, encoding="utf-8")
-    monkeypatch.setattr(app_module, "WORKOUT_DIR", tmp_path)
+    monkeypatch.setattr(app_module.tp, "WORKOUT_DIR", tmp_path)
     return "vo2max_6x1min_test.zwo"
 
 

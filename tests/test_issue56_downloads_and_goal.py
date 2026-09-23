@@ -40,7 +40,7 @@ class TestFitBytesGuards(unittest.TestCase):
             app.build_fit_workout_bytes("z2", 60, "t", "does_not_exist_xyz.zwo")
 
     def test_zero_step_zwo_raises_not_empty_file(self):
-        tmp = Path(app.WORKOUT_DIR) / "_t_issue5_empty.zwo"
+        tmp = Path(app.active_workout_dir()) / "_t_issue5_empty.zwo"
         tmp.write_text("<workout_file><workout></workout></workout_file>")
         try:
             with self.assertRaises(ValueError):

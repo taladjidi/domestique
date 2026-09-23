@@ -101,7 +101,7 @@ def stub(tmp_path):
     old_instance = ProfileManager._instance
     old_db_path = db_module.DB_PATH
     old_data_dir = app_module.DATA_DIR
-    old_workout_dir = app_module.WORKOUT_DIR
+    old_workout_dir = app_module.tp.WORKOUT_DIR
     old_gpx_dir = app_module.GPX_DIR
     old_tp_plan_dir = tp.PLAN_DIR
     old_tp_workout_dir = tp.WORKOUT_DIR
@@ -128,7 +128,7 @@ def stub(tmp_path):
     real = REPO / "src" / "workouts" / "threshold_2x3min-3min_95pct_56min.zwo"
     if real.exists():
         (workouts / "threshold_2x3min-3min_95pct_56min.zwo").write_bytes(real.read_bytes())
-    app_module.WORKOUT_DIR = workouts
+    app_module.tp.WORKOUT_DIR = workouts
 
     ns = types.SimpleNamespace(home=home, pm=pm, pid=pid, workouts=workouts,
                                client=TestClient(app_module.app))
@@ -144,7 +144,7 @@ def stub(tmp_path):
         tp.post_write_callback = None
         ProfileManager._instance = old_instance
         app_module.DATA_DIR = old_data_dir
-        app_module.WORKOUT_DIR = old_workout_dir
+        app_module.tp.WORKOUT_DIR = old_workout_dir
         app_module.GPX_DIR = old_gpx_dir
         tp.PLAN_DIR = old_tp_plan_dir
         tp.WORKOUT_DIR = old_tp_workout_dir

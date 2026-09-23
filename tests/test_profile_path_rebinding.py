@@ -1,6 +1,7 @@
 """Workout and GPX paths must be read late, not captured at import.
 
-`_apply_profile_paths()` rebinds the module globals WORKOUT_DIR and GPX_DIR on
+`_apply_profile_paths()` rebinds the planner's WORKOUT_DIR (the one owner since
+contract 5.1, through ProfileManager.apply_training_dirs) and app's GPX_DIR on
 every profile switch, so a profile without its own override never inherits the
 previous profile's directories. Anything holding a value captured earlier keeps
 serving the old profile's workouts, and does it silently -- no exception, no
@@ -17,25 +18,26 @@ import pathlib
 import unittest
 
 import app
+import training_planner as tp
 
 
 class ProfilePathRebindingTests(unittest.TestCase):
     def setUp(self):
-        self._workout = app.WORKOUT_DIR
+        self._workout = tp.WORKOUT_DIR
         self._gpx = app.GPX_DIR
 
     def tearDown(self):
-        app.WORKOUT_DIR = self._workout
+        tp.WORKOUT_DIR = self._workout
         app.GPX_DIR = self._gpx
 
     def test_a_captured_value_goes_stale(self):
         """The hazard itself: binding the value survives the rebind."""
-        captured = app.WORKOUT_DIR              # what `from app import ...` does
-        app.WORKOUT_DIR = pathlib.Path("/tmp/profile-b/workouts")
-        self.assertNotEqual(captured, app.WORKOUT_DIR)
+        captured = tp.WORKOUT_DIR               # what `from training_planner import ...` does
+        tp.WORKOUT_DIR = pathlib.Path("/tmp/profile-b/workouts")
+        self.assertNotEqual(captured, tp.WORKOUT_DIR)
 
     def test_the_accessor_tracks_the_rebind(self):
-        app.WORKOUT_DIR = pathlib.Path("/tmp/profile-b/workouts")
+        tp.WORKOUT_DIR = pathlib.Path("/tmp/profile-b/workouts")
         self.assertEqual(app.active_workout_dir(), pathlib.Path("/tmp/profile-b/workouts"))
 
     def test_the_gpx_accessor_tracks_too(self):
@@ -43,7 +45,9 @@ class ProfilePathRebindingTests(unittest.TestCase):
         self.assertEqual(app.active_gpx_dir(), pathlib.Path("/tmp/profile-b/gpx"))
 
     def test_accessors_agree_with_the_globals_when_nothing_has_moved(self):
-        self.assertEqual(app.active_workout_dir(), app.WORKOUT_DIR)
+        self.assertEqual(app.active_workout_dir(), tp.WORKOUT_DIR)
+        # contract 5.1: the app keeps no second copy to drift
+        self.assertFalse(hasattr(app, "WORKOUT_DIR"))
         self.assertEqual(app.active_gpx_dir(), app.GPX_DIR)
 
     def test_apply_profile_paths_still_rebinds(self):
@@ -56,8 +60,8 @@ class ProfilePathRebindingTests(unittest.TestCase):
         this test drove the function directly.
         """
         src = inspect.getsource(app._apply_profile_paths)
-        self.assertIn("global WORKOUT_DIR, GPX_DIR", src)
-        self.assertIn("WORKOUT_DIR = wp", src)
+        self.assertIn("apply_training_dirs()", src)   # the planner's WORKOUT_DIR
+        self.assertIn("global GPX_DIR", src)
         self.assertIn("GPX_DIR = gp", src)
 
     def test_no_module_binds_the_value_instead_of_the_name(self):

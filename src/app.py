@@ -423,27 +423,14 @@ def _session_naming_lookup(
 
 _BUNDLED_WORKOUT_DIR = Path(__file__).parent / "workouts"  # bundled workout files
 _BUNDLED_GPX_DIR     = Path(__file__).parent / "gpx"       # bundled GPX files
-WORKOUT_DIR   = _BUNDLED_WORKOUT_DIR
 GPX_DIR       = _BUNDLED_GPX_DIR
 
-# Load user path overrides — check user data dir (packaged) then project dir (dev)
-# Linux-IP D3: apply an override ONLY when the dir exists (mirrors
-# profile_manager) — a stale workout_dir silently emptied the library and
-# every plan degenerated to unmatched Z2 with no error anywhere.
+# Load the GPX path override — check user data dir (packaged) then project
+# dir (dev). The workout directory is not resolved here: the planner owns it.
 for _upf in [_user_data_dir / "user_paths.json", Path(__file__).parent / "user_paths.json"]:
     if _upf.exists():
         try:
             _up = json.loads(_upf.read_text(encoding="utf-8"))
-            if _up.get("workout_dir"):
-                _cand = Path(_up["workout_dir"])
-                # v3.11.2: usable (holds .zwo files), not merely existing.
-                if _cand.is_dir() and next(_cand.glob("*.zwo"), None) is not None:
-                    WORKOUT_DIR = _cand
-                else:
-                    logging.getLogger("app").error(
-                        "E_WORKOUT_DIR_UNUSABLE: user_paths.json workout_dir=%s "
-                        "is missing or holds no .zwo files — keeping the "
-                        "bundled library", _cand)
             if _up.get("gpx_dir"):
                 GPX_DIR = Path(_up["gpx_dir"])
         except Exception:
@@ -454,13 +441,14 @@ for _upf in [_user_data_dir / "user_paths.json", Path(__file__).parent / "user_p
 def active_workout_dir() -> Path:
     """The active profile's workout directory, resolved at call time.
 
-    WORKOUT_DIR is rebound by _apply_profile_paths on every profile switch, so
-    a value read earlier belongs to the previous profile. Read it late through
-    this, and never `from app import WORKOUT_DIR` -- that binds the object, not
-    the name, and then serves the wrong athlete's library with no error and no
-    log line. tests/test_profile_path_rebinding.py enforces both halves.
+    The planner's ``WORKOUT_DIR`` is the one owner (contract 5.1): the app
+    kept its own copy, which /api/setup/save rebound alone, so the planner
+    kept planning files from the old library while the app served (and the
+    calendar push read) the new one -- every planned download 404'd until a
+    restart. Read it late through this, never bind it by value.
+    tests/test_profile_path_rebinding.py enforces that.
     """
-    return WORKOUT_DIR
+    return tp.active_workout_dir()
 
 
 def active_gpx_dir() -> Path:
@@ -472,22 +460,21 @@ def active_gpx_dir() -> Path:
 
 
 def _apply_profile_paths() -> None:
-    """AC2b: resolve app.py's module-global WORKOUT_DIR / GPX_DIR from the
-    ACTIVE profile's user_paths.json — one source of truth with the
-    training_planner resolution profile_manager.switch() performs.
+    """AC2b: point the workout directory and app.py's GPX_DIR at the ACTIVE
+    profile's user_paths.json.
 
-    Resolution order (mirrors profile_manager.switch):
+    The workout directory is resolved by ProfileManager.apply_training_dirs
+    -- the planner's, the one owner (contract 5.1): user_paths.json override
+    when usable, else <active_dir>/workouts, else the bundled library. GPX:
       1. <active_dir>/user_paths.json override, when the dir exists
-      2. <active_dir>/workouts, when it exists (workout dir only)
-      3. bundled default (so a profile WITHOUT an override never inherits the
+      2. bundled default (so a profile WITHOUT an override never inherits the
          previous profile's dirs — the sticky-global bug).
 
     Registered as a pm.on_switch callback AND run once at boot post-activation
     (same code path); setup_save calls it after writing the profile's
     user_paths.json.
     """
-    global WORKOUT_DIR, GPX_DIR
-    wp: Path = _BUNDLED_WORKOUT_DIR
+    global GPX_DIR
     gp: Path = _BUNDLED_GPX_DIR
     # v3.11.3 multi-profile screen: the 60-s Diagnostics snapshot is per
     # profile (plan readable, pool_health.workout_dir) — drop it on switch so
@@ -500,6 +487,7 @@ def _apply_profile_paths() -> None:
     try:
         from profile_manager import ProfileManager
         pm = ProfileManager.get()
+        pm.apply_training_dirs()          # the planner's WORKOUT_DIR (no-op without a profile)
         if pm.active_id is not None:
             try:
                 up = json.loads((pm.active_dir / "user_paths.json").read_text(encoding="utf-8"))
@@ -507,22 +495,11 @@ def _apply_profile_paths() -> None:
                 up = {}
             if not isinstance(up, dict):
                 up = {}
-            cand = up.get("workout_dir")
-            # v3.11.2: usable (holds .zwo files), not merely existing.
-            if cand and tp.workout_dir_is_usable(Path(cand)):
-                wp = Path(cand)
-            elif tp.workout_dir_is_usable(pm.active_dir / "workouts"):
-                wp = pm.active_dir / "workouts"
-            elif cand:
-                log.error("E_WORKOUT_DIR_UNUSABLE: profile workout_dir=%s is "
-                          "missing or holds no .zwo files — using the bundled "
-                          "library", cand)
             gcand = up.get("gpx_dir")
             if gcand and Path(gcand).exists():
                 gp = Path(gcand)
     except Exception as e:
         log.debug(f"_apply_profile_paths: fell back to bundled dirs: {e}")
-    WORKOUT_DIR = wp
     GPX_DIR = gp
 CONFIG_PATH   = Path(__file__).parent / "config.py"
 
@@ -1342,7 +1319,6 @@ def setup_save(body: dict):
     but don't roll back the .env write.
     """
     from profile_manager import ProfileManager
-    global WORKOUT_DIR, GPX_DIR
 
     creds_test: str | None = None
     athlete_id_detected: str | None = None

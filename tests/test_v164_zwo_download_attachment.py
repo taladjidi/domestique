@@ -24,7 +24,7 @@ import app as app_module
 
 def _pick_workout_filename() -> str:
     """Find an actual ZWO from the bundled library to probe."""
-    wdir: Path = app_module.WORKOUT_DIR
+    wdir: Path = app_module.tp.WORKOUT_DIR
     files = sorted(wdir.glob("*.zwo"))
     assert files, f"no ZWO files in WORKOUT_DIR ({wdir})"
     return files[0].name

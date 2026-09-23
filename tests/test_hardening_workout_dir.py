@@ -103,10 +103,6 @@ def stub(tmp_path):
         app_module.clear_cache()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Wave 2: app.active_workout_dir() returns tp.active_workout_dir() and "
-    "_apply_profile_paths rebinds the planner's directory "
-    "(notes/hardening-interfaces-planio.md); remove this marker then"))
 def test_setup_save_moves_the_planner_and_the_app_together(stub):
     import icu_calendar_push as icp
     custom = stub.home / "mylib"

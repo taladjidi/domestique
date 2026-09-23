@@ -699,7 +699,7 @@ class JsApi:
         we can still produce the real bytes instead of saving 0 bytes."""
         try:
             import app
-            p = app._safe_path(app.WORKOUT_DIR, filename)
+            p = app._safe_path(app.active_workout_dir(), filename)
             if p and p.exists():
                 return p.read_bytes()
         except Exception as e:

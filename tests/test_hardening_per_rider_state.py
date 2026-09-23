@@ -96,3 +96,61 @@ def test_generate_reads_the_riders_prefs_not_the_root_file(two_riders):
     goal = r.json()["plan_json"]["goal"]
     assert goal.get("rest_days") == [0], goal.get("rest_days")
     assert float(goal.get("hours_per_week")) == 8.0
+
+
+# ── fix-forward F7: an upgraded install keeps its root state ────────────────
+
+_ROOT_STATE = {
+    "readiness_cap_reverted.json": {"date": "2026-09-23", "at": "x"},
+    "hrv_prompt_state.json": {"version_dismissed": {}, "permanent_dismissed": True},
+    "last_pr_toast.json": [{"ride_id": "r1", "started_at": "2026-09-20T08:00:00", "n_prs": 2}],
+}
+
+
+def _plant_root_state(root):
+    for name, data in _ROOT_STATE.items():
+        (root / name).write_text(json.dumps(data))
+
+
+def test_a_single_rider_install_keeps_its_root_state(two_riders):
+    """5.6 moved these files into the profile but read nothing from where an
+    existing install had them: the HRV "never ask again" came back, a
+    pending PR toast was lost. With one profile the root copy is the
+    rider's: it moves in, once."""
+    pm, a, b = two_riders
+    pm.delete_profile(b)
+    root = app_module.DATA_DIR
+    _plant_root_state(root)
+    (pm.active_dir / "last_pr_toast.json").write_text("[]")   # the profile's own copy wins
+    app_module._adopt_legacy_rider_state()
+    for name in ("readiness_cap_reverted.json", "hrv_prompt_state.json"):
+        assert json.loads((pm.active_dir / name).read_text()) == _ROOT_STATE[name]
+        assert not (root / name).exists()
+    assert json.loads((pm.active_dir / "last_pr_toast.json").read_text()) == []
+    assert (root / "last_pr_toast.json").exists()
+    assert app_module._read_hrv_prompt_state().get("permanent_dismissed") is True
+    app_module._adopt_legacy_rider_state()                     # idempotent
+    assert json.loads((pm.active_dir / "hrv_prompt_state.json").read_text()) \
+        == _ROOT_STATE["hrv_prompt_state.json"]
+
+
+def test_with_several_riders_the_root_state_stays_put(two_riders, caplog):
+    pm, a, b = two_riders
+    root = app_module.DATA_DIR
+    _plant_root_state(root)
+    import logging
+    with caplog.at_level(logging.INFO):
+        app_module._adopt_legacy_rider_state()
+    for name in _ROOT_STATE:
+        assert (root / name).exists()
+        assert not (pm.active_dir / name).exists()
+    assert any("hrv_prompt_state.json" in r.getMessage() for r in caplog.records)
+
+
+def test_boot_adopts_the_root_state(two_riders):
+    pm, a, b = two_riders
+    pm.delete_profile(b)
+    _plant_root_state(app_module.DATA_DIR)
+    with TestClient(app_module.app, base_url="http://127.0.0.1"):
+        pass
+    assert (pm.active_dir / "hrv_prompt_state.json").exists()

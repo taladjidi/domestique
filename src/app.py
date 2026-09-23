@@ -615,6 +615,10 @@ async def lifespan(app):
                           f"profile '{pm.active_id}'")
     except Exception as _e:
         _log.debug(f"legacy user_paths adoption skipped: {_e}")
+    try:
+        _adopt_legacy_rider_state()
+    except Exception as _e:
+        _log.warning(f"legacy rider state adoption skipped: {_e}")
     # AC2b boot side: run the SAME training-dir resolver switch() uses, once,
     # post-activation — training_planner.WORKOUT_DIR etc. point at the active
     # profile from the first request (one code path for boot + switch).
@@ -3659,6 +3663,35 @@ def _rider_state_path(name: str) -> Path:
     crossed profiles."""
     from profile_manager import ProfileManager
     return ProfileManager.get().active_dir / name
+
+
+_RIDER_STATE_FILES = ("readiness_cap_reverted.json", "hrv_prompt_state.json",
+                      "last_pr_toast.json")
+
+
+def _adopt_legacy_rider_state() -> None:
+    """Move an upgraded install's root per-rider state into the profile, once.
+
+    Contract 5.6 put these files in the profile directory but read nothing
+    from the root, where slim/6 wrote them: on upgrade the HRV "never ask
+    again" came back and a pending PR toast was lost (fix-forward F7). With
+    exactly one profile the root copy can only be that rider's, so it moves
+    in unless the profile already has its own. With several, whose it is is
+    unknown: it stays at the root, logged. Idempotent (the move empties the
+    root)."""
+    from profile_manager import ProfileManager
+    pm = ProfileManager.get()
+    for name in _RIDER_STATE_FILES:
+        src = Path(DATA_DIR) / name
+        if not src.exists() or pm.active_id is None:
+            continue
+        dst = pm.active_dir / name
+        if len(pm.list_profiles()) != 1:
+            _log.info(f"root {name} left in place: {len(pm.list_profiles())} "
+                      "profiles, and it could be any rider's")
+        elif not dst.exists():
+            os.replace(src, dst)
+            _log.info(f"adopted root {name} into profile '{pm.active_id}'")
 
 
 def _readiness_revert_flag_path():

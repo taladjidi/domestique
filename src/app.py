@@ -1211,21 +1211,19 @@ def _setup_path_allowed_bases() -> "list[Path]":
             bases.append(own.parent)
         except Exception:  # noqa: BLE001 — a bad base must never break setup
             pass
+    # Not /tmp, nor Windows' %TEMP%/%TMP% (contract 3.4): any local user can
+    # write there, so a library there is one someone else controls. A onefile
+    # build unpacked in %TEMP% is covered by the bundled bases above.
     if sys.platform == "win32":
-        # Windows equivalents of /tmp; %TEMP% is also where a frozen onefile
-        # build unpacks itself.
-        for env in ("TEMP", "TMP", "LOCALAPPDATA", "APPDATA"):
+        for env in ("LOCALAPPDATA", "APPDATA"):
             v = os.environ.get(env)
             if v:
                 bases.append(Path(v))
-    else:
-        bases.append(Path("/tmp"))
-        bases.append(Path("/private/tmp"))  # macOS symlink target
     return bases
 
 
 def _setup_path_allowed(p: Path) -> bool:
-    """SEC4: restrict user-supplied setup paths to home / .domestique / /tmp.
+    """SEC4: restrict user-supplied setup paths to home / .domestique.
 
     Resolves symlinks before comparison so `/private/var/../Users/...`-style
     escapes still fall under ``Path.home()``. Allows exact matches and any
@@ -1408,14 +1406,14 @@ def setup_save(body: dict):
             prefs["rest_days"] = rest_days
 
         # Path overrides. SEC4: reject paths outside the allow-list
-        # (home / ~/.domestique / /tmp) so a malicious setup-save cannot make
+        # (home / ~/.domestique) so a malicious setup-save cannot make
         # the server read/write arbitrary filesystem locations later.
         for _field in ("workout_dir", "gpx_dir"):
             _val = body.get(_field)
             if _val and not _setup_path_allowed(Path(_val)):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"{_field} must be under $HOME, ~/.domestique, or /tmp",
+                    detail=f"{_field} must be under $HOME or ~/.domestique",
                 )
         # v3.11.2: never persist a workout folder that cannot serve as a
         # library. An existing-but-empty folder used to be accepted, emptied

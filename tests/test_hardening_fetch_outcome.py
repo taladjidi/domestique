@@ -86,6 +86,8 @@ CASES = [
     ("404", _http(404), "not_found"),
     ("410", _http(410), "not_found"),
     ("422", _http(422), "no_data"),
+    ("401", _http(401), "failed"),   # a dead credential is not a deleted ride
+    ("403", _http(403), "failed"),   # nor a Cloudflare UA block
     ("429", _http(429), "failed"),
     ("500", _http(500), "failed"),
     ("503", _http(503), "failed"),

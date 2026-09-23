@@ -637,6 +637,10 @@ def fetch_activity_fit_file_result(activity_id: str) -> Fetched:
             return _outcome_of(ICUServerError(status=status))
     except urllib.error.HTTPError as e:
         _log.warning(f"fetch_activity_fit_file({activity_id}) HTTP {e.code}: {e.reason}")
+        if e.code in (401, 403):
+            # Auth (or a Cloudflare User-Agent block) -- could not ask, the
+            # same answer _get gives the streams fetch as ICUAuthError.
+            return Fetched("failed")
         return _outcome_of(ICUServerError(status=e.code))
     except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as e:
         _log.warning(f"fetch_activity_fit_file({activity_id}) network: {e!r}")

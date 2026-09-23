@@ -261,3 +261,19 @@ def test_a_failed_fetch_waits_before_it_is_asked_again(ride, monkeypatch):
     power_curve.backfill_icu_history("default", max_per_second=100)
     rec = json.loads(ride.read_text())
     assert rec.get("efforts") and "streams_retry_after" not in rec
+
+
+def test_what_the_rider_types_on_a_ride_is_fsynced(ride, monkeypatch):
+    """Review of the F3 fix: ride records stopped fsyncing because a record
+    is a mirror intervals.icu can resend -- but the RPE and the FTP-test
+    verdict the rider types onto it are not. Those writes stay durable."""
+    import os
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real(fd))[1])
+    c = TestClient(app_module.app)
+    assert c.post(f"/api/ride/icu_{EXT}/rpe", json={"rpe": 7}).status_code == 200
+    assert synced, "the RPE write was not fsynced"
+    synced.clear()
+    r = c.post(f"/api/ride/icu_{EXT}/ftp-test-review", json={"action": "declined", "ftp": 250})
+    assert r.status_code == 200 and synced, "the FTP-test verdict was not fsynced"

@@ -186,9 +186,10 @@ def _write_json_atomic(path: Path, data, durable: bool = False) -> None:
 
     No fsync unless ``durable``: a sync writes every ride three times
     (persist, PR merge, DFA write-back), and fsyncing each made a first
-    sync of 300 rides 2.3x slower (fix-forward F3). A ride record is a
-    mirror intervals.icu can resend; the plan and the athlete profile keep
-    theirs."""
+    sync of 300 rides 2.3x slower (fix-forward F3). A ride record is
+    mostly a mirror intervals.icu can resend; the writes of what only the
+    rider typed (RPE, the FTP-test verdict, the stash) pass durable=True,
+    and the plan and the athlete profile keep theirs."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",
                                suffix=".tmp")
     try:
@@ -249,7 +250,7 @@ def ride_record_path(ride_id) -> "Path | None":
         return None  # no active profile
 
 
-def update_ride(ride_id, mutator) -> "dict | None":
+def update_ride(ride_id, mutator, durable: bool = False) -> "dict | None":
     """THE writer for a ride record that already exists: the rider's RPE and
     FTP-test verdict, DFA results, PRs, a sync's re-persist.
 
@@ -263,7 +264,7 @@ def update_ride(ride_id, mutator) -> "dict | None":
     if path is None:
         return None
     return update_json_record(
-        path, lambda cur: None if cur is None else mutator(cur))
+        path, lambda cur: None if cur is None else mutator(cur), durable)
 
 
 # ── rider input that outlives the intervals.icu mirror ──────────────────────
@@ -1534,7 +1535,8 @@ def set_fit_rpe(stem: str, rpe: int | None, rpe_at: str | None) -> bool:
             load["rpe_scale"] = "foster_cr10"
         return load
     try:
-        update_json_record(_fit_load_sidecar_path(fit_path), _rate)
+        # durable: the rider typed it; nothing can resend it.
+        update_json_record(_fit_load_sidecar_path(fit_path), _rate, durable=True)
     except OSError as e:
         log.warning(f"set_fit_rpe({stem}) failed: {e}")
         return False

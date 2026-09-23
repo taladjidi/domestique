@@ -18480,7 +18480,7 @@ async def api_ride_rpe(ride_id: str, request: Request):
     # Contract 2.2: the one ride writer (per-record lock, fresh read, atomic
     # replace), off the event loop because it waits on that lock.
     try:
-        written = await run_in_threadpool(_rs.update_ride, ride_id, _set_rpe)
+        written = await run_in_threadpool(_rs.update_ride, ride_id, _set_rpe, True)
     except OSError as e:
         _log.warning(f"rpe write failed for {ride_id}: {e}")
         return JSONResponse({"error": "write failed"}, 500)
@@ -19662,7 +19662,7 @@ async def api_ride_ftp_test_review(ride_id: str, request: Request):
     try:
         written = await run_in_threadpool(
             ride_storage.update_ride, str(icu.get("external_id")),
-            lambda r: {**r, "ftp_test_review": review})
+            lambda r: {**r, "ftp_test_review": review}, True)   # durable: the rider's verdict
     except OSError as e:
         _log.warning(f"ftp-test-review persist failed: {e}")
         return JSONResponse({"detail": "persist failed"}, 500)

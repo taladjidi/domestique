@@ -238,3 +238,17 @@ def test_an_icu_rating_wins_over_a_carried_fit_one(tmp_path, monkeypatch):
         "ride_id": "icu_999", "source": "icu", "external_id": "999",
         "started_at": "2026-07-26T20:00:00", "duration_s": 3600, "rpe": 4}))
     assert rs.load_all_rides()[0]["rpe"] == 4
+
+
+def test_a_fit_rating_is_fsynced(tmp_path, monkeypatch):
+    """Review of the F3 fix: FIT sidecars stopped fsyncing with the ride
+    records, but a FIT-only RPE has no other copy anywhere."""
+    import os
+    fit = tmp_path / "20260726T100000.fit"
+    fit.write_bytes(b"x")
+    monkeypatch.setattr(rs, "_fit_rides_dir", lambda: tmp_path)
+    monkeypatch.setattr(rs, "compute_fit_load", lambda p: {"tss": 60})
+    synced, real = [], os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real(fd))[1])
+    assert rs.set_fit_rpe("20260726T100000", 7, "2026-07-26T12:00:00")
+    assert synced, "a FIT-only rating was not fsynced"

@@ -62,3 +62,26 @@ def test_a_good_write_still_rotates(tmp_path: Path) -> None:
     for i in (1, 2, 3):
         tp.atomic_write_plan(p, {"v": i})
     assert _chain(p)[:4] == [3, 2, 1, None]
+
+
+def test_a_failed_rename_leaves_the_chain_and_no_temp(tmp_path: Path, monkeypatch) -> None:
+    """The last failure point: the rename itself (EBUSY on a locked file)."""
+    p = tmp_path / "current_plan.json"
+    for i in range(1, 9):
+        tp.atomic_write_plan(p, {"v": i})
+    before = _chain(p)
+    real_replace = Path.replace
+
+    def busy(self, target):
+        if self.name == "current_plan.tmp":
+            raise OSError(16, "Device or resource busy")
+        return real_replace(self, target)
+    monkeypatch.setattr(Path, "replace", busy)
+    for i in range(7):
+        with pytest.raises(OSError):
+            tp.atomic_write_plan(p, {"v": 100 + i})
+    monkeypatch.undo()
+    assert _chain(p) == before
+    assert sorted(x.name for x in tmp_path.iterdir()
+                  if not x.name.startswith("current_plan.json")) == []
+    assert not (tmp_path / "current_plan.json.bak.new").exists()

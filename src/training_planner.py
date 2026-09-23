@@ -447,13 +447,17 @@ def plan_write_lock():
         yield
 
 
-def _rotate_plan_backups(plan_path: "Path") -> None:
+def _rotate_plan_backups(plan_path: "Path", snapshot: "Path | None" = None) -> None:
     """v1.6.2 — shift backups down: .bak6→.bak7, ..., .bak→.bak2, then live→.bak.
 
     Best-effort: per-file failures (perm, disk) are logged and swallowed so
     the upcoming write still proceeds. The live file is COPIED (not moved)
     to .bak so the about-to-be-replaced file stays intact until the atomic
     rename swaps it. Caller MUST hold ``_plan_write_lock``.
+
+    ``snapshot``: a copy of the previous live file taken earlier; it becomes
+    .bak instead of copying the live file now (atomic_write_plan rotates
+    only AFTER its rename succeeded, when live is already the new plan).
     """
     p = Path(plan_path)
     # Drop the oldest if at depth (unlink only used here — guarded by tests).
@@ -476,7 +480,10 @@ def _rotate_plan_backups(plan_path: "Path") -> None:
     # rename of the new tmp file to overwrite).
     bak = p.with_suffix(p.suffix + ".bak")
     try:
-        shutil.copy2(p, bak)
+        if snapshot is not None:
+            Path(snapshot).replace(bak)
+        else:
+            shutil.copy2(p, bak)
     except OSError as e:
         log.debug(f"_rotate_plan_backups: copy live→.bak failed: {e}")
 
@@ -496,10 +503,11 @@ def atomic_write_plan(json_path: "Path | str", plan: dict) -> None:
     v1.6.2:
       - Refuses to write an empty / non-dict plan (guards the bug where a
         mutation produced ``{}`` or ``None`` and silently nuked the live file).
-      - Writes and fsyncs `<json_path>.tmp` FIRST, then rotates live → .bak →
-        .bak2 ... → .bak7, then atomic-renames. A write that fails (disk
-        full, unserialisable plan, unwritable temp) raises before the
-        rotation, so it leaves the live file AND the backup chain untouched
+      - Writes and fsyncs `<json_path>.tmp`, copies the live file aside,
+        atomic-renames, and only then rotates → .bak → .bak2 ... → .bak7.
+        A write that fails anywhere up to and including the rename (disk
+        full, unserialisable plan, unwritable temp, a busy target) raises
+        with the live file AND the backup chain untouched and no temp left
         (contract 3.3: rotating first let seven failed writes turn the chain
         into eight copies of one generation).
     """
@@ -520,9 +528,26 @@ def atomic_write_plan(json_path: "Path | str", plan: dict) -> None:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+        # The previous generation is copied aside, and the chain shifted only
+        # once the rename has succeeded: a rename that fails (EBUSY, ...)
+        # leaves the chain and the live file exactly as they were.
+        snap = None
         if p.exists():
-            _rotate_plan_backups(p)
-        tmp.replace(p)
+            snap = p.with_suffix(p.suffix + ".bak.new")
+            try:
+                shutil.copy2(p, snap)
+            except OSError as e:
+                log.debug(f"atomic_write_plan: snapshot of live failed: {e}")
+                snap = None
+        try:
+            tmp.replace(p)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            if snap is not None:
+                snap.unlink(missing_ok=True)
+            raise
+        if snap is not None:
+            _rotate_plan_backups(p, snapshot=snap)
     cb = post_write_callback
     if cb is not None:
         try:

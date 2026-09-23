@@ -631,7 +631,10 @@ async def lifespan(app):
     # a calendar push by itself (the daily reconcile mirrors it instead).
     try:
         if pm.active_id is not None:
-            _adopt_legacy_root_plan(
+            # Plan writers run off the event loop, boot included: the
+            # plan store refuses the loop's thread (fix-forward F6).
+            await run_in_threadpool(
+                _adopt_legacy_root_plan,
                 _DEFAULT_PLAN_DIR,   # legacy root ~/.domestique/plans
                 pm.plan_dir,         # active profile's plans dir
                 multi_profile=len(pm.list_profiles()) > 1,
@@ -680,7 +683,8 @@ async def lifespan(app):
     try:
         import training_planner as _tp_boot
         _plan_json = _plan_dir() / "current_plan.json"
-        _rewritten = _tp_boot.rewrite_stale_plan_classifications(_plan_json)
+        _rewritten = await run_in_threadpool(
+            _tp_boot.rewrite_stale_plan_classifications, _plan_json)
         if _rewritten > 0:
             _log.info(
                 f"v4.1.1 FIX-PLANNER A: rewrote {_rewritten} stale session "
@@ -699,7 +703,7 @@ async def lifespan(app):
 
     try:
         # P8: the plan self-heal runs here, not on a GET.
-        _heal_plan_on_disk()
+        await run_in_threadpool(_heal_plan_on_disk)
         yield
     finally:
         # ── Shutdown cleanup: best-effort, don't block teardown ──────────

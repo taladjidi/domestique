@@ -36,7 +36,9 @@ Usage:
 import availability  # the one per-day training cap (see src/availability.py)
 import clock  # the one clock every module reads (see src/clock.py)
 import argparse
+import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -432,7 +434,58 @@ def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None
 # v1.6.2 — ``_plan_write_lock`` is an ``RLock`` so callers already inside
 # ``plan_write_lock()`` can safely call ``atomic_write_plan`` without
 # deadlocking.
-_plan_write_lock = threading.RLock()
+def _refuse_on_event_loop() -> None:
+    """Contract 4.2, enforced at the lock instead of by pattern-matching the
+    callers: waiting on this threading lock from a thread that runs an
+    asyncio event loop stalls every request on the server (1.8-2.7 s behind
+    a slow writer). The AST guard in the tests missed 7 of 12 planted
+    violations -- aliases, nested defs, helpers in other modules, methods,
+    the raw lock (fix-forward F6); this refuses them all the first time they
+    run, and names who called. Async code calls the store through
+    ``run_in_threadpool`` / ``asyncio.to_thread``."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return                      # a worker thread, a background thread, the CLI
+    f, caller, handler = sys._getframe(1), None, None
+    while f is not None:
+        if caller is None and f.f_globals.get("__name__") not in (__name__, "contextlib"):
+            caller = f
+        if f.f_code.co_flags & (inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR):
+            handler = f
+            break
+        f = f.f_back
+    where = (f"{caller.f_code.co_name} ({Path(caller.f_code.co_filename).name}:"
+             f"{caller.f_lineno})" if caller else "?")
+    if handler is not None and handler is not caller:
+        where += f" in async {handler.f_code.co_name}"
+    raise RuntimeError(
+        f"the plan store was entered on the event loop by {where}: call it "
+        "through run_in_threadpool (contract 4.2)")
+
+
+class _PlanLock:
+    """The plan-write RLock, refusing to be taken on an event loop's thread."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+
+    def acquire(self, blocking=True, timeout=-1):
+        _refuse_on_event_loop()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        self._lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+_plan_write_lock = _PlanLock()
 
 PLAN_BACKUP_DEPTH = 7  # v1.6.2: keep .bak through .bak7 (7 snapshots).
 

@@ -357,3 +357,156 @@ def test_an_outage_neither_stalls_the_loop_nor_asks_per_request(app_plan, monkey
     assert codes == [200] * 3, codes
     assert state["asks"] == 1, f"intervals.icu asked {state['asks']}x for one outage window"
     assert max(lat) < 0.5, f"/api/version waited {max(lat):.2f}s behind the outage"
+
+
+# ── fix-forward F6: the rule is enforced at runtime, not by pattern ─────────
+
+@pytest.mark.parametrize("how", ["update_plan", "atomic_write_plan",
+                                 "plan_write_lock", "raw_lock"])
+def test_the_plan_store_refuses_the_event_loop_and_names_the_caller(tmp_path, how) -> None:
+    """The AST guard missed 7 of 12 planted violations (an alias, a nested
+    def, a helper in another module, a from-import, a method, the raw lock
+    attribute...; two of them stalled the loop 2.6 s). The store itself now
+    refuses to be entered from a thread running an event loop, whoever the
+    caller is, and says who called it."""
+    import asyncio
+    p = tmp_path / "current_plan.json"
+    tp.atomic_write_plan(p, {"weeks": [], "v": 1})
+    def with_lock(lock):
+        with lock:
+            pass
+    calls = {
+        "update_plan": lambda: tp.update_plan(p, lambda plan: {**plan, "v": 2}),
+        "atomic_write_plan": lambda: tp.atomic_write_plan(p, {"weeks": [], "v": 2}),
+        "plan_write_lock": lambda: with_lock(tp.plan_write_lock()),
+        "raw_lock": lambda: with_lock(tp._plan_write_lock),
+    }
+
+    async def planted_handler():
+        calls[how]()
+    with pytest.raises(RuntimeError, match="planted_handler"):
+        asyncio.run(planted_handler())
+    assert _read(p) == {"weeks": [], "v": 1}
+
+    async def control():                   # the sanctioned way still works
+        return await asyncio.to_thread(tp.update_plan, p, lambda plan: {**plan, "v": 3})
+    assert asyncio.run(control())["v"] == 3
+
+
+def _plan_writer_routes(src, dst):
+    today = clock.today()
+    mon = today - timedelta(days=today.weekday())
+    nxt = (mon + timedelta(weeks=1, days=2)).isoformat()
+    race = (today + timedelta(weeks=3)).isoformat()
+    return {
+        "api_readiness_revert_cap": ("/api/readiness/revert-cap", {}),
+        "api_readiness_apply_tier_down": ("/api/readiness/apply-tier-down",
+                                          {"date": (mon + timedelta(days=2)).isoformat()}),
+        "api_plan_auto_adjust": ("/api/plan/auto-adjust", {"scope": "today", "severity": "rest"}),
+        "api_today_session_persist": ("/api/today-session/persist",
+                                      {"session_type": "z2", "reason": "t"}),
+        "api_continuous_deload_revert": ("/api/plan/continuous/deload-revert", {}),
+        "api_plan_generate": ("/api/plan/generate", {"goal": "general", "hours_per_week": 7.0,
+                                                     "plan_weeks": 4, "rest_days": [0]}),
+        "api_plan_reforecast": ("/api/plan/reforecast", None),
+        "api_mark_unavailable": ("/api/plan/mark-unavailable",
+                                 {"start": nxt, "end": nxt, "type": "holiday"}),
+        "api_save_availability": ("/api/plan/save-availability", {"availability": {}}),
+        "api_plan_regenerate_dynamic": ("/api/plan/regenerate", {}),
+        "api_plan_add_race": ("/api/plan/add-race", {"date": race}),
+        "api_plan_update": ("/api/plan/update", None),
+        "api_plan_move_session": ("/api/plan/move-session", {"date": src, "new_date": dst}),
+        "api_plan_rematch": ("/api/plan/rematch?apply=1", None),
+        "api_plan_re_draw": ("/api/plan/re-draw", {"date": nxt}),
+        "api_plan_accept_redraw": ("/api/plan/accept-redraw", {"date": nxt, "zwo_file": "x.zwo"}),
+        "api_plan_swap_type": ("/api/plan/swap-type",
+                               {"date": nxt, "session_type": "z2", "duration_min": 60}),
+        "api_plan_ftp_test_type": ("/api/plan/ftp-test-type", {"date": nxt, "test_type": "ramp"}),
+        "api_plan_dismiss_session": ("/api/plan/dismiss-session", {"date": nxt}),
+        "api_plan_auto_recalc": ("/api/plan/auto-recalc", None),
+    }
+
+
+def test_every_plan_writer_route_waits_off_the_event_loop(app_plan, monkeypatch) -> None:
+    """Hold the plan lock, send every plan-writing route at once: each one
+    reaches the store from a worker thread, none answers 500 (the runtime
+    guard's RuntimeError), and /api/version answers in < 0.5 s meanwhile."""
+    import asyncio
+    import anyio.from_thread
+    from fastapi.testclient import TestClient
+    A, jp, src, dst, _ = app_plan
+    routes = _plan_writer_routes(src, dst)
+    entered, real = [], tp.update_plan
+
+    def spy(p, mutate):
+        try:
+            asyncio.get_running_loop()
+            on_loop = True
+        except RuntimeError:
+            on_loop = False
+        entered.append((mutate.__qualname__.split(".")[0], on_loop))
+        return real(p, mutate)
+    monkeypatch.setattr(tp, "update_plan", spy)
+    c = TestClient(A.app, base_url="http://127.0.0.1")
+    res, lat = {}, []
+    with anyio.from_thread.start_blocking_portal() as portal:
+        c.portal = portal
+        held, done = threading.Event(), threading.Event()
+
+        def slow_writer():
+            with tp.plan_write_lock():
+                held.set()
+                done.wait(30)
+        tw = threading.Thread(target=slow_writer)
+        tw.start()
+        assert held.wait(5)
+        ts = []
+        for name, (url, body) in routes.items():
+            send = (lambda u=url, b=body, n=name: res.setdefault(
+                n, c.post(u) if b is None else c.post(u, json=b)))
+            ts.append(threading.Thread(target=send))
+            ts[-1].start()
+        deadline = time.monotonic() + 20
+        while len(entered) < len(routes) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        for _ in range(3):
+            t0 = time.monotonic()
+            c.get("/api/version")
+            lat.append(time.monotonic() - t0)
+        done.set()
+        tw.join(10)
+        for t in ts:
+            t.join(60)
+        c.portal = None
+    missing = set(routes) - {n for n, _ in entered}
+    assert not missing, f"routes that never reached the store (test is vacuous): {sorted(missing)}"
+    assert [n for n, on_loop in entered if on_loop] == []
+    bad = {n: (r.status_code, r.text[:120]) for n, r in res.items() if r.status_code >= 500}
+    assert bad == {}
+    assert max(lat) < 0.5, f"/api/version took {max(lat):.2f}s behind the plan lock"
+
+
+def test_the_boot_passes_still_heal_the_plan_under_the_guard() -> None:
+    """lifespan runs on the event loop: its plan writers (the legacy-plan
+    adoption, the stale-classification rewrite, the self-heal) go through
+    the threadpool, or the guard refuses them and -- best-effort, the
+    errors are swallowed -- the plan is silently never healed."""
+    import app as A
+    from fastapi.testclient import TestClient
+    from profile_manager import ProfileManager
+    pm = ProfileManager.get()
+    if pm.active_id is None:
+        pm.switch(pm.create_profile("Boot"))
+    jp = Path(pm.plan_dir) / "current_plan.json"      # what lifespan points the app at
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    today = clock.today()
+    mon = today - timedelta(days=today.weekday())
+    tp.atomic_write_plan(jp, {"goal": {"type": "general", "hours_per_week": 8.0},
+                              "phases": [], "generated": clock.now().isoformat(),
+                              "weeks": [_week(mon + timedelta(weeks=k), k + 1) for k in range(3)]})
+    with TestClient(A.app, base_url="http://127.0.0.1"):
+        pass
+    future = [s for w in _read(jp)["weeks"] for s in w["sessions"]
+              if s["day"] > today.isoformat() and s["session_type"] != "rest"]
+    assert future and all(s["zwo_file"] for s in future), \
+        [s["day"] for s in future if not s["zwo_file"]]

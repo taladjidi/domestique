@@ -2033,16 +2033,15 @@ def latest_eftp(days: int = 90) -> "float | None":
     network is not. Same shape as the fitness ladder: live values land in the
     store, and every reader reads the store.
     """
+    from training import cycling_sport_info  # the cycling entry, not [0]
     for w in sorted(load_recent_wellness(days=days),
                     key=lambda x: str(x.get("id") or ""), reverse=True):
-        info = w.get("sportInfo") or []
-        if info and isinstance(info[0], dict):
-            value = info[0].get("eftp")
-            if value:
-                try:
-                    return float(value)
-                except (TypeError, ValueError):
-                    continue
+        value = cycling_sport_info(w).get("eftp")
+        if value:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
     return None
 
 

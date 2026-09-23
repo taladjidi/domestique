@@ -31,7 +31,7 @@ for _env_candidate in [_USER_DATA / ".env", Path(__file__).parent / ".env",
                 os.environ.setdefault(_k.strip(), _v.strip())
         break
 
-from training import fetch_wellness, fetch_activities, ICUCredentialsMissing
+from training import fetch_wellness, fetch_activities, ICUCredentialsMissing, cycling_sport_info
 from ride_storage import is_icu_stub  # v3.11.6 — one stub rule for every reader
 
 log = logging.getLogger(__name__)
@@ -367,6 +367,27 @@ def init_db():
     db.commit()
 
 
+def _upsert_icu_metric(db, dt: str, metric: str, value) -> None:
+    """Record an intervals.icu value for (date, metric) -- unless the rider
+    owns that row.
+
+    An UPSERT, never INSERT OR REPLACE: athlete_metrics rows carry their own
+    `source` and `notes`, and OR REPLACE is a DELETE plus an INSERT. The
+    VO2max upsert had no guard at all -- a lab VO2max of 61.5 logged through
+    /api/metrics/log became Garmin's 54.0 on the next sync (audit 2026-09-23,
+    data #7) -- and four hand-copied guards let a settings-sourced value be
+    overwritten because they only checked for 'manual'. The rule, once: an
+    intervals.icu value replaces only an intervals.icu value.
+    """
+    db.execute(
+        """INSERT INTO athlete_metrics (date, metric, value, source)
+           VALUES (?, ?, ?, 'intervals.icu')
+           ON CONFLICT(date, metric) DO UPDATE SET value = excluded.value
+           WHERE athlete_metrics.source = 'intervals.icu'""",
+        (dt, metric, value),
+    )
+
+
 def sync_wellness(days: int = 90, _snapshot=None) -> int:
     """Fetch wellness from Intervals.icu and upsert into SQLite. Returns count.
 
@@ -394,8 +415,8 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                 dt = w.get("id")
                 if not dt:
                     continue
-                si = w.get("sportInfo") or []
-                eftp = si[0].get("eftp") if len(si) > 0 else None
+                ci = cycling_sport_info(w)
+                eftp = ci.get("eftp")
                 db.execute(
                     # An UPSERT that keeps what only Domestique knows, the same
                     # fix `activities` got for `is_race`. INSERT OR REPLACE is
@@ -428,72 +449,28 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                         json.dumps(w),
                     ),
                 )
-                # Auto-log VO2max, eFTP, wPrime from Intervals.icu/Garmin
+                # Auto-log VO2max, eFTP, W', Pmax and max HR from
+                # intervals.icu/Garmin. One helper and one rule: an ICU value
+                # replaces only an ICU value (contract 2.3).
                 vo2max = w.get("vo2max")
                 if vo2max and isinstance(vo2max, (int, float)) and vo2max > 0:
-                    db.execute(
-                        "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'vo2max', ?, 'intervals.icu')",
-                        (dt, round(vo2max, 1)),
-                    )
+                    _upsert_icu_metric(db, dt, "vo2max", round(vo2max, 1))
                 if eftp and isinstance(eftp, (int, float)) and eftp > 0:
-                    # Don't clobber manual eFTP entries: check source before replace.
-                    existing = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'eftp'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing and existing[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'eftp', ?, 'intervals.icu')",
-                            (dt, round(eftp)),
-                        )
-                w_prime = si[0].get("wPrime") if len(si) > 0 else None
+                    _upsert_icu_metric(db, dt, "eftp", int(round(eftp)))
+                # v1.0.6 IMPL-3D-INGEST: W' and Pmax (best 1s power; live:
+                # 1,114.7 W on 2026-05-05) from the cycling sportInfo entry.
+                w_prime = ci.get("wPrime")
                 if w_prime and isinstance(w_prime, (int, float)) and w_prime > 0:
-                    # Manual-source guard: if the user logged W' manually (e.g.
-                    # from a 3-min all-out test), don't let ICU overwrite it.
-                    # IMPL-WBAL may later add a `_set_wprime(value, source)`
-                    # helper in profile_manager.py; until then we mirror the
-                    # eftp guard above (source='manual' wins).
-                    existing_wp = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'w_prime'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing_wp and existing_wp[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'w_prime', ?, 'intervals.icu')",
-                            (dt, round(w_prime)),
-                        )
-
-                # v1.0.6 IMPL-3D-INGEST: pull Pmax from ICU sportInfo[0].pMax
-                # (best 1s power; live: 1,114.7 W on 2026-05-05). Mirror of the
-                # wPrime block above with the same manual-source guard.
-                p_max = si[0].get("pMax") if len(si) > 0 else None
+                    _upsert_icu_metric(db, dt, "w_prime", int(round(w_prime)))
+                p_max = ci.get("pMax")
                 if p_max and isinstance(p_max, (int, float)) and p_max > 0:
-                    existing_pm = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'pmax'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing_pm and existing_pm[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'pmax', ?, 'intervals.icu')",
-                            (dt, round(p_max)),
-                        )
-
-                # v1.1.0 IMPL-NORWEGIAN-HR: pull max_hr from ICU wellness payload
-                # when exposed (athlete profile may carry it as `maxHr` or
-                # `max_hr`). Same manual-source guard as wPrime / pMax.
-                # PATCH G6: metric name is `max_hr` (not `hr_max`) — matches
-                # ProfileManager.max_hr property at profile_manager.py:147.
+                    _upsert_icu_metric(db, dt, "pmax", int(round(p_max)))
+                # v1.1.0 IMPL-NORWEGIAN-HR: max_hr when the wellness payload
+                # exposes it (`maxHr` or `max_hr`). PATCH G6: metric name is
+                # `max_hr` -- matches ProfileManager.max_hr.
                 ahr = w.get("maxHr") or w.get("max_hr")
                 if ahr and isinstance(ahr, (int, float)) and 140 <= ahr <= 220:
-                    existing_hr = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'max_hr'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing_hr and existing_hr[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'max_hr', ?, 'intervals.icu')",
-                            (dt, round(ahr)),
-                        )
+                    _upsert_icu_metric(db, dt, "max_hr", int(round(ahr)))
 
                 count += 1
         except Exception:

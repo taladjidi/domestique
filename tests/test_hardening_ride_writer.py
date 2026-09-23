@@ -141,3 +141,22 @@ def test_a_fit_ride_updates_its_load_sidecar(pm):
     side.write_text(json.dumps({"tss": 50, "reader_v": rs.FIT_LOAD_READER_V}))
     out = rs.update_ride("fit_2026-09-20T08-00-00", lambda r: {**r, "rpe": 6})
     assert out["rpe"] == 6 and json.loads(side.read_text())["tss"] == 50
+
+
+def test_a_ride_record_write_does_not_fsync_but_the_rider_input_stash_does(pm, monkeypatch):
+    """Fix-forward F3: every ride-record write fsynced, and a sync writes
+    each ride three times (persist, PR merge, DFA write-back): a first sync
+    of 300 rides went from 1.8 s (slim/6) to 4.2 s. os.replace already gives
+    a reader the old file or the new one, whole; a ride record is a mirror
+    intervals.icu can resend. The stash that a disconnect purge writes just
+    before it DELETES the rides keeps its fsync: it is then the only copy of
+    the rider's RPE."""
+    import os
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: (synced.append(fd), real(fd))[1])
+    rs.persist_icu_activity(dict(ACT))
+    rs.update_ride(f"icu_{EXT}", lambda r: {**r, "rpe": 6})
+    assert synced == [], f"a ride-record write fsynced {len(synced)}x"
+    rs.stash_rider_input(pm.active_dir, {EXT: {"rpe": 6}})
+    assert synced, "the rider-input stash was not fsynced"

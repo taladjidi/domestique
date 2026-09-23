@@ -179,17 +179,24 @@ def _record_lock(path: Path) -> "threading.RLock":
         return lock
 
 
-def _write_json_atomic(path: Path, data) -> None:
-    """Unique temp file in the same directory, fsync, os.replace: a reader
-    sees the old record or the new one, never a partial one. The temp name
-    starts with "." and ends ".tmp", so no `*.json` listing picks it up."""
+def _write_json_atomic(path: Path, data, durable: bool = False) -> None:
+    """Unique temp file in the same directory, os.replace: a reader sees the
+    old record or the new one, never a partial one. The temp name starts
+    with "." and ends ".tmp", so no `*.json` listing picks it up.
+
+    No fsync unless ``durable``: a sync writes every ride three times
+    (persist, PR merge, DFA write-back), and fsyncing each made a first
+    sync of 300 rides 2.3x slower (fix-forward F3). A ride record is a
+    mirror intervals.icu can resend; the plan and the athlete profile keep
+    theirs."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.",
                                suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, indent=2))
-            f.flush()
-            os.fsync(f.fileno())
+            if durable:
+                f.flush()
+                os.fsync(f.fileno())
         os.replace(tmp, str(path))
     except BaseException:
         try:
@@ -199,13 +206,13 @@ def _write_json_atomic(path: Path, data) -> None:
         raise
 
 
-def update_json_record(path: Path, mutator) -> "dict | None":
+def update_json_record(path: Path, mutator, durable: bool = False) -> "dict | None":
     """Locked read-modify-write of one record file.
 
     ``mutator(current)`` gets the parsed record (None when the file is absent
     or unreadable) and returns the record to write, or None to write nothing.
     Returns what was written, or None. A failed write raises and leaves the
-    file as it was.
+    file as it was. ``durable`` fsyncs it (see _write_json_atomic).
     """
     path = Path(path)
     with _record_lock(path):
@@ -218,7 +225,7 @@ def update_json_record(path: Path, mutator) -> "dict | None":
         new = mutator(current)
         if new is None:
             return None
-        _write_json_atomic(path, new)
+        _write_json_atomic(path, new, durable)
         return new
 
 
@@ -282,7 +289,9 @@ def stash_rider_input(profile_dir: Path, rides: dict) -> None:
         for ext, values in rides.items():
             kept[str(ext)] = {**kept.get(str(ext), {}), **values}
         return {**(cur or {}), "rides": kept}
-    update_json_record(Path(profile_dir) / RIDER_INPUT_FILE, _merge)
+    # durable: the purge deletes the rides right after, so this is then the
+    # only copy of what the rider typed.
+    update_json_record(Path(profile_dir) / RIDER_INPUT_FILE, _merge, durable=True)
 
 
 def stashed_rider_input(ext_ids, keys) -> dict:

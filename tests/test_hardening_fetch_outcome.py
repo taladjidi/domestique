@@ -142,11 +142,9 @@ def test_server_error_carries_its_http_status(monkeypatch):
     assert ei.value.status == 404
 
 
-# ── the end-to-end rule, which app.py applies in Wave 2 ──────────────────────
-# app._augment_icu_record_with_dfa still reads the legacy None and stamps
-# `icu_deleted` on any failure. These are the audit's reproduction (rv-integ
-# p3), strict-xfail until Wave 2 moves it onto the *_result fetchers: an
-# XPASS then fails the run, so whoever lands the fix must drop the marker.
+# ── the end-to-end rule, applied by app._augment_icu_record_with_dfa ────────
+# The audit's reproduction (rv-integ p3): it used to stamp `icu_deleted` on
+# any failure; it reads the *_result fetchers now (Wave 2).
 
 import datetime  # noqa: E402
 from unittest import mock  # noqa: E402
@@ -185,21 +183,19 @@ def _status_after(monkeypatch, urlopen):
     return json.loads(path.read_text())["dfa_alpha1_status"]
 
 
-WAVE2 = pytest.mark.xfail(strict=True, reason=(
-    "Wave 2: app._augment_icu_record_with_dfa must mark icu_deleted only when "
-    "both fetch_*_result answers are not_found (notes/hardening-interfaces-storage.md)"))
-
-
-@WAVE2
 def test_network_down_does_not_mark_the_ride_deleted(profile, monkeypatch):
     st = _status_after(monkeypatch, _raise(urllib.error.URLError("no DNS")))
-    assert st != "icu_deleted"
+    assert st == "fetch_failed"
 
 
-@WAVE2
 def test_http_503_does_not_mark_the_ride_deleted(profile, monkeypatch):
     st = _status_after(monkeypatch, _http(503))
-    assert st != "icu_deleted"
+    assert st == "fetch_failed"
+
+
+def test_http_429_does_not_mark_the_ride_deleted(profile, monkeypatch):
+    st = _status_after(monkeypatch, _http(429))
+    assert st == "fetch_failed"
 
 
 def test_control_404_marks_the_ride_deleted(profile, monkeypatch):

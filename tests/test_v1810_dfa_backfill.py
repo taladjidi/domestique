@@ -38,6 +38,19 @@ from fastapi.testclient import TestClient
 
 import app as _app_mod
 
+import training as _tr_results
+
+
+def _as_result(fn):
+    """The DFA augment reads the *_result fetchers since contract 1.2 (it
+    must tell "deleted upstream" from "could not ask"): a legacy stub's None
+    stands for a confirmed not-found, anything else is the payload."""
+    def wrapped(x):
+        v = fn(x)
+        return (_tr_results.Fetched("not_found") if v is None
+                else _tr_results.Fetched("ok", v))
+    return wrapped
+
 
 def _seed_icu_ride(dir_: Path, ext_id: str, status: "str | None" = None,
                     started_at: str = "2026-05-21T10:00:00",
@@ -71,8 +84,8 @@ class TestAugmentIcuDeletedSticky(unittest.TestCase):
 
     def test_all_paths_fail_marks_icu_deleted(self):
         p = _seed_icu_ride(self._tmp, "iDELETED", status="fetch_failed")
-        with patch("training.fetch_activity_streams", return_value=None), \
-             patch("training.fetch_activity_fit_file", return_value=None):
+        with patch("training.fetch_activity_streams_result", return_value=_tr_results.Fetched("not_found")), \
+             patch("training.fetch_activity_fit_file_result", return_value=_tr_results.Fetched("not_found")):
             _app_mod._augment_icu_record_with_dfa(p, "iDELETED")
         rec = json.loads(p.read_text(encoding="utf-8"))
         self.assertEqual(rec["dfa_alpha1_status"], "icu_deleted")
@@ -83,9 +96,9 @@ class TestAugmentIcuDeletedSticky(unittest.TestCase):
         p = _seed_icu_ride(self._tmp, "iSTICKY", status="computed",
                             algo_version=_app_mod._DFA_ALGO_VERSION)
         # Streams fetcher would explode if called → asserts we don't call it.
-        with patch("training.fetch_activity_streams",
+        with patch("training.fetch_activity_streams_result",
                     side_effect=AssertionError("should not be called")), \
-             patch("training.fetch_activity_fit_file",
+             patch("training.fetch_activity_fit_file_result",
                     side_effect=AssertionError("should not be called")):
             _app_mod._augment_icu_record_with_dfa(p, "iSTICKY")  # no force
         rec = json.loads(p.read_text(encoding="utf-8"))
@@ -99,8 +112,8 @@ class TestAugmentIcuDeletedSticky(unittest.TestCase):
         # the augment path executed despite status='computed'.
         p = _seed_icu_ride(self._tmp, "iSTALE", status="computed",
                             algo_version=_app_mod._DFA_ALGO_VERSION - 1)
-        with patch("training.fetch_activity_streams", return_value=None), \
-             patch("training.fetch_activity_fit_file", return_value=None):
+        with patch("training.fetch_activity_streams_result", return_value=_tr_results.Fetched("not_found")), \
+             patch("training.fetch_activity_fit_file_result", return_value=_tr_results.Fetched("not_found")):
             _app_mod._augment_icu_record_with_dfa(p, "iSTALE")  # no force
         rec = json.loads(p.read_text(encoding="utf-8"))
         self.assertEqual(rec["dfa_alpha1_status"], "icu_deleted")
@@ -108,8 +121,8 @@ class TestAugmentIcuDeletedSticky(unittest.TestCase):
 
     def test_force_retries_even_sticky(self):
         p = _seed_icu_ride(self._tmp, "iFORCE", status="icu_deleted")
-        with patch("training.fetch_activity_streams", return_value=None), \
-             patch("training.fetch_activity_fit_file", return_value=None):
+        with patch("training.fetch_activity_streams_result", return_value=_tr_results.Fetched("not_found")), \
+             patch("training.fetch_activity_fit_file_result", return_value=_tr_results.Fetched("not_found")):
             _app_mod._augment_icu_record_with_dfa(p, "iFORCE", force=True)
         rec = json.loads(p.read_text(encoding="utf-8"))
         # Still icu_deleted because the patched fetches return None — but
@@ -129,9 +142,9 @@ class TestAugmentIcuDeletedSticky(unittest.TestCase):
         def _fit_die(_id):
             fit_called.append(_id)
             return None
-        with patch("training.fetch_activity_streams",
+        with patch("training.fetch_activity_streams_result",
                     side_effect=AssertionError("should not be called")), \
-             patch("training.fetch_activity_fit_file", side_effect=_fit_die):
+             patch("training.fetch_activity_fit_file_result", side_effect=_as_result(_fit_die)):
             _app_mod._augment_icu_record_with_dfa(p, "iLAZY")
 
         rec2 = json.loads(p.read_text(encoding="utf-8"))

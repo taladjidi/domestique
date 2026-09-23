@@ -19,6 +19,19 @@ from pathlib import Path
 
 import app
 
+import training as _tr_results
+
+
+def _as_result(fn):
+    """The DFA augment reads the *_result fetchers since contract 1.2 (it
+    must tell "deleted upstream" from "could not ask"): a legacy stub's None
+    stands for a confirmed not-found, anything else is the payload."""
+    def wrapped(x):
+        v = fn(x)
+        return (_tr_results.Fetched("not_found") if v is None
+                else _tr_results.Fetched("ok", v))
+    return wrapped
+
 
 def _write_record(tmp_path: Path) -> Path:
     rec_path = tmp_path / "icu_42.json"
@@ -39,7 +52,7 @@ def test_augment_returns_within_timeout_on_slow_fetch(tmp_path, monkeypatch):
         release.wait(timeout=10)
         return b"never reached"
 
-    monkeypatch.setattr("training.fetch_activity_fit_file", _hang_fetch)
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(_hang_fetch))
     monkeypatch.setattr(app, "_DFA_AUGMENT_TIMEOUT_S", 0.5)
 
     try:
@@ -63,7 +76,7 @@ def test_augment_marks_timeout_status_on_slow_parse(tmp_path, monkeypatch):
     rec_path = _write_record(tmp_path)
     release = threading.Event()
 
-    monkeypatch.setattr("training.fetch_activity_fit_file", lambda _x: b"FITDATA")
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(lambda _x: b"FITDATA"))
 
     def _hang_parse(_p):
         release.wait(timeout=10)
@@ -88,7 +101,7 @@ def test_augment_normal_path_unaffected(tmp_path, monkeypatch):
     """Fast fetch + parse: result is persisted, status is propagated."""
     rec_path = _write_record(tmp_path)
 
-    monkeypatch.setattr("training.fetch_activity_fit_file", lambda _x: b"FITDATA")
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(lambda _x: b"FITDATA"))
     monkeypatch.setattr(
         "analytics.compute_dfa_alpha1_for_fit",
         lambda _p: {

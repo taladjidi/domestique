@@ -62,6 +62,7 @@ from fastapi import FastAPI, File, Form, Request, Query, UploadFile, HTTPExcepti
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool  # blocking locks never on the event loop
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -17470,6 +17471,9 @@ def _augment_icu_record_with_dfa(rec_path: Path, external_id: str,
             return
 
     import training as _training
+    # What intervals.icu answered for the streams and the FIT (contract 1.2):
+    # the status of a ride with no DFA follows from these, not from "no data".
+    answers: list = []
 
     def _fetch_and_compute() -> "dict | None":
         # v1.8.10 augment chain — try lazy paths before the heavyweight
@@ -17526,7 +17530,9 @@ def _augment_icu_record_with_dfa(rec_path: Path, external_id: str,
 
         # Step 2 — fresh streams fetch.
         try:
-            fresh = _training.fetch_activity_streams(external_id)
+            _r = _training.fetch_activity_streams_result(external_id)
+            answers.append(_r.status)
+            fresh = _r.data if _r.status == "ok" else None
             if isinstance(fresh, dict):
                 hrv = fresh.get("hrv")
                 if isinstance(hrv, list) and any(s for s in hrv):
@@ -17540,10 +17546,12 @@ def _augment_icu_record_with_dfa(rec_path: Path, external_id: str,
 
         # Step 3 — FIT fallback.
         try:
-            raw = _training.fetch_activity_fit_file(external_id)
+            _r = _training.fetch_activity_fit_file_result(external_id)
         except Exception as e:
-            _log.debug(f"fetch_activity_fit_file({external_id}) raised: {e}")
-            return None
+            _log.debug(f"fetch_activity_fit_file_result({external_id}) raised: {e}")
+            _r = _training.Fetched("failed")
+        answers.append(_r.status)
+        raw = _r.data if _r.status == "ok" else None
         if not raw:
             return None
         tmp_path = None
@@ -17592,50 +17600,61 @@ def _augment_icu_record_with_dfa(rec_path: Path, external_id: str,
     finally:
         _ex.shutdown(wait=False, cancel_futures=True)
 
-    if timed_out:
-        rec["dfa_alpha1_status"] = "timeout"
-        # v2.0.5 — count retries so the status goes sticky after
-        # _DFA_MAX_TIMEOUT_RETRIES (the skip-gate above), instead of being
-        # re-attempted on every sync forever.
-        rec["dfa_timeout_count"] = _timeout_count + 1
-        rec.setdefault("dfa_alpha1_avg", None)
-        rec.setdefault("dfa_alpha1_series", [])
-        rec.setdefault("dfa_alpha1_lt1_minutes", None)
-        rec.setdefault("rr_intervals_count", 0)
-    elif not isinstance(dfa, dict):
-        # v1.8.10 — when ALL three augment paths failed (no local stream,
-        # ICU 404'd both /streams and /fit-file), the activity is gone from
-        # ICU and there's no way to recover the RR data. Mark sticky as
-        # ``icu_deleted`` so subsequent backfill passes skip it instead of
-        # hammering ICU forever. The DFA diagnostic on the homepage will
-        # surface the count to the user.
-        rec["dfa_alpha1_status"] = "icu_deleted"
-        rec.setdefault("dfa_alpha1_avg", None)
-        rec.setdefault("dfa_alpha1_series", [])
-        rec.setdefault("dfa_alpha1_lt1_minutes", None)
-        rec.setdefault("rr_intervals_count", 0)
+    # Why there is no DFA (contract 1.2). `icu_deleted` is sticky, so only a
+    # confirmed not-found from BOTH the streams and the FIT earns it; any
+    # answer that was a failure to ask (network, timeout, 429, 5xx, auth) is
+    # `fetch_failed`, which the next sync pass retries. Anything else (a 422
+    # Strava-origin ride, streams with no RR, an unparseable FIT) has nothing
+    # to compute from: `no_rr_data`. It used to be `icu_deleted` for all.
+    if "failed" in answers:
+        no_dfa_status = "fetch_failed"
+    elif len(answers) == 2 and set(answers) == {"not_found"}:
+        no_dfa_status = "icu_deleted"
     else:
-        rec["dfa_alpha1"] = dfa.get("dfa_alpha1_avg")
-        rec["dfa_alpha1_avg"] = dfa.get("dfa_alpha1_avg")
-        rec["dfa_alpha1_series"] = dfa.get("dfa_alpha1_series") or []
-        rec["dfa_alpha1_lt1_minutes"] = dfa.get("dfa_alpha1_lt1_minutes")
-        rec["dfa_alpha1_status"] = dfa.get("dfa_alpha1_status") or "no_rr_data"
-        rec["rr_intervals_count"] = int(dfa.get("rr_intervals_count") or 0)
-        # v1.8.14 (algo v3) — HRVT1/HRVT2 + 3-zone intensity minutes, when the
-        # stream path produced them (None on the FIT-only fallback path).
-        rec["dfa_hrvt1"] = dfa.get("dfa_hrvt1")
-        rec["dfa_hrvt2"] = dfa.get("dfa_hrvt2")
-        rec["dfa_zone_minutes"] = dfa.get("dfa_zone_minutes")
+        no_dfa_status = "no_rr_data"
+    _empty = {"dfa_alpha1_avg": None, "dfa_alpha1_series": [],
+              "dfa_alpha1_lt1_minutes": None, "rr_intervals_count": 0}
 
-    # v1.8.14 — stamp the algorithm version on every write path (timeout,
-    # icu_deleted, and computed). The sticky-skip gate above compares this
-    # against _DFA_ALGO_VERSION so a future maths change auto-recomputes
-    # stale records. timeout is non-sticky regardless, but stamping it keeps
-    # the field present on every record for consistent diagnostics.
-    rec["dfa_algo_version"] = _DFA_ALGO_VERSION
+    def _merge(cur):
+        # Contract 2.2: merged into the record as it is NOW, under its lock --
+        # the copy read above is up to 45 s old, and an RPE, a verdict or a
+        # sync persist may have landed since.
+        if cur is None:
+            return None
+        cur = dict(cur)
+        if timed_out:
+            cur["dfa_alpha1_status"] = "timeout"
+            # v2.0.5 — count retries so the status goes sticky after
+            # _DFA_MAX_TIMEOUT_RETRIES (the skip-gate above), instead of being
+            # re-attempted on every sync forever.
+            cur["dfa_timeout_count"] = _timeout_count + 1
+            for k, v in _empty.items():
+                cur.setdefault(k, v)
+        elif not isinstance(dfa, dict):
+            cur["dfa_alpha1_status"] = no_dfa_status
+            for k, v in _empty.items():
+                cur.setdefault(k, v)
+        else:
+            cur["dfa_alpha1"] = dfa.get("dfa_alpha1_avg")
+            cur["dfa_alpha1_avg"] = dfa.get("dfa_alpha1_avg")
+            cur["dfa_alpha1_series"] = dfa.get("dfa_alpha1_series") or []
+            cur["dfa_alpha1_lt1_minutes"] = dfa.get("dfa_alpha1_lt1_minutes")
+            cur["dfa_alpha1_status"] = dfa.get("dfa_alpha1_status") or "no_rr_data"
+            cur["rr_intervals_count"] = int(dfa.get("rr_intervals_count") or 0)
+            # v1.8.14 (algo v3) — HRVT1/HRVT2 + 3-zone intensity minutes, when
+            # the stream path produced them (None on the FIT-only fallback).
+            cur["dfa_hrvt1"] = dfa.get("dfa_hrvt1")
+            cur["dfa_hrvt2"] = dfa.get("dfa_hrvt2")
+            cur["dfa_zone_minutes"] = dfa.get("dfa_zone_minutes")
+        # v1.8.14 — stamp the algorithm version on every write path. The
+        # sticky-skip gate above compares it against _DFA_ALGO_VERSION so a
+        # future maths change auto-recomputes stale records.
+        cur["dfa_algo_version"] = _DFA_ALGO_VERSION
+        return cur
 
     try:
-        rec_path.write_text(_json.dumps(rec, indent=2), encoding="utf-8")
+        import ride_storage as _rs
+        _rs.update_json_record(rec_path, _merge)
     except OSError as e:
         _log.debug(f"_augment_icu_record_with_dfa: write back: {e}")
 
@@ -18117,12 +18136,8 @@ async def api_ride_rpe(ride_id: str, request: Request):
         clear_cache()
         return {"ok": True, "ride_id": ride_id, "rpe": rpe,
                 "scale": "foster_cr10" if rpe is not None else None}
-    ext = ride_id[4:] if ride_id.startswith("icu_") else ride_id
-    path = _rs._icu_rides_dir() / f"{ext}.json"
-    if not path.exists():
-        return JSONResponse({"error": "unknown ride"}, 404)
-    try:
-        rec = json.loads(path.read_text(encoding="utf-8"))
+    def _set_rpe(rec):
+        rec = dict(rec)
         if rpe is None:
             for k in ("rpe", "rpe_at", "rpe_scale"):
                 rec.pop(k, None)
@@ -18130,10 +18145,17 @@ async def api_ride_rpe(ride_id: str, request: Request):
             rec["rpe"] = rpe
             rec["rpe_at"] = clock.now().isoformat()
             rec["rpe_scale"] = "foster_cr10"
-        path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
-    except (OSError, json.JSONDecodeError) as e:
-        _log.warning(f"rpe write failed for {ext}: {e}")
+        return rec
+
+    # Contract 2.2: the one ride writer (per-record lock, fresh read, atomic
+    # replace), off the event loop because it waits on that lock.
+    try:
+        written = await run_in_threadpool(_rs.update_ride, ride_id, _set_rpe)
+    except OSError as e:
+        _log.warning(f"rpe write failed for {ride_id}: {e}")
         return JSONResponse({"error": "write failed"}, 500)
+    if written is None:
+        return JSONResponse({"error": "unknown ride"}, 404)
     clear_cache()
     return {"ok": True, "ride_id": ride_id, "rpe": rpe,
             "scale": "foster_cr10" if rpe is not None else None}
@@ -18166,11 +18188,11 @@ def api_ride_prs(ride_id: str):
     except Exception as e:
         _log.warning(f"api_ride_prs lazy compute failed: {e}")
         prs = []
-    # Best-effort cache the result back into the envelope so re-reads are O(1).
+    # Best-effort cache the result back into the envelope so re-reads are O(1),
+    # merged into the record as it is now (contract 2.2: the copy read before
+    # the compute would erase an RPE saved during it).
     try:
-        rec["prs"] = prs
-        path = _rs._icu_rides_dir() / f"{ext}.json"
-        path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+        _rs.update_ride(ext, lambda r: {**r, "prs": prs})
     except Exception as e:
         _log.debug(f"api_ride_prs persist failed: {e}")
     return {"ride_id": ride_id, "prs": prs}
@@ -19301,18 +19323,21 @@ async def api_ride_ftp_test_review(ride_id: str, request: Request):
         _ftp_val = int(float(body.get("ftp") or 0)) or None
     except (TypeError, ValueError):
         _ftp_val = None  # grill pipeline/F5: garbage ftp must not 500
-    icu["ftp_test_review"] = {
+    review = {
         "action": action,
         "ftp": _ftp_val,
         "at": clock.now().isoformat(timespec="seconds"),
     }
+    # Contract 2.2: merged into the record as it is now, under its lock.
     try:
-        ext = str(icu.get("external_id"))
-        path = ride_storage._icu_rides_dir() / f"{ext}.json"
-        path.write_text(json.dumps(icu, indent=2), encoding="utf-8")
+        written = await run_in_threadpool(
+            ride_storage.update_ride, str(icu.get("external_id")),
+            lambda r: {**r, "ftp_test_review": review})
     except OSError as e:
         _log.warning(f"ftp-test-review persist failed: {e}")
         return JSONResponse({"detail": "persist failed"}, 500)
+    if written is None:
+        return JSONResponse({"error": "Ride not found"}, 404)
     return {"ok": True, "persisted": True}
 
 

@@ -673,16 +673,20 @@ def _mark_no_streams(ride_path: Path, data: dict, sync_snapshot=None) -> None:
     profile gate — the gate already refused the write, so nothing can land
     in the wrong profile) just leaves the ride unmarked for the next pass.
     """
-    data["no_streams_available"] = True
-    data["streams_fetch_failed_at"] = time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    marker = {"no_streams_available": True,
+              "streams_fetch_failed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                       time.gmtime())}
+    data.update(marker)
+    # Contract 2.2: merged into the record as it is now, under its lock --
+    # ``data`` was read before the fetch, and a rating may have landed since.
+    import ride_storage as _rs
     try:
         if sync_snapshot is not None:
             import db as _db
             with _db.sync_write_gate(sync_snapshot):
-                _atomic_write_json(ride_path, data)
+                _rs.update_json_record(ride_path, lambda r: None if r is None else {**r, **marker})
         else:
-            _atomic_write_json(ride_path, data)
+            _rs.update_json_record(ride_path, lambda r: None if r is None else {**r, **marker})
     except Exception as e:  # noqa: BLE001 — marker is best-effort
         log.debug(f"backfill: no-streams marker write {ride_path} failed: {e}")
 
@@ -938,31 +942,42 @@ def backfill_icu_history(profile_id: "str | None" = None,
                 failed += 1
                 continue
 
-            data["efforts"] = efforts
-            # 3.4.1 ① — a fetch that succeeds heals any stale terminal marker
-            # (e.g. the ICU sync refreshed the envelope after the ride gained
-            # a power stream server-side).
-            data.pop("no_streams_available", None)
-            data.pop("streams_fetch_failed_at", None)
-            # v1.8.10 Bug A — persist the full ICU streams dict, not just
-            # the derived efforts. _ride_power_stream() (and therefore
-            # compute_fatigue_resistance, the homepage power-curve render,
-            # and the energy-system breakdown) all read
-            # ride["streams"]["watts"] directly. Without this line every
-            # downstream consumer thinks streams are uncached and the
-            # fatigue panel reports 0% forever.
-            data["streams"] = streams
-            # W2b: opportunistic FTP-test detection on the just-hydrated
-            # streams (persisted with this same write; carried across
-            # re-syncs by ride_storage._FTP_TEST_CARRY_KEYS).
-            _maybe_detect_ftp_test(data, streams)
+            def _merge(cur, efforts=efforts, streams=streams):
+                # Contract 2.2: merged into the record as it is NOW, under
+                # its lock -- ``data`` was read before the (rate-limited)
+                # fetch, and an RPE or a verdict may have landed since.
+                if cur is None:
+                    return None
+                cur = dict(cur)
+                cur["efforts"] = efforts
+                # 3.4.1 ① — a fetch that succeeds heals any stale terminal
+                # marker (e.g. the ICU sync refreshed the envelope after the
+                # ride gained a power stream server-side).
+                cur.pop("no_streams_available", None)
+                cur.pop("streams_fetch_failed_at", None)
+                # v1.8.10 Bug A — persist the full ICU streams dict, not just
+                # the derived efforts. _ride_power_stream() (and therefore
+                # compute_fatigue_resistance, the homepage power-curve render,
+                # and the energy-system breakdown) all read
+                # ride["streams"]["watts"] directly. Without this line every
+                # downstream consumer thinks streams are uncached and the
+                # fatigue panel reports 0% forever.
+                cur["streams"] = streams
+                # W2b: opportunistic FTP-test detection on the just-hydrated
+                # streams, against the fresh record (a verdict the rider gave
+                # meanwhile blocks it); carried across re-syncs by
+                # ride_storage._FTP_TEST_CARRY_KEYS.
+                _maybe_detect_ftp_test(cur, streams)
+                return cur
+
+            import ride_storage as _rs
             try:
                 if sync_snapshot is not None:
                     import db as _db
                     with _db.sync_write_gate(sync_snapshot):
-                        _atomic_write_json(ride_path, data)
+                        _rs.update_json_record(ride_path, _merge)
                 else:
-                    _atomic_write_json(ride_path, data)
+                    _rs.update_json_record(ride_path, _merge)
             except OSError as e:
                 log.warning(f"backfill: write {ride_path} failed: {e}")
                 failed += 1

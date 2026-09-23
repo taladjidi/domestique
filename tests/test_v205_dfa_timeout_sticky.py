@@ -28,6 +28,19 @@ from pathlib import Path
 
 import app
 
+import training as _tr_results
+
+
+def _as_result(fn):
+    """The DFA augment reads the *_result fetchers since contract 1.2 (it
+    must tell "deleted upstream" from "could not ask"): a legacy stub's None
+    stands for a confirmed not-found, anything else is the payload."""
+    def wrapped(x):
+        v = fn(x)
+        return (_tr_results.Fetched("not_found") if v is None
+                else _tr_results.Fetched("ok", v))
+    return wrapped
+
 
 def _write_record(tmp_path: Path, **extra) -> Path:
     rec = {"id": "77", "started_at": "2026-05-13T08:00:00Z"}
@@ -55,8 +68,8 @@ def test_timeout_record_is_sticky_after_max_retries(tmp_path, monkeypatch):
         called["streams"] = True
         return {}
 
-    monkeypatch.setattr("training.fetch_activity_fit_file", _should_not_fetch)
-    monkeypatch.setattr("training.fetch_activity_streams", _should_not_stream)
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(_should_not_fetch))
+    monkeypatch.setattr("training.fetch_activity_streams_result", _as_result(_should_not_stream))
 
     app._augment_icu_record_with_dfa(rec_path, "77")
 
@@ -81,8 +94,8 @@ def test_timeout_retry_uses_short_cap_and_increments(tmp_path, monkeypatch):
         release.wait(timeout=10)
         return b"never reached"
 
-    monkeypatch.setattr("training.fetch_activity_streams", lambda _x: {})
-    monkeypatch.setattr("training.fetch_activity_fit_file", _hang_fetch)
+    monkeypatch.setattr("training.fetch_activity_streams_result", _as_result(lambda _x: {}))
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(_hang_fetch))
     # Long base cap, short retry cap: a fast bail proves the retry cap was used.
     monkeypatch.setattr(app, "_DFA_AUGMENT_TIMEOUT_S", 10.0)
     monkeypatch.setattr(app, "_DFA_AUGMENT_RETRY_TIMEOUT_S", 0.5)
@@ -109,8 +122,8 @@ def test_fresh_record_keeps_full_cap(tmp_path, monkeypatch):
         release.wait(timeout=10)
         return b"never reached"
 
-    monkeypatch.setattr("training.fetch_activity_streams", lambda _x: {})
-    monkeypatch.setattr("training.fetch_activity_fit_file", _hang_fetch)
+    monkeypatch.setattr("training.fetch_activity_streams_result", _as_result(lambda _x: {}))
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(_hang_fetch))
     monkeypatch.setattr(app, "_DFA_AUGMENT_TIMEOUT_S", 0.8)
     monkeypatch.setattr(app, "_DFA_AUGMENT_RETRY_TIMEOUT_S", 0.1)
 
@@ -143,8 +156,8 @@ def test_force_backfill_ignores_sticky(tmp_path, monkeypatch):
         called["streams"] = True
         return {}
 
-    monkeypatch.setattr("training.fetch_activity_streams", _stream)
-    monkeypatch.setattr("training.fetch_activity_fit_file", lambda _x: None)
+    monkeypatch.setattr("training.fetch_activity_streams_result", _as_result(_stream))
+    monkeypatch.setattr("training.fetch_activity_fit_file_result", _as_result(lambda _x: None))
 
     app._augment_icu_record_with_dfa(rec_path, "77", force=True)
 

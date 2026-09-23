@@ -137,6 +137,19 @@ def workout_dir_is_usable(path) -> bool:
         return False
 
 
+def active_workout_dir() -> Path:
+    """The workout directory the planner plans from, read at call time.
+
+    The planner's ``WORKOUT_DIR`` is the one owner: everything that serves,
+    pushes or lists a planned session's file reads it through here, so the
+    files a plan names are the files that get served (the app kept a second
+    copy that setup/save rebound alone: every planned download 404'd and the
+    calendar push skipped every session as ``file_missing`` until restart).
+    Never ``from training_planner import WORKOUT_DIR`` -- that binds the value
+    and goes stale on the next profile switch."""
+    return WORKOUT_DIR
+
+
 # Allow user override via user_paths.json (matches app.py behavior).
 # Linux-IP D3 (v3.11.1) checked existence; v3.11.2 checks USABILITY — see
 # workout_dir_is_usable.

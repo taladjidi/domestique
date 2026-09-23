@@ -293,7 +293,7 @@ def _desired_events(pm, plan: dict, today: date, horizon_days: int,
     hr_mode = raw_mode == "hr"
     lthr_ok = bool(pm.lthr_is_set and pm.max_hr > pm.lthr)
 
-    workout_dir = Path(_app.WORKOUT_DIR)
+    workout_dir = Path(_app.active_workout_dir())
     classifications = _load_classifications(workout_dir)
 
     # Day → that day's sessions in stored plan order (weeks are ordered and a

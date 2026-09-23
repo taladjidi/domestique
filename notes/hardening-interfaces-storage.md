@@ -5,7 +5,7 @@ src/profile_manager.py, src/cache.py, src/fitness.py, src/training.py.
 Line numbers are for `src/app.py` / `src/power_curve.py` at 1294c6f0 (this
 branch does not touch them).
 
-Two strict-xfail tests turn into XPASS -> FAIL when Wave 2 lands the app.py
+Three strict-xfail tests turn into XPASS -> FAIL when Wave 2 lands the app.py
 side; delete their `@WAVE2` / `xfail` marker in the same commit:
 - tests/test_hardening_fetch_outcome.py::test_network_down_does_not_mark_the_ride_deleted
 - tests/test_hardening_fetch_outcome.py::test_http_503_does_not_mark_the_ride_deleted
@@ -26,8 +26,9 @@ New in training.py:
 
 ```python
 training.Fetched(status, data)          # NamedTuple
-# status: "ok" | "not_found" (404/410) | "no_data" (other 4xx, e.g. 422)
-#         | "failed" (network, timeout, truncated body, 429, 5xx, auth, no creds)
+# status: "ok" | "not_found" (404/410) | "no_data" (other 4xx, e.g. 422,
+#         a scope 403 via _get) | "failed" (network, timeout, truncated body,
+#         408, 429, 5xx, 401/403 auth, no creds)
 training.fetch_activity_streams_result(activity_id) -> Fetched   # data: dict by stream type
 training.fetch_activity_fit_file_result(activity_id) -> Fetched  # data: bytes
 ```
@@ -52,7 +53,8 @@ app.py `_augment_icu_record_with_dfa` (~17358-17580), inside `_fetch_and_compute
 `training.get_today_metrics()` returns `cache.Unavailable()` (an empty dict,
 falsy, `== {}`) on an ICU failure; `cache.cached` treats it as a failed fill
 (stale value served, failure held 30 s). The 30 `cached("training",
-get_today_metrics)` sites need no change. Do not `isinstance(x, dict)`-branch
+get_today_metrics)` sites need no change. When wellness answers but the
+activities fetch fails it returns `cache.Partial` (served, held 30 s). Do not `isinstance(x, dict)`-branch
 on it expecting a fresh dict to mutate; `cached()` returns a copy anyway.
 
 ## 1.4 — nothing to do in app.py
@@ -61,7 +63,9 @@ on it expecting a fresh dict to mutate; `cached()` returns a copy anyway.
 
 `db.purge_profile_data` parks RPE / rpe_at / rpe_scale / ftp_test_review /
 is_race in `<profile>/rider_input.json` (keyed by intervals.icu id) before it
-deletes, and keeps a wellness row whose HRV the rider typed. They come back
+deletes, and keeps a wellness row whose HRV the rider typed. sync_wellness
+never replaces a typed HRV, and keeps an ICU HRV it retains in raw_json so
+the typed/ICU test (`db._manual_hrv_sql`) stays right. They come back
 via `persist_icu_activity` and `db.sync_activities`. Helpers, if Wave 2 needs
 them: `ride_storage.stashed_rider_input(ids, keys)`,
 `ride_storage.forget_stashed_rider_input(restored)`,
@@ -107,7 +111,9 @@ at the helper; every profile JSON goes through them.
 ## 5.2 local CTL/ATL and the week-activity collector
 
 `fitness.state()` is fixed (same ride list for both EWMAs).
-`ride_storage.compute_local_ctl(days=90, tau=42, rides=None, today=None)`.
+`ride_storage.compute_local_ctl(days=90, tau=42, rides=None, today=None)`;
+with no `rides` it answers None for a rider with intervals.icu credentials,
+so training_planner's fallback (~8590) is unchanged for them (37.0).
 
 The collector: app.py `_collect_week_activities` (~13038-13138). Replace
 

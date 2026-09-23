@@ -387,13 +387,16 @@ def fetch_activities(days: int = 14) -> list[dict]:
         return []
     oldest = (clock.today() - timedelta(days=days)).isoformat()
     newest = clock.today().isoformat()
-    data = _get(
-        f"athlete/{config.ICU_ATHLETE_ID}/activities",
-        {"oldest": oldest, "newest": newest},
-    )
-    if not data:
-        return []
-    return sorted(data, key=lambda r: r.get("start_date_local", ""))
+    path = f"athlete/{config.ICU_ATHLETE_ID}/activities"
+    data = _get(path, {"oldest": oldest, "newest": newest})
+    # A 2xx whose body is not a list (null, an error envelope) is a FAILED
+    # answer. It used to become [], and [] reads as "the rider has no rides":
+    # the sync then pruned the window (audit 2026-09-23, integ #2).
+    if not isinstance(data, list):
+        raise ICUServerError(
+            f"unexpected activities payload from {path}: {type(data).__name__}")
+    return sorted((a for a in data if isinstance(a, dict)),
+                  key=lambda r: r.get("start_date_local", ""))
 
 
 def fetch_recent_activities(

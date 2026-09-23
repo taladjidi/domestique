@@ -74,13 +74,17 @@ def test_mass_disappearance_is_treated_as_a_broken_fetch(icu_dir):
     assert len(list(icu_dir.glob("*.json"))) == 25
 
 
-def test_empty_fetch_prunes_a_small_inwindow_remainder(icu_dir):
-    """An empty SUCCESSFUL fetch is valid: the rider deleted their recent
-    rides upstream. A couple of records is a plausible deletion, not infra."""
+def test_empty_fetch_prunes_nothing_even_in_a_small_window(icu_dir):
+    """An empty answer is not proof of deletion (hardening contract 1.1).
+
+    This test used to assert the opposite -- that an empty fetch pruned a
+    small in-window remainder -- and that is how one 200 `[]` emptied an
+    18-ride archive in the audit of 2026-09-23: 18 fit under the flat cap."""
     _rec(icu_dir, "i601", days_ago=2)
     _rec(icu_dir, "i602", days_ago=4)
     n = rs.prune_deleted_icu_records(set(), window_days=90)
-    assert n == 2
+    assert n == 0
+    assert len(list(icu_dir.glob("*.json"))) == 2
 
 
 def test_unreadable_record_is_skipped_not_deleted(icu_dir):

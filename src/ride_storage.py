@@ -600,47 +600,64 @@ def prune_deleted_icu_records(fetched_ids: "set[str]",
         outside it the fetch says nothing about existence. The window is
         shrunk by one day on the old edge so a timezone straddle at the
         boundary can never delete a real ride.
-      * The caller must only pass ids from a SUCCESSFUL fetch. An empty set
-        is valid (everything in-window was deleted upstream) — a failed or
-        throttled fetch must not reach this function at all.
-      * At most _PRUNE_MAX_PER_PASS deletions per pass. A payload change that
-        parses to "no activities" looks identical to mass upstream deletion,
-        and the difference between the two is that no rider deletes their
-        whole archive between syncs (the v3.3.0 lesson: infra failure must
-        not be treated as per-record truth). Over the cap: delete nothing,
-        log loudly.
+      * The answer must be non-empty. This is checked HERE, not trusted to
+        the caller: one 200 `[]` from the activities endpoint (or a `null` a
+        caller turned into `[]`) removed 18 rides over 80 days in the audit
+        of 2026-09-23, and with them is_race, DFA and the rider's RPE, which
+        no re-sync brings back.
+      * At most half of the window's local rides per pass, and never more
+        than _PRUNE_MAX_PER_PASS. An answer that shares no ride with the
+        window therefore prunes nothing: it says nothing about what we hold.
+        The flat cap alone did not protect a small archive (5 rides fit
+        under 20). A payload change that parses to "no activities" looks
+        identical to mass upstream deletion, and the difference between the
+        two is that no rider deletes their whole archive between syncs (the
+        v3.3.0 lesson: infra failure must not be treated as per-record
+        truth). Over either limit: delete nothing, log loudly.
 
     Removes both stores per record — the icu/<id>.json file and the
     activities row in SQLite (best-effort; the DB may not be initialised in
     minimal test harnesses). Returns the number of records pruned.
     """
-    from datetime import date as _date, timedelta as _td
+    from datetime import timedelta as _td
+    # Only a set/frozenset/list/tuple of ids is an answer. A string, a dict, a
+    # number or None is a caller bug, and a bug must not delete rides.
+    if not isinstance(fetched_ids, (set, frozenset, list, tuple)):
+        log.warning("EVENT=icu_prune_skipped reason=not_an_id_list type=%s",
+                    type(fetched_ids).__name__)
+        return 0
+    fetched = {str(i) for i in fetched_ids if i}
+    if not fetched:
+        log.info("EVENT=icu_prune_skipped reason=empty_answer — an empty "
+                 "answer is not proof that anything was deleted")
+        return 0
     try:
         icu_dir = _icu_rides_dir()
     except RuntimeError:
         return 0
     oldest = (clock.today() - _td(days=max(0, window_days - 1))).isoformat()
     stale = []
+    in_window = 0
     for f in icu_dir.glob("*.json"):
         rid = f.stem
-        if rid in fetched_ids:
-            continue
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        started = str((d or {}).get("started_at") or "")[:10]
+        started = str(d.get("started_at") or "")[:10] if isinstance(d, dict) else ""
         if not started or started < oldest:
             continue  # outside the window the fetch can vouch for
-        stale.append((f, rid, started))
+        in_window += 1
+        if rid not in fetched:
+            stale.append((f, rid, started))
     if not stale:
         return 0
-    if len(stale) > _PRUNE_MAX_PER_PASS:
+    if len(stale) * 2 > in_window or len(stale) > _PRUNE_MAX_PER_PASS:
         log.warning(
-            "EVENT=icu_prune_capped candidates=%d cap=%d — refusing to prune: "
-            "this many upstream deletions in one window smells like a fetch "
-            "that parsed to nothing, not a rider clearing their archive",
-            len(stale), _PRUNE_MAX_PER_PASS)
+            "EVENT=icu_prune_capped candidates=%d window_rides=%d cap=%d — "
+            "refusing to prune: this many upstream deletions in one window "
+            "smells like a broken fetch, not a rider clearing their archive",
+            len(stale), in_window, _PRUNE_MAX_PER_PASS)
         return 0
     pruned = 0
     for f, rid, started in stale:

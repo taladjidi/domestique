@@ -3664,13 +3664,22 @@ def _recent_dfa_diagnostic() -> dict:
     }
 
 
+def _rider_state_path(name: str) -> Path:
+    """A per-rider state file, in the ACTIVE profile's directory (contract
+    5.6). These sat at the data root, shared by every rider: one rider's cap
+    revert suppressed another's cap, PR toasts and HRV-prompt dismissals
+    crossed profiles."""
+    from profile_manager import ProfileManager
+    return ProfileManager.get().active_dir / name
+
+
 def _readiness_revert_flag_path():
     """FIX-CONTRACT C6: per-day flag file that suppresses the dfa_cap /
     decoupling_advisory booleans on /api/readiness once the rider clicks
     Revert. Keyed by ISO date so it auto-clears at midnight (next day's
-    read finds no file).
+    read finds no file). Per rider (contract 5.6).
     """
-    return DATA_DIR / "readiness_cap_reverted.json"
+    return _rider_state_path("readiness_cap_reverted.json")
 
 
 def _is_readiness_cap_reverted_today() -> bool:
@@ -5139,11 +5148,11 @@ def _hrv_prompt_state_path() -> Path:
         {"version_dismissed": {"<version>": True, ...},
          "permanent_dismissed": True | False}
 
-    Stored under DATA_DIR (same pattern as ``_readiness_revert_flag_path``)
-    so it survives across runs. Tests can stub by monkeypatching DATA_DIR
-    or this helper directly.
+    Stored in the active profile's directory (contract 5.6; it was the data
+    root, so one rider's dismissal hid the prompt for all). Tests can stub
+    this helper directly.
     """
-    return DATA_DIR / "hrv_prompt_state.json"
+    return _rider_state_path("hrv_prompt_state.json")
 
 
 def _read_hrv_prompt_state() -> dict:
@@ -11092,14 +11101,11 @@ async def api_plan_generate(request: Request):
         return JSONResponse({"detail": _bad}, status_code=400)
     try:
 
-        # Load saved training prefs as defaults (from setup wizard)
-        _prefs = {}
-        _prefs_file = DATA_DIR / "user_prefs.json"
-        if _prefs_file.exists():
-            try:
-                _prefs = json.loads(_prefs_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+        # The rider's saved training prefs as defaults (from setup wizard):
+        # the ACTIVE profile's, never the root user_prefs.json nothing has
+        # written since profiles (contract 5.6, prior S-5).
+        from profile_manager import ProfileManager
+        _prefs = dict(ProfileManager.get().prefs or {})
 
         # Parse target_date from string to date object
         target_date = None
@@ -18030,10 +18036,10 @@ def _pr_toast_queue_path() -> Path:
     """v1.3.0 IMPL-PR-DETECTION: per-version toast queue file.
 
     Stores ``[{"ride_id": ..., "started_at": ..., "n_prs": int}]`` for rides
-    that landed major PRs since the last dashboard open. Drained by the GET
-    /api/ride/.../prs/toast-queue endpoint.
+    that landed major PRs since the last dashboard open. Drained by POST
+    /api/profile/pr-toast-queue/drain. Per rider (contract 5.6).
     """
-    return domestique_home() / "last_pr_toast.json"
+    return _rider_state_path("last_pr_toast.json")
 
 
 def _read_pr_toast_queue() -> list[dict]:

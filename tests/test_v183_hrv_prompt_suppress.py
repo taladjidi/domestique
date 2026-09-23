@@ -46,9 +46,14 @@ class TestHrvPromptSuppressOnRecentComputed(unittest.TestCase):
         self.tmp_path = Path(self._tmp.name)
         self._orig_data_dir = app_module.DATA_DIR
         app_module.DATA_DIR = self.tmp_path
+        # The dismissal flags are per rider since contract 5.6 (the active
+        # profile's dir, not DATA_DIR): point the one helper at the tmp dir.
+        self._orig_state_path = app_module._hrv_prompt_state_path
+        app_module._hrv_prompt_state_path = lambda: self.tmp_path / "hrv_prompt_state.json"
         self.client = TestClient(app_module.app)
 
     def tearDown(self):
+        app_module._hrv_prompt_state_path = self._orig_state_path
         app_module.DATA_DIR = self._orig_data_dir
         self._tmp.cleanup()
 

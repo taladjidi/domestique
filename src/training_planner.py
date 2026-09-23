@@ -518,6 +518,45 @@ def atomic_write_plan(json_path: "Path | str", plan: dict) -> None:
             log.debug(f"atomic_write_plan: post-write callback failed: {e}")
 
 
+def update_plan(json_path: "Path | str", mutate):
+    """The plan store's one read-modify-write (contracts 4.1 / 4.2).
+
+    Holds the plan-write lock across read -> ``mutate(plan)`` -> write, so a
+    writer can no longer read, lose the lock to another writer, and then
+    write its stale copy over that writer's change (audit 2026-09-23: 24
+    atomic_write_plan sites, 6 locked, a move lost to auto-recalc).
+
+    ``mutate`` receives the plan as it is on disk now (``None`` when the file
+    does not exist) and returns the dict to write -- the same one mutated in
+    place, or a new one -- or ``None`` to write nothing. An exception from
+    ``mutate`` writes nothing and propagates. Returns what was written, or
+    ``None``. Anything a caller needs back from inside travels by closure.
+
+    Blocking: it waits on a threading lock. An ``async def`` handler must
+    call it as ``await run_in_threadpool(tp.update_plan, json_path, mutate)``
+    (starlette.concurrency), never directly -- directly, a slow writer
+    holding the lock stalls the whole event loop. Sync code (a ``def``
+    route, a background thread) calls it as is. Fetch plan-independent
+    inputs (metrics, activities, the library) BEFORE the call: whatever runs
+    inside ``mutate`` holds every other plan writer.
+
+    ponytail: one process-wide lock, no version check -- every writer is in
+    this process, so a lock held across the whole read-modify-write is
+    enough. A second writing process would need a file lock here.
+    """
+    p = Path(json_path)
+    with _plan_write_lock:
+        try:
+            with open(p, encoding="utf-8") as f:
+                plan = json.load(f)
+        except FileNotFoundError:
+            plan = None
+        new = mutate(plan)
+        if new is not None:
+            atomic_write_plan(p, new)
+        return new
+
+
 def plan_ctl_snapshot(current_ctl, recent_weekly_tss,
                       generated_on: "str | None" = None) -> dict:
     """P4.2 (v3.0.0) — the plan's generation-time fitness snapshot.
@@ -609,115 +648,132 @@ def rewrite_stale_plan_classifications(plan_path: "Path | str") -> int:
         p = Path(plan_path)
         if not p.exists():
             return 0
-        with open(p, encoding="utf-8") as f:
-            plan = json.load(f)
-        weeks = plan.get("weeks", [])
-        if not weeks:
-            return 0
+        # The library does not depend on the plan: load it before taking the
+        # plan lock, so a cold parse never holds the other plan writers.
         library = load_workout_library()
         if not library:
             return 0
-        # v1.8.18 (grill B2) — set of real local library basenames for the
-        # resolves-on-disk staleness test.
-        library_files = {row.get("File") for row in library if row.get("File")}
-        # v1.8.18 (grill B1) — the seed anchor MUST be the plan's stable birth
-        # date so match_zwo is deterministic across launches. The live plan key
-        # is ``generated`` (the old code read ``generated_at`` → always fell to
-        # clock.today() → the seed drifted daily → every re-matched session
-        # re-rolled to a different file on each launch). Read both keys.
-        plan_start = None
-        for k in ("generated", "generated_at"):
-            v = plan.get(k)
-            if v:
-                try:
-                    plan_start = date.fromisoformat(str(v)[:10])
-                    break
-                except Exception:
-                    pass
-        if plan_start is None:
-            plan_start = clock.today()
-        # v1.8.18 (grill B7) — FREEZE THE PAST. Healing a session dated before
-        # today would silently rewrite the user's training history (what was
-        # planned/done on a past day). Only future sessions are re-matched.
-        today = clock.today()
-
         rewritten = 0
-        # Rolling used_names window — mirrors generate_plan's sliding-window
-        # dedupe so re-matches don't collide on a workout already placed.
-        used_names: set[str] = set()
-        wrote_backup = False
-        for w_json in weeks:
-            week_num = w_json.get("week_num", 1)
-            for idx, s_json in enumerate(w_json.get("sessions", [])):
-                st = s_json.get("session_type") or ""
-                zwo = s_json.get("zwo_file") or ""
-                # Seed dedupe from every session (incl. frozen past + already-
-                # valid) so future heals don't reuse an existing file's name.
-                if not _session_is_stale(st, zwo, library_files):
-                    if s_json.get("zwo_name"):
-                        used_names.add(s_json["zwo_name"])
-                    continue
-                # Freeze the past: never mutate a session before today.
-                day_str = s_json.get("day") or ""
-                try:
-                    if day_str and date.fromisoformat(day_str[:10]) < today:
-                        if s_json.get("zwo_name"):
-                            used_names.add(s_json["zwo_name"])
-                        continue
-                except Exception:
-                    pass  # unparseable day → treat as future, allow heal
-                # Re-match this future, unresolvable session.
-                try:
-                    ps = PlannedSession(
-                        day=date.fromisoformat(day_str[:10]) if day_str else plan_start,
-                        day_name=s_json.get("day_name", ""),
-                        session_type=st,
-                        duration_min=int(s_json.get("duration_min") or 0),
-                        tss_estimate=float(s_json.get("tss_estimate") or 0),
-                        description=s_json.get("description") or "",
-                    )
-                    match_zwo(
-                        ps, library,
-                        week_num=week_num, day_idx=idx,
-                        used_names=used_names,
-                        plan_start_date=plan_start,
-                     micro_only=bool((plan.get("goal") or {}).get("vo2_microintervals_only", False)),)
-                    new_zwo = getattr(ps, "zwo_file", "") or ""
-                    # One-time pre-migration snapshot before the FIRST mutation,
-                    # named so it survives the 7-deep .bak rotation (grill B5).
-                    if not wrote_backup:
-                        snap = p.with_suffix(p.suffix + ".premigration-v1818")
-                        if not snap.exists():
-                            try:
-                                import shutil as _sh
-                                _sh.copy2(p, snap)
-                            except Exception:
-                                log.debug("premigration snapshot failed", exc_info=True)
-                        wrote_backup = True
-                    if new_zwo and new_zwo in library_files and new_zwo != zwo:
-                        s_json["zwo_file"] = new_zwo
-                        s_json["zwo_name"] = getattr(ps, "zwo_name", "") or s_json.get("zwo_name", "")
-                        if getattr(ps, "description", None):
-                            s_json["description"] = ps.description
-                        rewritten += 1
-                    elif not new_zwo:
-                        # No candidate found → clear the ghost to an honest empty
-                        # (a synthesised session) so it stops 404-ing + is no
-                        # longer stale (idempotent).
-                        if zwo:
-                            s_json["zwo_file"] = ""
-                            rewritten += 1
-                except Exception:
-                    log.debug("rewrite_stale: session skip", exc_info=True)
-                if s_json.get("zwo_name"):
-                    used_names.add(s_json["zwo_name"])
 
-        if rewritten > 0:
-            atomic_write_plan(p, plan)
+        def _rewrite(plan):
+            nonlocal rewritten
+            rewritten = _rewrite_stale_sessions(plan, p, library)
+            return plan if rewritten else None
+
+        # One store call: read, heal and write under one hold of the plan
+        # lock (contract 4.1) -- a write landing between an unlocked read and
+        # this write used to be overwritten with the stale copy.
+        update_plan(p, _rewrite)
         return rewritten
     except Exception:
         log.debug("rewrite_stale_plan_classifications failed", exc_info=True)
         return 0
+
+
+def _rewrite_stale_sessions(plan, p: Path, library: list[dict]) -> int:
+    """rewrite_stale_plan_classifications' mutation: heal ``plan`` in place
+    and return how many sessions it rewrote. Runs under the plan lock."""
+    if not isinstance(plan, dict):
+        return 0
+    weeks = plan.get("weeks", [])
+    if not weeks:
+        return 0
+    # v1.8.18 (grill B2) — set of real local library basenames for the
+    # resolves-on-disk staleness test.
+    library_files = {row.get("File") for row in library if row.get("File")}
+    # v1.8.18 (grill B1) — the seed anchor MUST be the plan's stable birth
+    # date so match_zwo is deterministic across launches. The live plan key
+    # is ``generated`` (the old code read ``generated_at`` → always fell to
+    # clock.today() → the seed drifted daily → every re-matched session
+    # re-rolled to a different file on each launch). Read both keys.
+    plan_start = None
+    for k in ("generated", "generated_at"):
+        v = plan.get(k)
+        if v:
+            try:
+                plan_start = date.fromisoformat(str(v)[:10])
+                break
+            except Exception:
+                pass
+    if plan_start is None:
+        plan_start = clock.today()
+    # v1.8.18 (grill B7) — FREEZE THE PAST. Healing a session dated before
+    # today would silently rewrite the user's training history (what was
+    # planned/done on a past day). Only future sessions are re-matched.
+    today = clock.today()
+
+    rewritten = 0
+    # Rolling used_names window — mirrors generate_plan's sliding-window
+    # dedupe so re-matches don't collide on a workout already placed.
+    used_names: set[str] = set()
+    wrote_backup = False
+    for w_json in weeks:
+        week_num = w_json.get("week_num", 1)
+        for idx, s_json in enumerate(w_json.get("sessions", [])):
+            st = s_json.get("session_type") or ""
+            zwo = s_json.get("zwo_file") or ""
+            # Seed dedupe from every session (incl. frozen past + already-
+            # valid) so future heals don't reuse an existing file's name.
+            if not _session_is_stale(st, zwo, library_files):
+                if s_json.get("zwo_name"):
+                    used_names.add(s_json["zwo_name"])
+                continue
+            # Freeze the past: never mutate a session before today.
+            day_str = s_json.get("day") or ""
+            try:
+                if day_str and date.fromisoformat(day_str[:10]) < today:
+                    if s_json.get("zwo_name"):
+                        used_names.add(s_json["zwo_name"])
+                    continue
+            except Exception:
+                pass  # unparseable day → treat as future, allow heal
+            # Re-match this future, unresolvable session.
+            try:
+                ps = PlannedSession(
+                    day=date.fromisoformat(day_str[:10]) if day_str else plan_start,
+                    day_name=s_json.get("day_name", ""),
+                    session_type=st,
+                    duration_min=int(s_json.get("duration_min") or 0),
+                    tss_estimate=float(s_json.get("tss_estimate") or 0),
+                    description=s_json.get("description") or "",
+                )
+                match_zwo(
+                    ps, library,
+                    week_num=week_num, day_idx=idx,
+                    used_names=used_names,
+                    plan_start_date=plan_start,
+                 micro_only=bool((plan.get("goal") or {}).get("vo2_microintervals_only", False)),)
+                new_zwo = getattr(ps, "zwo_file", "") or ""
+                # One-time pre-migration snapshot before the FIRST mutation,
+                # named so it survives the 7-deep .bak rotation (grill B5).
+                if not wrote_backup:
+                    snap = p.with_suffix(p.suffix + ".premigration-v1818")
+                    if not snap.exists():
+                        try:
+                            import shutil as _sh
+                            _sh.copy2(p, snap)
+                        except Exception:
+                            log.debug("premigration snapshot failed", exc_info=True)
+                    wrote_backup = True
+                if new_zwo and new_zwo in library_files and new_zwo != zwo:
+                    s_json["zwo_file"] = new_zwo
+                    s_json["zwo_name"] = getattr(ps, "zwo_name", "") or s_json.get("zwo_name", "")
+                    if getattr(ps, "description", None):
+                        s_json["description"] = ps.description
+                    rewritten += 1
+                elif not new_zwo:
+                    # No candidate found → clear the ghost to an honest empty
+                    # (a synthesised session) so it stops 404-ing + is no
+                    # longer stale (idempotent).
+                    if zwo:
+                        s_json["zwo_file"] = ""
+                        rewritten += 1
+            except Exception:
+                log.debug("rewrite_stale: session skip", exc_info=True)
+            if s_json.get("zwo_name"):
+                used_names.add(s_json["zwo_name"])
+
+    return rewritten
 
 
 # ── Intensity ladder (PL1 / PL4) ─────────────────────────────────────────────

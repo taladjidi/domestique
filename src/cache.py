@@ -19,6 +19,35 @@ from obs import error_codes, _log_error
 
 _cache = {}
 _cache_ts = {}
+# Which profile each entry was filled under, and a generation that
+# clear_cache() bumps. The audit (2026-09-23, data #5) started the ride
+# archive fill for Alice, switched to Bob while it ran, and the fill landed
+# AFTER the switch's clear_cache: Bob was served Alice's rides and CTL for
+# five minutes. A fill now stores only if no clear ran meanwhile, and an
+# entry is a hit only under the profile it was filled for.
+_cache_scope = {}
+_generation = 0
+_generation_lock = threading.Lock()
+_scope_fn = None
+
+
+def set_scope(fn) -> None:
+    """Register the function naming the current scope (the active profile
+    id). profile_manager registers it; the substrate never imports it."""
+    global _scope_fn
+    _scope_fn = fn
+
+
+def _scope():
+    try:
+        return _scope_fn() if _scope_fn is not None else None
+    except Exception:  # noqa: BLE001 — no scope is a scope, never a failure
+        return None
+
+
+def _fresh(key, now, ttl, scope) -> bool:
+    return (key in _cache and now - _cache_ts.get(key, 0) < ttl
+            and _cache_scope.get(key) == scope)
 
 
 def _defensive_copy(value):
@@ -44,6 +73,30 @@ def _defensive_copy(value):
     return value
 
 
+class Unavailable(dict):
+    """An empty answer that means "could not ask", not "there is nothing".
+
+    A fill function returns this instead of raising when its own callers
+    need an empty dict (training.get_today_metrics: the planner calls it
+    directly and tests `if not metrics`). The cache treats it as a failed
+    fill -- stale value served, failure held 30 s -- where a plain `{}` is
+    stored as the answer. Without it, one intervals.icu blip replaced the
+    last good CTL/ATL with `{}` for the full 300 s TTL (audit 2026-09-23,
+    integ #3).
+    """
+
+
+class Partial(dict):
+    """An answer with a piece missing (the source half-failed): served as it
+    is, but held only 30 s instead of the full TTL, so the missing piece is
+    asked for again soon (training.get_today_metrics when the activities
+    fetch failed; review of 2026-09-23)."""
+
+
+class _FillFailed(Exception):
+    pass
+
+
 _locks: dict = {}
 _locks_guard = threading.Lock()
 
@@ -58,7 +111,7 @@ def _lock_for(key):
 
 def cached(key, fn, ttl=300):
     now = time.time()
-    if key in _cache and now - _cache_ts.get(key, 0) < ttl:
+    if _fresh(key, now, ttl, _scope()):
         return _defensive_copy(_cache[key])
     # Single flight per key. Without it a cold home page fired four
     # concurrent archive parses through this function, 17 s of CPU, every
@@ -70,13 +123,17 @@ def cached(key, fn, ttl=300):
 
 def _fill(key, fn, ttl):
     now = time.time()
-    if key in _cache and now - _cache_ts.get(key, 0) < ttl:
+    scope, generation = _scope(), _generation
+    if _fresh(key, now, ttl, scope):
         return _defensive_copy(_cache[key])
     try:
         result = fn()
+        if isinstance(result, Unavailable):
+            raise _FillFailed(f"{key}: the fill could not reach its source")
     except Exception as e:
-        # If API call fails (no internet, DNS error), return stale cache.
-        if key in _cache:
+        # If API call fails (no internet, DNS error), return stale cache --
+        # this profile's, never another's.
+        if key in _cache and _cache_scope.get(key) == scope:
             return _defensive_copy(_cache[key])
         # v1.6.0 — log under E_CACHE_<key>-or-GENERIC and stick the empty
         # result for only 30s so transient errors don't sit in cache for
@@ -89,15 +146,27 @@ def _fill(key, fn, ttl):
             "wellness": error_codes.Codes.CACHE_WELLNESS,
         }.get(key, error_codes.Codes.CACHE_GENERIC)
         _log_error(cache_code, exc=e, cache_key=key)
-        _cache[key] = {}
-        if ttl > 30:
-            _cache_ts[key] = now - (ttl - 30)
-        else:
-            _cache_ts[key] = now
+        if _still_current(scope, generation):
+            _cache[key] = {}
+            _cache_scope[key] = scope
+            if ttl > 30:
+                _cache_ts[key] = now - (ttl - 30)
+            else:
+                _cache_ts[key] = now
         return {}
-    _cache[key] = result
-    _cache_ts[key] = now
+    if _still_current(scope, generation):
+        _cache[key] = result
+        _cache_ts[key] = (now - (ttl - 30) if isinstance(result, Partial) and ttl > 30
+                          else now)
+        _cache_scope[key] = scope
+    # else: a clear_cache() or a profile switch landed while fn() ran, so the
+    # result describes what was true before it. The caller that asked still
+    # gets it; nobody after it does.
     return _defensive_copy(result)
+
+
+def _still_current(scope, generation) -> bool:
+    return generation == _generation and scope == _scope()
 
 _extra_clearers: list = []
 
@@ -113,8 +182,12 @@ def register_clearer(fn) -> None:
 
 
 def clear_cache():
+    global _generation
+    with _generation_lock:
+        _generation += 1
     _cache.clear()
     _cache_ts.clear()
+    _cache_scope.clear()
     # AC2c: the fatigue-resistance memo is keyed on (ride_id, ftp, window, kj)
     # only — NOT profile — so a profile switch (clear_cache is an on_switch
     # callback) must drop it or profile B could serve A's cached curve.

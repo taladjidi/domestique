@@ -12,7 +12,9 @@ import urllib.request
 import tls_trust  # v3.11.4 — one verifier for every intervals.icu connection
 import urllib.error
 import base64
+import http.client
 from datetime import date, timedelta
+from typing import NamedTuple
 import config
 
 _log = logging.getLogger("domestique.training")
@@ -87,8 +89,13 @@ class ICURateLimitError(Exception):
 
 
 class ICUServerError(Exception):
-    """HTTP 5xx from Intervals.icu (after retry budget exhausted) or other 4xx."""
-    pass
+    """HTTP 5xx from Intervals.icu (after retry budget exhausted) or other 4xx.
+
+    ``status`` is the HTTP code when there was one (None for a bad body), so
+    a caller can tell 404 "gone" from 503 "try later" (contract 1.2)."""
+    def __init__(self, *args, status: "int | None" = None):
+        super().__init__(*args)
+        self.status = status
 
 
 class ICUNetworkError(Exception):
@@ -290,7 +297,8 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
                     _body = ""
                 if "scope" in _body.lower() or "access denied" in _body.lower():
                     _log.warning(f"ICU 403 missing-scope on {path}: {_body}")
-                    raise ICUServerError(f"HTTP 403 (scope) on {path}") from e
+                    raise ICUServerError(f"HTTP 403 (scope) on {path}",
+                                         status=403) from e
                 _log.warning(f"ICU HTTP 403 on {path}: {e.reason}")
                 raise ICUAuthError(f"HTTP 403 on {path}: {e.reason}",
                                    status=403) from e
@@ -316,7 +324,8 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
                 _log.debug(f"ICU HTTP 422 on {path}: {e.reason}")
             else:
                 _log.warning(f"ICU HTTP {e.code} on {path}: {e.reason}")
-            raise ICUServerError(f"HTTP {e.code} on {path}: {e.reason}") from e
+            raise ICUServerError(f"HTTP {e.code} on {path}: {e.reason}",
+                                 status=e.code) from e
         except urllib.error.URLError as e:
             last_network_exc = e
             if attempt < 2:
@@ -324,13 +333,17 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
                 continue
             _log.warning(f"ICU URL error on {path}: {e.reason}")
             raise ICUNetworkError(f"URL error on {path}: {e.reason}") from e
-        except (TimeoutError, OSError) as e:
+        # http.client.HTTPException: a body cut short (IncompleteRead) or a
+        # garbled status line is a dropped connection. It is not an OSError,
+        # so it used to escape untyped and unretried -- and the sync loop's
+        # substring test read "IncompleteRead(4031 bytes read...)" as a 403.
+        except (TimeoutError, OSError, http.client.HTTPException) as e:
             last_network_exc = e
             if attempt < 2:
                 time.sleep(2 ** attempt + random.random())
                 continue
-            _log.warning(f"ICU connection error on {path}: {e}")
-            raise ICUNetworkError(f"Connection error on {path}: {e}") from e
+            _log.warning(f"ICU connection error on {path}: {e!r}")
+            raise ICUNetworkError(f"Connection error on {path}: {e!r}") from e
 
     # Defensive: should not reach here.
     if last_network_exc is not None:
@@ -339,6 +352,30 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
 
 
 # ── wellness (CTL / ATL / TSB / HRV / RHR / sleep) ──────────────────────────
+
+CYCLING_SPORT_TYPES = ("Ride", "VirtualRide")
+
+
+def cycling_sport_info(wellness_record) -> dict:
+    """The cycling entry of an intervals.icu wellness record's ``sportInfo``
+    -- where eFTP, W' and Pmax live -- or {} when there is none.
+
+    sportInfo holds one entry per sport, in no promised order. Every reader
+    took entry [0], so for a rider whose first entry is Run a run eFTP (330)
+    was stored and shown as the cycling one: a +32% "update your FTP" banner
+    (audit 2026-09-23, rv-facts #4). The one helper every reader uses: the
+    first Ride / VirtualRide entry. A record whose entries carry no ``type``
+    at all (older payloads and fixtures) is read as before, entry [0].
+    """
+    info = wellness_record.get("sportInfo") if isinstance(wellness_record, dict) else None
+    entries = [e for e in info if isinstance(e, dict)] if isinstance(info, list) else []
+    for e in entries:
+        if e.get("type") in CYCLING_SPORT_TYPES:
+            return e
+    if entries and not any("type" in e for e in entries):
+        return entries[0]
+    return {}
+
 
 def fetch_wellness(days: int = 42) -> list[dict]:
     """Return wellness records for the past `days` days, newest last.
@@ -387,13 +424,16 @@ def fetch_activities(days: int = 14) -> list[dict]:
         return []
     oldest = (clock.today() - timedelta(days=days)).isoformat()
     newest = clock.today().isoformat()
-    data = _get(
-        f"athlete/{config.ICU_ATHLETE_ID}/activities",
-        {"oldest": oldest, "newest": newest},
-    )
-    if not data:
-        return []
-    return sorted(data, key=lambda r: r.get("start_date_local", ""))
+    path = f"athlete/{config.ICU_ATHLETE_ID}/activities"
+    data = _get(path, {"oldest": oldest, "newest": newest})
+    # A 2xx whose body is not a list (null, an error envelope) is a FAILED
+    # answer. It used to become [], and [] reads as "the rider has no rides":
+    # the sync then pruned the window (audit 2026-09-23, integ #2).
+    if not isinstance(data, list):
+        raise ICUServerError(
+            f"unexpected activities payload from {path}: {type(data).__name__}")
+    return sorted((a for a in data if isinstance(a, dict)),
+                  key=lambda r: r.get("start_date_local", ""))
 
 
 def fetch_recent_activities(
@@ -542,17 +582,46 @@ def fetch_activity_full(activity_id: str) -> dict | None:
     return detail
 
 
-def fetch_activity_fit_file(activity_id: str) -> bytes | None:
-    """v1.0.7 — fetch the raw FIT-file blob for an activity.
+class Fetched(NamedTuple):
+    """What a per-activity fetch got, and why it got nothing when it did.
+
+    ``status`` is one of:
+      ok        -- ``data`` is the payload
+      not_found -- HTTP 404 / 410: intervals.icu says the activity is gone
+      no_data   -- another 4xx (422: a Strava-origin ride ICU will not
+                   re-share; a missing scope): it exists, we cannot have it
+      failed    -- could not ask: network, timeout, truncated body, 429,
+                   5xx, auth, no credentials. Retry on the next pass.
+
+    Why (audit 2026-09-23, data #4): these fetchers answered None for all
+    four, so DFA enrichment could not tell "deleted upstream" from "Wi-Fi
+    blip" and stamped a sticky ``icu_deleted`` on both. Only ``not_found``
+    is evidence that the activity is gone.
+    """
+    status: str
+    data: object = None
+
+
+def _outcome_of(exc: Exception) -> Fetched:
+    status = getattr(exc, "status", None) if isinstance(exc, ICUServerError) else None
+    if status in (404, 410):
+        return Fetched("not_found")
+    if status is not None and 400 <= status < 500 and status not in (408, 429):
+        return Fetched("no_data")
+    return Fetched("failed")
+
+
+def fetch_activity_fit_file_result(activity_id: str) -> Fetched:
+    """v1.0.7 — fetch the raw FIT-file blob for an activity, as a Fetched.
 
     ICU exposes the rider's raw FIT at ``/api/v1/activity/<id>/fit-file``.
-    Returns the raw bytes on 200, None on 4xx / 5xx / network failures so
-    the caller can degrade gracefully (no DFA α1 cached, ride still imports).
+    Not through _get: the body is bytes, not JSON, and a FIT is too large to
+    retry three times inside the DFA augment's time budget.
     """
     try:
         _require_credentials()
     except ICUCredentialsMissing:
-        return None
+        return Fetched("failed")
 
     url = f"{config.ICU_BASE}/activity/{activity_id}/fit-file"
     headers = _auth_header()
@@ -562,29 +631,40 @@ def fetch_activity_fit_file(activity_id: str) -> bytes | None:
         with urllib.request.urlopen(req, timeout=30, context=tls_trust.make_context()) as resp:
             status = resp.getcode()
             if 200 <= status < 300:
-                return resp.read()
+                raw = resp.read()
+                return Fetched("ok", raw) if raw else Fetched("no_data")
             _log.warning(f"fetch_activity_fit_file({activity_id}) status={status}")
-            return None
+            return _outcome_of(ICUServerError(status=status))
     except urllib.error.HTTPError as e:
         _log.warning(f"fetch_activity_fit_file({activity_id}) HTTP {e.code}: {e.reason}")
-        return None
-    except (urllib.error.URLError, OSError, TimeoutError) as e:
-        _log.warning(f"fetch_activity_fit_file({activity_id}) network: {e}")
-        return None
+        if e.code in (401, 403):
+            # Auth (or a Cloudflare User-Agent block) -- could not ask, the
+            # same answer _get gives the streams fetch as ICUAuthError.
+            return Fetched("failed")
+        return _outcome_of(ICUServerError(status=e.code))
+    except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as e:
+        _log.warning(f"fetch_activity_fit_file({activity_id}) network: {e!r}")
+        return Fetched("failed")
 
 
-def fetch_activity_streams(activity_id: str) -> dict | None:
-    """v4.4.0 — fetch raw 1Hz streams for an activity.
+def fetch_activity_fit_file(activity_id: str) -> bytes | None:
+    """The FIT blob, or None on any failure (callers that need to know WHY
+    use :func:`fetch_activity_fit_file_result`)."""
+    r = fetch_activity_fit_file_result(activity_id)
+    return r.data if r.status == "ok" else None
+
+
+def fetch_activity_streams_result(activity_id: str) -> Fetched:
+    """v4.4.0 — fetch raw 1Hz streams for an activity, as a Fetched.
 
     ICU's /api/v1/activity/<id>/streams endpoint returns a list of stream
-    dicts (one per channel: power, heart_rate, cadence, …). Returns None on
-    failure so the detail endpoint can fall back to whatever local FIT it has
-    (or omit samples entirely).
+    dicts (one per channel: power, heart_rate, cadence, …); ``data`` is that
+    list normalised to a dict keyed by stream type.
     """
     try:
         _require_credentials()
     except ICUCredentialsMissing:
-        return None
+        return Fetched("failed")
     try:
         data = _get(f"activity/{activity_id}/streams")
     except ICUServerError as e:
@@ -593,10 +673,10 @@ def fetch_activity_streams(activity_id: str) -> dict | None:
         # error — we fall back to the activity summary. Log at DEBUG so it doesn't
         # spam the log on every Strava ride.
         _log.debug(f"fetch_activity_streams({activity_id}) — no streams: {e}")
-        return None
+        return _outcome_of(e)
     except (ICUAuthError, ICURateLimitError, ICUNetworkError) as e:
         _log.warning(f"fetch_activity_streams({activity_id}) failed: {e}")
-        return None
+        return Fetched("failed")
     # ICU returns a list of {type, data, ...}; normalize to a dict by type.
     if isinstance(data, list):
         out: dict = {}
@@ -607,10 +687,18 @@ def fetch_activity_streams(activity_id: str) -> dict | None:
             d = s.get("data")
             if t and isinstance(d, list):
                 out[t] = d
-        return out
+        return Fetched("ok", out)
     if isinstance(data, dict):
-        return data
-    return None
+        return Fetched("ok", data)
+    return Fetched("no_data")
+
+
+def fetch_activity_streams(activity_id: str) -> dict | None:
+    """The streams dict, or None on any failure (so the detail endpoint can
+    fall back to a local FIT). Callers that need to know WHY use
+    :func:`fetch_activity_streams_result`."""
+    r = fetch_activity_streams_result(activity_id)
+    return r.data if r.status == "ok" else None
 
 
 # ── derived metrics ───────────────────────────────────────────────────────────
@@ -699,8 +787,11 @@ def compute_monotony_strain(wellness: list[dict]) -> tuple[float | None, float |
 def get_today_metrics() -> dict:
     """Return all training load metrics for today.
 
-    Returns {} gracefully if ICU credentials are missing, or on any ICU API
-    failure — FastAPI callers want a no-data result, not a 500.
+    Returns {} if ICU credentials are missing (the true answer: no data),
+    and cache.Unavailable() -- also an empty dict, so `if not metrics` reads
+    it as no data -- on an ICU API failure, so the `training` cache serves
+    its last good value instead of storing the failure as the answer.
+    FastAPI callers want a no-data result, not a 500.
     """
     try:
         _require_credentials()
@@ -710,7 +801,8 @@ def get_today_metrics() -> dict:
         wellness = fetch_wellness(days=42)
     except (ICUAuthError, ICURateLimitError, ICUServerError, ICUNetworkError) as e:
         _log.warning("get_today_metrics: ICU fetch failed (%s) — returning empty", e)
-        return {}
+        from cache import Unavailable
+        return Unavailable()
     if not wellness:
         return {}
 
@@ -728,11 +820,13 @@ def get_today_metrics() -> dict:
     mono, strain = compute_monotony_strain(wellness)
 
     # recent activities (last 7 days)
+    partial = False
     try:
         activities = fetch_activities(days=7)
     except (ICUAuthError, ICURateLimitError, ICUServerError, ICUNetworkError) as e:
         _log.warning("get_today_metrics: activities fetch failed (%s)", e)
         activities = []
+        partial = True     # served, but the cache must not hold it 5 minutes
     # v3.11.6 (issue #11) — an activity intervals.icu will not re-share (it
     # reached ICU via Strava) is a stub with no name, type or duration. The
     # ride store has refused those since v3.8.1; this list feeds the homepage
@@ -809,7 +903,8 @@ def get_today_metrics() -> dict:
     # contract preserved).
     effective_taus = _effective_taus_from_db()
 
-    return {
+    from cache import Partial
+    return (Partial if partial else dict)({
         "date": today_rec["id"],
         "ctl": round(ctl, 1) if ctl is not None else None,
         "atl": round(atl, 1) if atl is not None else None,
@@ -823,7 +918,7 @@ def get_today_metrics() -> dict:
         # (v1.0.6) and the planner's CTL/ATL EWMA path. Always present —
         # consumers can read these without an availability check.
         "effective_taus": effective_taus,
-    }
+    })
 
 
 def _effective_taus_from_db() -> dict:

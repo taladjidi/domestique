@@ -31,7 +31,7 @@ for _env_candidate in [_USER_DATA / ".env", Path(__file__).parent / ".env",
                 os.environ.setdefault(_k.strip(), _v.strip())
         break
 
-from training import fetch_wellness, fetch_activities, ICUCredentialsMissing
+from training import fetch_wellness, fetch_activities, ICUCredentialsMissing, cycling_sport_info
 from ride_storage import is_icu_stub  # v3.11.6 — one stub rule for every reader
 
 log = logging.getLogger(__name__)
@@ -113,9 +113,12 @@ def sync_write_gate(snapshot):
             "snapshot must be the 3-tuple from db.snapshot_sync_identity()"
         )
     while True:
-        # Module-global lookup each iteration: restart_sync replaces the
-        # Event object; a stale local reference would miss the new signal.
-        if _sync_stop.is_set():
+        # A sync thread checks ITS OWN stop event: a thread superseded by
+        # restart_sync keeps its (set) flag and aborts here, while the new
+        # thread and every other writer see the fresh one. Everything else
+        # reads the module global each iteration (restart_sync replaces it).
+        stop = _thread_stop.get(threading.get_ident(), _sync_stop)
+        if stop.is_set():
             raise SyncAborted("sync stop requested while waiting for write gate")
         if _sync_write_lock.acquire(timeout=0.25):
             break
@@ -367,6 +370,46 @@ def init_db():
     db.commit()
 
 
+def _manual_hrv_sql(t: str = "") -> str:
+    """SQL: this wellness row's HRV came from the rider, not intervals.icu.
+
+    The invariant it reads: an HRV intervals.icu supplied is always also in
+    the row's raw_json (what ICU sent). /api/wellness/manual-hrv and the
+    HRV4Training import write only the hrv column, so a typed value is one
+    that raw_json does not carry. sync_wellness keeps the invariant when a
+    later record for the day omits the HRV it keeps (see there).
+    ``t`` qualifies the columns ("wellness." inside an upsert).
+    """
+    hrv, raw = f"{t}hrv", f"{t}raw_json"
+    return (f"({hrv} IS NOT NULL AND ({raw} IS NULL OR NOT json_valid({raw}) "
+            f"OR json_extract({raw}, '$.hrv') IS NULL "
+            f"OR json_extract({raw}, '$.hrv') != {hrv}))")
+
+
+_MANUAL_HRV_SQL = _manual_hrv_sql()
+
+
+def _upsert_icu_metric(db, dt: str, metric: str, value) -> None:
+    """Record an intervals.icu value for (date, metric) -- unless the rider
+    owns that row.
+
+    An UPSERT, never INSERT OR REPLACE: athlete_metrics rows carry their own
+    `source` and `notes`, and OR REPLACE is a DELETE plus an INSERT. The
+    VO2max upsert had no guard at all -- a lab VO2max of 61.5 logged through
+    /api/metrics/log became Garmin's 54.0 on the next sync (audit 2026-09-23,
+    data #7) -- and four hand-copied guards let a settings-sourced value be
+    overwritten because they only checked for 'manual'. The rule, once: an
+    intervals.icu value replaces only an intervals.icu value.
+    """
+    db.execute(
+        """INSERT INTO athlete_metrics (date, metric, value, source)
+           VALUES (?, ?, ?, 'intervals.icu')
+           ON CONFLICT(date, metric) DO UPDATE SET value = excluded.value
+           WHERE athlete_metrics.source = 'intervals.icu'""",
+        (dt, metric, value),
+    )
+
+
 def sync_wellness(days: int = 90, _snapshot=None) -> int:
     """Fetch wellness from Intervals.icu and upsert into SQLite. Returns count.
 
@@ -394,8 +437,8 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                 dt = w.get("id")
                 if not dt:
                     continue
-                si = w.get("sportInfo") or []
-                eftp = si[0].get("eftp") if len(si) > 0 else None
+                ci = cycling_sport_info(w)
+                eftp = ci.get("eftp")
                 db.execute(
                     # An UPSERT that keeps what only Domestique knows, the same
                     # fix `activities` got for `is_race`. INSERT OR REPLACE is
@@ -404,18 +447,32 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                     # rider typed in themselves (/api/wellness/manual-hrv).
                     # COALESCE is the rule: ICU's value wins when ICU HAS one,
                     # and silence from ICU is not an answer that overwrites.
+                    # Except the HRV the rider typed (contract 2.1: what the
+                    # rider typed survives anything intervals.icu does): it
+                    # is never replaced. And an ICU HRV the COALESCE keeps
+                    # through an HRV-less record stays in raw_json, so
+                    # _manual_hrv_sql still reads it as ICU's -- otherwise a
+                    # purge parked the previous athlete's HRV as "typed"
+                    # (review of 2026-09-23).
                     """INSERT INTO wellness
                        (date, ctl, atl, hrv, rhr, sleep_secs, sleep_score, eftp, raw_json)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(date) DO UPDATE SET
                            ctl         = COALESCE(excluded.ctl, wellness.ctl),
                            atl         = COALESCE(excluded.atl, wellness.atl),
-                           hrv         = COALESCE(excluded.hrv, wellness.hrv),
+                           hrv         = CASE WHEN {manual}
+                                              THEN wellness.hrv
+                                              ELSE COALESCE(excluded.hrv, wellness.hrv) END,
                            rhr         = COALESCE(excluded.rhr, wellness.rhr),
                            sleep_secs  = COALESCE(excluded.sleep_secs, wellness.sleep_secs),
                            sleep_score = COALESCE(excluded.sleep_score, wellness.sleep_score),
                            eftp        = COALESCE(excluded.eftp, wellness.eftp),
-                           raw_json    = excluded.raw_json""",
+                           raw_json    = CASE
+                               WHEN json_extract(excluded.raw_json, '$.hrv') IS NULL
+                                    AND wellness.hrv IS NOT NULL AND NOT {manual}
+                               THEN json_set(excluded.raw_json, '$.hrv', wellness.hrv)
+                               ELSE excluded.raw_json END""".format(
+                        manual=_manual_hrv_sql("wellness.")),
                     (
                         dt,
                         w.get("ctl"),
@@ -428,72 +485,28 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                         json.dumps(w),
                     ),
                 )
-                # Auto-log VO2max, eFTP, wPrime from Intervals.icu/Garmin
+                # Auto-log VO2max, eFTP, W', Pmax and max HR from
+                # intervals.icu/Garmin. One helper and one rule: an ICU value
+                # replaces only an ICU value (contract 2.3).
                 vo2max = w.get("vo2max")
                 if vo2max and isinstance(vo2max, (int, float)) and vo2max > 0:
-                    db.execute(
-                        "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'vo2max', ?, 'intervals.icu')",
-                        (dt, round(vo2max, 1)),
-                    )
+                    _upsert_icu_metric(db, dt, "vo2max", round(vo2max, 1))
                 if eftp and isinstance(eftp, (int, float)) and eftp > 0:
-                    # Don't clobber manual eFTP entries: check source before replace.
-                    existing = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'eftp'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing and existing[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'eftp', ?, 'intervals.icu')",
-                            (dt, round(eftp)),
-                        )
-                w_prime = si[0].get("wPrime") if len(si) > 0 else None
+                    _upsert_icu_metric(db, dt, "eftp", int(round(eftp)))
+                # v1.0.6 IMPL-3D-INGEST: W' and Pmax (best 1s power; live:
+                # 1,114.7 W on 2026-05-05) from the cycling sportInfo entry.
+                w_prime = ci.get("wPrime")
                 if w_prime and isinstance(w_prime, (int, float)) and w_prime > 0:
-                    # Manual-source guard: if the user logged W' manually (e.g.
-                    # from a 3-min all-out test), don't let ICU overwrite it.
-                    # IMPL-WBAL may later add a `_set_wprime(value, source)`
-                    # helper in profile_manager.py; until then we mirror the
-                    # eftp guard above (source='manual' wins).
-                    existing_wp = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'w_prime'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing_wp and existing_wp[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'w_prime', ?, 'intervals.icu')",
-                            (dt, round(w_prime)),
-                        )
-
-                # v1.0.6 IMPL-3D-INGEST: pull Pmax from ICU sportInfo[0].pMax
-                # (best 1s power; live: 1,114.7 W on 2026-05-05). Mirror of the
-                # wPrime block above with the same manual-source guard.
-                p_max = si[0].get("pMax") if len(si) > 0 else None
+                    _upsert_icu_metric(db, dt, "w_prime", int(round(w_prime)))
+                p_max = ci.get("pMax")
                 if p_max and isinstance(p_max, (int, float)) and p_max > 0:
-                    existing_pm = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'pmax'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing_pm and existing_pm[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'pmax', ?, 'intervals.icu')",
-                            (dt, round(p_max)),
-                        )
-
-                # v1.1.0 IMPL-NORWEGIAN-HR: pull max_hr from ICU wellness payload
-                # when exposed (athlete profile may carry it as `maxHr` or
-                # `max_hr`). Same manual-source guard as wPrime / pMax.
-                # PATCH G6: metric name is `max_hr` (not `hr_max`) — matches
-                # ProfileManager.max_hr property at profile_manager.py:147.
+                    _upsert_icu_metric(db, dt, "pmax", int(round(p_max)))
+                # v1.1.0 IMPL-NORWEGIAN-HR: max_hr when the wellness payload
+                # exposes it (`maxHr` or `max_hr`). PATCH G6: metric name is
+                # `max_hr` -- matches ProfileManager.max_hr.
                 ahr = w.get("maxHr") or w.get("max_hr")
                 if ahr and isinstance(ahr, (int, float)) and 140 <= ahr <= 220:
-                    existing_hr = db.execute(
-                        "SELECT source FROM athlete_metrics WHERE date = ? AND metric = 'max_hr'",
-                        (dt,),
-                    ).fetchone()
-                    if not (existing_hr and existing_hr[0] == "manual"):
-                        db.execute(
-                            "INSERT OR REPLACE INTO athlete_metrics (date, metric, value, source) VALUES (?, 'max_hr', ?, 'intervals.icu')",
-                            (dt, round(ahr)),
-                        )
+                    _upsert_icu_metric(db, dt, "max_hr", int(round(ahr)))
 
                 count += 1
         except Exception:
@@ -830,6 +843,7 @@ def sync_activities(days: int = 90, _snapshot=None) -> int:
             db.rollback()
             raise
         db.commit()
+        _restore_parked_race_flags(db, [str(a.get("id")) for a in data if a.get("id")])
 
     # v2.5.0 W3: mirror the athlete-level lthr / athlete_max_hr carried on
     # every ICU activity payload into the active profile — same post-batch
@@ -838,6 +852,25 @@ def sync_activities(days: int = 90, _snapshot=None) -> int:
     _refresh_hr_from_activities(snapshot)
 
     return count
+
+
+def _restore_parked_race_flags(db, ids) -> None:
+    """Put back the race flags a disconnect purge parked (contract 2.1) on
+    the rides this batch just brought back. Best effort: a failure leaves
+    them parked for the next pass, never breaks the sync."""
+    try:
+        import ride_storage
+        parked = ride_storage.stashed_rider_input(ids, ("is_race",))
+        restored = {}
+        for aid, values in parked.items():
+            cur = db.execute("UPDATE activities SET is_race = ? WHERE id = ?",
+                             (1 if values.get("is_race") else 0, aid))
+            if cur.rowcount > 0:
+                restored[aid] = values
+        db.commit()
+        ride_storage.forget_stashed_rider_input(restored)
+    except Exception as e:  # noqa: BLE001 — stays parked; retried next pass
+        log.warning("restoring parked race flags failed: %s", e)
 
 
 def run_sync(days: int = 90) -> dict:
@@ -962,6 +995,9 @@ def get_sync_status() -> dict:
         "auth_disabled": _auth_disabled,
         "consecutive_failures": _consecutive_failures,
         "last_error": _last_sync_error,
+        # Whether a background sync loop is running at all -- a healthy
+        # last_sync with no loop behind it is how a dead sync hid.
+        "loop_alive": bool(_sync_thread is not None and _sync_thread.is_alive()),
     }
 
 
@@ -1138,8 +1174,16 @@ def query_blood_markers(days: int = 730) -> list[dict]:
 # ── Background sync thread ──────────────────────────────────────────────────
 
 _sync_thread = None
-_sync_stop = threading.Event()  # cancellation signal for sync thread
+_sync_stop = threading.Event()  # the CURRENT sync thread's stop signal
 _sync_lock = threading.Lock()   # serializes stop/start/restart
+# Each sync thread's own stop event, by thread ident. One shared flag meant a
+# restart that found the old thread still inside a slow fetch had to choose
+# between two live passes and none; it chose none and left the flag set, so
+# every write gate aborted until the process restarted (audit 2026-09-23,
+# integ #1). With a flag per thread the old one is told to stop and the new
+# one starts at once.
+_thread_stop: dict = {}
+_RESTART_JOIN_S = 5.0
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -1172,6 +1216,12 @@ def _is_auth_error(exc: Exception) -> bool:
             return True
     except Exception:
         pass
+    # A truncated body is a network event. Its message carries a byte count
+    # ("IncompleteRead(4031 bytes read, 12 more expected)") that the
+    # substring test below reads as a 403 (audit 2026-09-23, integ #9).
+    import http.client
+    if isinstance(exc, http.client.HTTPException):
+        return False
     msg = str(exc).lower()
     return "401" in msg or "403" in msg or "unauthorized" in msg
 
@@ -1193,73 +1243,101 @@ def _is_dead_credential(exc: Exception) -> bool:
         return False
 
 
-def _sync_loop(interval_sec: int = 1800):
+def _sync_loop(interval_sec: int = 1800, stop: "threading.Event | None" = None):
     """Background thread that syncs every `interval_sec` seconds.
+
+    ``stop`` is this thread's own stop event (restart_sync passes a fresh one
+    per thread); it defaults to the module's current one.
 
     Exponential backoff on failure:
       - success → reset counter, sleep interval_sec
       - failure → counter++, sleep min(3600, 60 * 2**min(counter, 6))
       - 5 consecutive HTTP 401s → set _auth_disabled=True, stop retrying
+
+    A thread that has been told to stop touches no shared health state on
+    the way out: its failure belongs to the profile it was syncing, not to
+    the one that replaced it.
     """
     global _auth_disabled, _consecutive_failures, _last_sync_error
+    if stop is None:
+        stop = _sync_stop
     consecutive_auth_failures = 0
-
-    while not _sync_stop.is_set():
-        if _auth_disabled:
-            log.warning("Background sync disabled (auth failures); exiting loop")
-            return
-        try:
-            run_sync(days=90)
-            log.info("Background sync completed")
-            _consecutive_failures = 0
-            _last_sync_error = None
-            consecutive_auth_failures = 0
-            sleep_for = interval_sec
-            cb = post_sync_callback
-            if cb is not None:
-                try:
-                    cb()
-                except Exception:
-                    log.debug("post-sync callback failed", exc_info=True)
-        except ICUCredentialsMissing as e:
-            # No credentials — no point retrying until user configures them.
-            _last_sync_error = str(e)
-            log.info("Background sync skipped: %s", e)
-            sleep_for = interval_sec
-        except SyncAborted as e:
-            # AC1: a profile switch / purge landed mid-pass. Not a failure —
-            # the stop event is normally set too, so the while-condition
-            # exits and restart_sync spawns a fresh thread for the new
-            # profile; a pure epoch bump (purge) just waits for next tick.
-            log.info("Background sync pass aborted: %s", e)
-            sleep_for = interval_sec
-        except Exception as e:
-            _consecutive_failures += 1
-            _last_sync_error = str(e)
-            log.error("Background sync failed (#%d): %s", _consecutive_failures, e)
-            if _is_auth_error(e):
-                consecutive_auth_failures += 1
-                # A 401 is a dead credential — pause on the FIRST one. The
-                # 5-strike ladder cost 2h of CONTINUOUS uptime before the
-                # reconnect banner appeared (4 × 1800s of interruptible sleep),
-                # and this counter is loop-local, so every app restart put it
-                # back to zero. On a desktop app opened for ten minutes, a
-                # revoked token read as "sync just stops working, no message".
-                # 403 keeps the budget: it is not proof of a dead credential.
-                if _is_dead_credential(e) or consecutive_auth_failures >= 5:
-                    _auth_disabled = True
-                    log.error(
-                        "EVENT=icu_auth_disabled after=%d auth failure(s) — "
-                        "pausing background sync. Reconnect intervals.icu.",
-                        consecutive_auth_failures
-                    )
+    _thread_stop[threading.get_ident()] = stop
+    try:
+        while not stop.is_set():
+            if _auth_disabled:
+                log.warning("Background sync disabled (auth failures); exiting loop")
+                return
+            try:
+                run_sync(days=90)
+                if stop.is_set():
                     return
-            else:
+                log.info("Background sync completed")
+                _consecutive_failures = 0
+                _last_sync_error = None
                 consecutive_auth_failures = 0
-            # Exponential backoff, capped at 1 hour.
-            backoff = 60 * (2 ** min(_consecutive_failures, 6))
-            sleep_for = min(3600, max(interval_sec, backoff))
-        _sync_stop.wait(sleep_for)  # interruptible sleep
+                sleep_for = interval_sec
+                cb = post_sync_callback
+                if cb is not None:
+                    try:
+                        cb()
+                    except Exception:
+                        log.debug("post-sync callback failed", exc_info=True)
+            except ICUCredentialsMissing as e:
+                if stop.is_set():
+                    return
+                # No credentials — no point retrying until user configures them.
+                _last_sync_error = str(e)
+                log.info("Background sync skipped: %s", e)
+                sleep_for = interval_sec
+            except SyncAborted as e:
+                # AC1: a profile switch / purge landed mid-pass. Not a failure —
+                # the stop event is normally set too, so the while-condition
+                # exits and restart_sync spawns a fresh thread for the new
+                # profile; a pure epoch bump (purge) just waits for next tick.
+                log.info("Background sync pass aborted: %s", e)
+                sleep_for = interval_sec
+            except Exception as e:
+                if stop.is_set():
+                    log.info("superseded sync pass ended with %s; not counted", e)
+                    return
+                _consecutive_failures += 1
+                _last_sync_error = str(e)
+                log.error("Background sync failed (#%d): %s", _consecutive_failures, e)
+                if _is_auth_error(e):
+                    consecutive_auth_failures += 1
+                    # A 401 is a dead credential — pause on the FIRST one. The
+                    # 5-strike ladder cost 2h of CONTINUOUS uptime before the
+                    # reconnect banner appeared (4 × 1800s of interruptible sleep),
+                    # and this counter is loop-local, so every app restart put it
+                    # back to zero. On a desktop app opened for ten minutes, a
+                    # revoked token read as "sync just stops working, no message".
+                    # 403 keeps the budget: it is not proof of a dead credential.
+                    if _is_dead_credential(e) or consecutive_auth_failures >= 5:
+                        _auth_disabled = True
+                        log.error(
+                            "EVENT=icu_auth_disabled after=%d auth failure(s) — "
+                            "pausing background sync. Reconnect intervals.icu.",
+                            consecutive_auth_failures
+                        )
+                        return
+                else:
+                    consecutive_auth_failures = 0
+                # Exponential backoff, capped at 1 hour.
+                backoff = 60 * (2 ** min(_consecutive_failures, 6))
+                sleep_for = min(3600, max(interval_sec, backoff))
+            stop.wait(sleep_for)  # interruptible sleep
+    finally:
+        _thread_stop.pop(threading.get_ident(), None)
+
+
+def _start_sync_thread() -> None:
+    """Start a sync thread with its own fresh stop event (under _sync_lock)."""
+    global _sync_thread, _sync_stop
+    _sync_stop = threading.Event()
+    _sync_thread = threading.Thread(target=_sync_loop, kwargs={"stop": _sync_stop},
+                                    daemon=True, name="sync")
+    _sync_thread.start()
 
 
 def stop_sync() -> None:
@@ -1274,53 +1352,55 @@ def shutdown_sync(timeout: float = 5.0) -> bool:
     after a delete-last there IS no restart, and a permanently-set flag
     would make every future write gate abort (including in an unrelated
     later profile session in the same process). This joins the thread
-    bounded, then swaps in a fresh unset Event — safe because the old
-    thread is confirmed dead (or we keep the set flag and report False).
+    bounded, then swaps in a fresh unset Event. A thread still alive after
+    the join keeps its OWN set flag, so its writes abort anyway; returns
+    False in that case.
     """
     global _sync_thread, _sync_stop
     with _sync_lock:
         _sync_stop.set()
         t = _sync_thread
+        alive = False
         if t is not None:
             t.join(timeout=timeout)
-            if t.is_alive():
-                log.error(
-                    "shutdown_sync: thread still alive after %.1fs join — "
-                    "keeping stop flag set (write gates will abort)", timeout
-                )
-                return False
+            alive = t.is_alive()
+            if alive:
+                log.warning("shutdown_sync: thread still inside a pass after "
+                            "%.1fs join; its own stop flag stays set", timeout)
         _sync_thread = None
         _sync_stop = threading.Event()
-        return True
+        return not alive
 
 
 def restart_sync() -> None:
-    """Stop old sync thread, close connections, start fresh.
+    """Stop the old sync thread, close connections, start a fresh one.
 
-    Guarded by _sync_lock to prevent racing stop/start from concurrent callers
-    (e.g. profile switches). If the old thread doesn't exit within the join
-    timeout, we refuse to start a new one to avoid two concurrent syncs.
+    Guarded by _sync_lock against concurrent callers (profile switches).
+    The old thread is told to stop through its OWN event. If it is still
+    inside a slow fetch after the bounded join, the new thread starts anyway:
+    the old one can no longer write (its gates abort, and a profile switch
+    fails its snapshot too) and exits at its next check. This used to refuse
+    to start and leave the shared flag set -- no sync for the new profile
+    and every write gate aborting until the app restarted, while the status
+    read healthy (audit 2026-09-23, integ #1).
     """
-    global _sync_thread, _sync_stop, _auth_disabled, _consecutive_failures, _last_sync_error
+    global _auth_disabled, _consecutive_failures, _last_sync_error
     with _sync_lock:
-        stop_sync()
-        if _sync_thread is not None:
-            _sync_thread.join(timeout=5)
-            if _sync_thread.is_alive():
-                log.error(
-                    "Old sync thread still alive after 5s join — refusing to "
-                    "start a new one to avoid double-sync. Investigate hung sync."
-                )
-                return
+        old = _sync_thread
+        _sync_stop.set()
+        if old is not None:
+            old.join(timeout=_RESTART_JOIN_S)
+            if old.is_alive():
+                log.warning(
+                    "restart_sync: old sync thread still inside a pass after "
+                    "%.0fs; it is flagged to stop and cannot write -- starting "
+                    "the new thread now", _RESTART_JOIN_S)
         close_all_connections()
         # Reset health state before starting fresh.
         _auth_disabled = False
         _consecutive_failures = 0
         _last_sync_error = None
-        # Use a fresh Event under the lock so start/stop observers agree.
-        _sync_stop = threading.Event()
-        _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="sync")
-        _sync_thread.start()
+        _start_sync_thread()
 
 
 def start_background_sync():
@@ -1328,13 +1408,10 @@ def start_background_sync():
 
     Guarded by _sync_lock so concurrent callers don't each create a thread.
     """
-    global _sync_thread, _sync_stop
     with _sync_lock:
         if _sync_thread is not None and _sync_thread.is_alive():
             return
-        _sync_stop = threading.Event()  # fresh event to avoid stale state
-        _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="sync")
-        _sync_thread.start()
+        _start_sync_thread()
 
 
 # ── AC3b/A10: disconnect / athlete-change purge ─────────────────────────────
@@ -1350,11 +1427,42 @@ _ICU_MIRROR_FIELDS = (
 )
 
 
+def _park_rider_ride_input(profile_dir: Path, db_file: Path, is_active_db: bool) -> None:
+    """Copy RPE / FTP-test verdict (ride records) and is_race (activities)
+    into the profile's rider_input.json, keyed by intervals.icu id."""
+    import ride_storage
+    parked: dict = {}
+    for f in sorted((profile_dir / "rides" / "icu").glob("*.json")):
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict):
+            values = {k: rec[k] for k in ride_storage.RIDER_RIDE_KEYS
+                      if rec.get(k) is not None}
+            if values:
+                parked[f.stem] = values
+    if db_file.exists():
+        conn = get_db() if is_active_db else sqlite3.connect(str(db_file), timeout=10)
+        try:
+            for (aid,) in conn.execute("SELECT id FROM activities WHERE is_race = 1"):
+                parked.setdefault(str(aid), {})["is_race"] = 1
+        except sqlite3.OperationalError:
+            pass  # no activities table / no is_race column yet
+        finally:
+            if not is_active_db:
+                conn.close()
+    ride_storage.stash_rider_input(profile_dir, parked)
+    if parked:
+        log.info("EVENT=rider_input_parked rides=%d", len(parked))
+
+
 def purge_profile_data(profile_id: str) -> dict:
     """Wipe ICU-synced data for ``profile_id`` (disconnect / different-athlete
     reconnect — contract A4).
 
-    Deletes every row in activities / wellness / sync_log, plus the
+    Deletes every row in activities / sync_log, every wellness row except
+    the rider's typed HRV (kept, stripped of intervals.icu values), plus the
     intervals.icu-sourced athlete_metrics rows (vo2max/eftp/w_prime/pmax/
     max_hr auto-logs — residual rows from the first athlete otherwise
     resurface through the mirrors). Wipes the profile's ICU-derived ARCHIVES
@@ -1363,7 +1471,10 @@ def purge_profile_data(profile_id: str) -> dict:
     ride summaries are USER data and survive. Resets the icu-sourced
     athlete.json mirrors (lthr / max_hr / wprime / pmax where
     *_source == "icu") so the profile's numbers fall back to defaults until
-    the next athlete syncs. Manual values are never touched.
+    the next athlete syncs. Manual values are never touched: the rider's
+    RPE, FTP-test verdict and race flags are parked in
+    ``<profile>/rider_input.json`` first and put back when the same ride is
+    synced again (contract 2.1).
 
     A10: holds the sync write gate for the whole wipe and bumps the sync
     epoch, so an in-flight pass that FETCHED before the purge fails its
@@ -1389,6 +1500,17 @@ def purge_profile_data(profile_id: str) -> dict:
 
         removed = {"activities": 0, "wellness": 0, "sync_log": 0,
                    "athlete_metrics_icu": 0, "archive_files": 0}
+        db_file = profile_dir / "health_tracker.db"
+        is_active_db = (
+            profile_id == getattr(pm, "active_id", None)
+            and DB_PATH is not None
+            and Path(DB_PATH) == db_file
+        )
+
+        # What the rider typed is not the mirror (contract 2.1). Park the
+        # ride keys only the rider can supply BEFORE anything is removed; a
+        # failed write raises here and nothing is deleted.
+        _park_rider_ride_input(profile_dir, db_file, is_active_db)
 
         # ICU-derived archives (post-AC2a these live inside the profile dir).
         # rides/icu/ is wholly ICU-synced (records + .last_sync_at); wellness/
@@ -1404,21 +1526,31 @@ def purge_profile_data(profile_id: str) -> dict:
                     _shutil.rmtree(str(_arch))
                 except OSError as e:
                     log.warning("purge: failed to remove %s: %s", _arch, e)
-        db_file = profile_dir / "health_tracker.db"
         if db_file.exists():
-            is_active_db = (
-                profile_id == getattr(pm, "active_id", None)
-                and DB_PATH is not None
-                and Path(DB_PATH) == db_file
-            )
             conn = get_db() if is_active_db else sqlite3.connect(str(db_file), timeout=10)
             try:
-                for table in ("activities", "wellness", "sync_log"):
+                for table in ("activities", "sync_log"):
                     try:
                         cur = conn.execute(f"DELETE FROM {table}")  # noqa: S608 — fixed names
                         removed[table] = cur.rowcount if cur.rowcount >= 0 else 0
                     except sqlite3.OperationalError:
                         pass  # table absent in a legacy/partial DB
+                # A wellness row whose HRV the rider typed (manual entry or
+                # HRV4Training import: the hrv column differs from what
+                # intervals.icu sent in raw_json) keeps that HRV and loses
+                # every intervals.icu value; every other row goes. The sync's
+                # COALESCE then keeps it unless intervals.icu has an HRV for
+                # the day -- the rule the sync already applies.
+                try:
+                    conn.execute(
+                        f"UPDATE wellness SET ctl = NULL, atl = NULL, rhr = NULL, "
+                        f"sleep_secs = NULL, sleep_score = NULL, eftp = NULL, "
+                        f"raw_json = '{{}}' WHERE {_MANUAL_HRV_SQL}")  # noqa: S608
+                    cur = conn.execute(
+                        f"DELETE FROM wellness WHERE NOT ({_MANUAL_HRV_SQL})")  # noqa: S608
+                    removed["wellness"] = cur.rowcount if cur.rowcount >= 0 else 0
+                except sqlite3.OperationalError:
+                    pass
                 try:
                     cur = conn.execute(
                         "DELETE FROM athlete_metrics WHERE source = 'intervals.icu'"

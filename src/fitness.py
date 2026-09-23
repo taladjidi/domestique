@@ -92,10 +92,11 @@ def _local_state(today: date) -> Optional[dict]:
         except training.ICUCredentialsMissing:
             pass
         import ride_storage
-        ctl = ride_storage.compute_local_ctl()
+        rides = ride_storage.load_all_rides()   # ONE set of rides for both
+        ctl = ride_storage.compute_local_ctl(rides=rides, today=today)
         if ctl is None:
             return None
-        atl = ride_storage.compute_local_atl(ride_storage.load_all_rides(), today=today)
+        atl = ride_storage.compute_local_atl(rides, today=today)
         if atl is None:
             return None
         return _state(float(ctl), float(atl), "local", today.isoformat())

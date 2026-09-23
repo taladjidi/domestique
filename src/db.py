@@ -113,9 +113,12 @@ def sync_write_gate(snapshot):
             "snapshot must be the 3-tuple from db.snapshot_sync_identity()"
         )
     while True:
-        # Module-global lookup each iteration: restart_sync replaces the
-        # Event object; a stale local reference would miss the new signal.
-        if _sync_stop.is_set():
+        # A sync thread checks ITS OWN stop event: a thread superseded by
+        # restart_sync keeps its (set) flag and aborts here, while the new
+        # thread and every other writer see the fresh one. Everything else
+        # reads the module global each iteration (restart_sync replaces it).
+        stop = _thread_stop.get(threading.get_ident(), _sync_stop)
+        if stop.is_set():
             raise SyncAborted("sync stop requested while waiting for write gate")
         if _sync_write_lock.acquire(timeout=0.25):
             break
@@ -959,6 +962,9 @@ def get_sync_status() -> dict:
         "auth_disabled": _auth_disabled,
         "consecutive_failures": _consecutive_failures,
         "last_error": _last_sync_error,
+        # Whether a background sync loop is running at all -- a healthy
+        # last_sync with no loop behind it is how a dead sync hid.
+        "loop_alive": bool(_sync_thread is not None and _sync_thread.is_alive()),
     }
 
 
@@ -1135,8 +1141,16 @@ def query_blood_markers(days: int = 730) -> list[dict]:
 # ── Background sync thread ──────────────────────────────────────────────────
 
 _sync_thread = None
-_sync_stop = threading.Event()  # cancellation signal for sync thread
+_sync_stop = threading.Event()  # the CURRENT sync thread's stop signal
 _sync_lock = threading.Lock()   # serializes stop/start/restart
+# Each sync thread's own stop event, by thread ident. One shared flag meant a
+# restart that found the old thread still inside a slow fetch had to choose
+# between two live passes and none; it chose none and left the flag set, so
+# every write gate aborted until the process restarted (audit 2026-09-23,
+# integ #1). With a flag per thread the old one is told to stop and the new
+# one starts at once.
+_thread_stop: dict = {}
+_RESTART_JOIN_S = 5.0
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -1196,73 +1210,101 @@ def _is_dead_credential(exc: Exception) -> bool:
         return False
 
 
-def _sync_loop(interval_sec: int = 1800):
+def _sync_loop(interval_sec: int = 1800, stop: "threading.Event | None" = None):
     """Background thread that syncs every `interval_sec` seconds.
+
+    ``stop`` is this thread's own stop event (restart_sync passes a fresh one
+    per thread); it defaults to the module's current one.
 
     Exponential backoff on failure:
       - success → reset counter, sleep interval_sec
       - failure → counter++, sleep min(3600, 60 * 2**min(counter, 6))
       - 5 consecutive HTTP 401s → set _auth_disabled=True, stop retrying
+
+    A thread that has been told to stop touches no shared health state on
+    the way out: its failure belongs to the profile it was syncing, not to
+    the one that replaced it.
     """
     global _auth_disabled, _consecutive_failures, _last_sync_error
+    if stop is None:
+        stop = _sync_stop
     consecutive_auth_failures = 0
-
-    while not _sync_stop.is_set():
-        if _auth_disabled:
-            log.warning("Background sync disabled (auth failures); exiting loop")
-            return
-        try:
-            run_sync(days=90)
-            log.info("Background sync completed")
-            _consecutive_failures = 0
-            _last_sync_error = None
-            consecutive_auth_failures = 0
-            sleep_for = interval_sec
-            cb = post_sync_callback
-            if cb is not None:
-                try:
-                    cb()
-                except Exception:
-                    log.debug("post-sync callback failed", exc_info=True)
-        except ICUCredentialsMissing as e:
-            # No credentials — no point retrying until user configures them.
-            _last_sync_error = str(e)
-            log.info("Background sync skipped: %s", e)
-            sleep_for = interval_sec
-        except SyncAborted as e:
-            # AC1: a profile switch / purge landed mid-pass. Not a failure —
-            # the stop event is normally set too, so the while-condition
-            # exits and restart_sync spawns a fresh thread for the new
-            # profile; a pure epoch bump (purge) just waits for next tick.
-            log.info("Background sync pass aborted: %s", e)
-            sleep_for = interval_sec
-        except Exception as e:
-            _consecutive_failures += 1
-            _last_sync_error = str(e)
-            log.error("Background sync failed (#%d): %s", _consecutive_failures, e)
-            if _is_auth_error(e):
-                consecutive_auth_failures += 1
-                # A 401 is a dead credential — pause on the FIRST one. The
-                # 5-strike ladder cost 2h of CONTINUOUS uptime before the
-                # reconnect banner appeared (4 × 1800s of interruptible sleep),
-                # and this counter is loop-local, so every app restart put it
-                # back to zero. On a desktop app opened for ten minutes, a
-                # revoked token read as "sync just stops working, no message".
-                # 403 keeps the budget: it is not proof of a dead credential.
-                if _is_dead_credential(e) or consecutive_auth_failures >= 5:
-                    _auth_disabled = True
-                    log.error(
-                        "EVENT=icu_auth_disabled after=%d auth failure(s) — "
-                        "pausing background sync. Reconnect intervals.icu.",
-                        consecutive_auth_failures
-                    )
+    _thread_stop[threading.get_ident()] = stop
+    try:
+        while not stop.is_set():
+            if _auth_disabled:
+                log.warning("Background sync disabled (auth failures); exiting loop")
+                return
+            try:
+                run_sync(days=90)
+                if stop.is_set():
                     return
-            else:
+                log.info("Background sync completed")
+                _consecutive_failures = 0
+                _last_sync_error = None
                 consecutive_auth_failures = 0
-            # Exponential backoff, capped at 1 hour.
-            backoff = 60 * (2 ** min(_consecutive_failures, 6))
-            sleep_for = min(3600, max(interval_sec, backoff))
-        _sync_stop.wait(sleep_for)  # interruptible sleep
+                sleep_for = interval_sec
+                cb = post_sync_callback
+                if cb is not None:
+                    try:
+                        cb()
+                    except Exception:
+                        log.debug("post-sync callback failed", exc_info=True)
+            except ICUCredentialsMissing as e:
+                if stop.is_set():
+                    return
+                # No credentials — no point retrying until user configures them.
+                _last_sync_error = str(e)
+                log.info("Background sync skipped: %s", e)
+                sleep_for = interval_sec
+            except SyncAborted as e:
+                # AC1: a profile switch / purge landed mid-pass. Not a failure —
+                # the stop event is normally set too, so the while-condition
+                # exits and restart_sync spawns a fresh thread for the new
+                # profile; a pure epoch bump (purge) just waits for next tick.
+                log.info("Background sync pass aborted: %s", e)
+                sleep_for = interval_sec
+            except Exception as e:
+                if stop.is_set():
+                    log.info("superseded sync pass ended with %s; not counted", e)
+                    return
+                _consecutive_failures += 1
+                _last_sync_error = str(e)
+                log.error("Background sync failed (#%d): %s", _consecutive_failures, e)
+                if _is_auth_error(e):
+                    consecutive_auth_failures += 1
+                    # A 401 is a dead credential — pause on the FIRST one. The
+                    # 5-strike ladder cost 2h of CONTINUOUS uptime before the
+                    # reconnect banner appeared (4 × 1800s of interruptible sleep),
+                    # and this counter is loop-local, so every app restart put it
+                    # back to zero. On a desktop app opened for ten minutes, a
+                    # revoked token read as "sync just stops working, no message".
+                    # 403 keeps the budget: it is not proof of a dead credential.
+                    if _is_dead_credential(e) or consecutive_auth_failures >= 5:
+                        _auth_disabled = True
+                        log.error(
+                            "EVENT=icu_auth_disabled after=%d auth failure(s) — "
+                            "pausing background sync. Reconnect intervals.icu.",
+                            consecutive_auth_failures
+                        )
+                        return
+                else:
+                    consecutive_auth_failures = 0
+                # Exponential backoff, capped at 1 hour.
+                backoff = 60 * (2 ** min(_consecutive_failures, 6))
+                sleep_for = min(3600, max(interval_sec, backoff))
+            stop.wait(sleep_for)  # interruptible sleep
+    finally:
+        _thread_stop.pop(threading.get_ident(), None)
+
+
+def _start_sync_thread() -> None:
+    """Start a sync thread with its own fresh stop event (under _sync_lock)."""
+    global _sync_thread, _sync_stop
+    _sync_stop = threading.Event()
+    _sync_thread = threading.Thread(target=_sync_loop, kwargs={"stop": _sync_stop},
+                                    daemon=True, name="sync")
+    _sync_thread.start()
 
 
 def stop_sync() -> None:
@@ -1277,53 +1319,55 @@ def shutdown_sync(timeout: float = 5.0) -> bool:
     after a delete-last there IS no restart, and a permanently-set flag
     would make every future write gate abort (including in an unrelated
     later profile session in the same process). This joins the thread
-    bounded, then swaps in a fresh unset Event — safe because the old
-    thread is confirmed dead (or we keep the set flag and report False).
+    bounded, then swaps in a fresh unset Event. A thread still alive after
+    the join keeps its OWN set flag, so its writes abort anyway; returns
+    False in that case.
     """
     global _sync_thread, _sync_stop
     with _sync_lock:
         _sync_stop.set()
         t = _sync_thread
+        alive = False
         if t is not None:
             t.join(timeout=timeout)
-            if t.is_alive():
-                log.error(
-                    "shutdown_sync: thread still alive after %.1fs join — "
-                    "keeping stop flag set (write gates will abort)", timeout
-                )
-                return False
+            alive = t.is_alive()
+            if alive:
+                log.warning("shutdown_sync: thread still inside a pass after "
+                            "%.1fs join; its own stop flag stays set", timeout)
         _sync_thread = None
         _sync_stop = threading.Event()
-        return True
+        return not alive
 
 
 def restart_sync() -> None:
-    """Stop old sync thread, close connections, start fresh.
+    """Stop the old sync thread, close connections, start a fresh one.
 
-    Guarded by _sync_lock to prevent racing stop/start from concurrent callers
-    (e.g. profile switches). If the old thread doesn't exit within the join
-    timeout, we refuse to start a new one to avoid two concurrent syncs.
+    Guarded by _sync_lock against concurrent callers (profile switches).
+    The old thread is told to stop through its OWN event. If it is still
+    inside a slow fetch after the bounded join, the new thread starts anyway:
+    the old one can no longer write (its gates abort, and a profile switch
+    fails its snapshot too) and exits at its next check. This used to refuse
+    to start and leave the shared flag set -- no sync for the new profile
+    and every write gate aborting until the app restarted, while the status
+    read healthy (audit 2026-09-23, integ #1).
     """
-    global _sync_thread, _sync_stop, _auth_disabled, _consecutive_failures, _last_sync_error
+    global _auth_disabled, _consecutive_failures, _last_sync_error
     with _sync_lock:
-        stop_sync()
-        if _sync_thread is not None:
-            _sync_thread.join(timeout=5)
-            if _sync_thread.is_alive():
-                log.error(
-                    "Old sync thread still alive after 5s join — refusing to "
-                    "start a new one to avoid double-sync. Investigate hung sync."
-                )
-                return
+        old = _sync_thread
+        _sync_stop.set()
+        if old is not None:
+            old.join(timeout=_RESTART_JOIN_S)
+            if old.is_alive():
+                log.warning(
+                    "restart_sync: old sync thread still inside a pass after "
+                    "%.0fs; it is flagged to stop and cannot write -- starting "
+                    "the new thread now", _RESTART_JOIN_S)
         close_all_connections()
         # Reset health state before starting fresh.
         _auth_disabled = False
         _consecutive_failures = 0
         _last_sync_error = None
-        # Use a fresh Event under the lock so start/stop observers agree.
-        _sync_stop = threading.Event()
-        _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="sync")
-        _sync_thread.start()
+        _start_sync_thread()
 
 
 def start_background_sync():
@@ -1331,13 +1375,10 @@ def start_background_sync():
 
     Guarded by _sync_lock so concurrent callers don't each create a thread.
     """
-    global _sync_thread, _sync_stop
     with _sync_lock:
         if _sync_thread is not None and _sync_thread.is_alive():
             return
-        _sync_stop = threading.Event()  # fresh event to avoid stale state
-        _sync_thread = threading.Thread(target=_sync_loop, daemon=True, name="sync")
-        _sync_thread.start()
+        _start_sync_thread()
 
 
 # ── AC3b/A10: disconnect / athlete-change purge ─────────────────────────────

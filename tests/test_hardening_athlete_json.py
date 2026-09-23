@@ -243,6 +243,34 @@ def test_with_no_good_copy_a_partial_edit_is_refused_loudly(pm):
     assert not path.exists()
 
 
+def test_a_refused_write_leaves_the_profile_in_memory_unchanged(pm):
+    """Fix-forward F4 (the evaluator's p3b_lockout): the refusal came from
+    the write, after save_athlete had already done `_athlete.update(data)`.
+    POST /api/settings {"ftp": 260} answered 400 while GET /api/settings
+    showed 260, and a refused record_ftp_test stayed in memory and was
+    written by the next accepted save."""
+    from fastapi.testclient import TestClient
+    import app as app_module
+    path = _torn_without_backup(pm)
+    before = json.loads(json.dumps(pm._athlete))
+    c = TestClient(app_module.app, base_url="http://127.0.0.1")
+    assert c.post("/api/settings", json={"ftp": 260}).status_code == 400
+    got = c.get("/api/settings")
+    assert got.status_code == 200 and got.json().get("ftp") != 260, got.json().get("ftp")
+    with pytest.raises(ValueError):
+        pm.record_ftp_test("ramp", 270, source="refused", applied=True)
+    with pytest.raises(ValueError):
+        pm.update_ftp(265)
+    with pytest.raises(ValueError):
+        pm._set_fact("wprime", 20000, "icu")      # the sync thread's mirror
+    assert pm._athlete == before
+    pm.save_athlete({"ftp": 287, "weight_kg": 71.5})     # accepted
+    d = json.loads(path.read_text())
+    assert d["ftp"] == 287 and d.get("wprime_j") != 20000
+    assert not [t for t in d.get("ftp_test_history", []) if t.get("source") == "refused"], \
+        "a refused FTP test was persisted by the next accepted save"
+
+
 def test_the_guard_survives_a_restart(pm):
     """After a restart the torn file is absent (moved aside), not corrupt; the
     aside copy is what says a partial write must not become the file."""

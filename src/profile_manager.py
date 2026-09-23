@@ -777,8 +777,7 @@ class ProfileManager:
         # v1.1.0 IMPL-NORWEGIAN-HR: same pattern for max_hr.
         max_hr_manual = data.pop("max_hr", None)
 
-        self._athlete.update(data)
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
+        self._commit_athlete(data)
 
         if wprime_manual is not None:
             self._set_wprime(int(wprime_manual), "manual")
@@ -786,6 +785,17 @@ class ProfileManager:
             self._set_pmax(int(pmax_manual), "manual")
         if max_hr_manual is not None:
             self._set_max_hr(int(max_hr_manual), "manual")
+
+    def _commit_athlete(self, changes: dict) -> None:
+        """Write athlete.json with ``changes`` applied, and only then take
+        them in memory. _write_json may refuse the write (a damaged file with
+        no good copy); updating first left GET /api/settings showing an FTP
+        the 400 said was not saved, and the next accepted write persisted a
+        refused FTP test (fix-forward F4)."""
+        with self._write_lock:
+            new = {**self._athlete, **changes}
+            self._write_json(self.active_dir / "athlete.json", new)
+            self._athlete = new
 
     def _set_fact(self, name: str, value, source: str) -> bool:
         """Write a provenance-tracked fact, or refuse and say why.
@@ -822,9 +832,7 @@ class ProfileManager:
                          self._athlete.get(fact.field), fact.unit, current, v, source)
                 return False
 
-            self._athlete[fact.field] = v
-            self._athlete[fact.source_field] = source
-            self._write_json(self.active_dir / "athlete.json", self._athlete)
+            self._commit_athlete({fact.field: v, fact.source_field: source})
         log.info("set %s=%d %s source=%s", fact.field, v, fact.unit, source)
         return True
 
@@ -1002,8 +1010,7 @@ class ProfileManager:
         with self._write_lock:  # two concurrent tests must both be kept
             hist = list(self._athlete.get("ftp_test_history", []))
             hist.append(entry)
-            self._athlete["ftp_test_history"] = hist
-            self._write_json(self.active_dir / "athlete.json", self._athlete)
+            self._commit_athlete({"ftp_test_history": hist})
         log.info(
             f"record_ftp_test: method={method} ftp={ftp} "
             f"source={source!r} applied={applied}"
@@ -1151,8 +1158,7 @@ class ProfileManager:
         self.save_env(icu_athlete_id if icu_athlete_id is not None else self.icu_athlete_id,
                       self.icu_api_key, access_token)
         if icu_athlete_name is not None:
-            self._athlete["icu_athlete_name"] = icu_athlete_name
-            self._write_json(self.active_dir / "athlete.json", self._athlete)
+            self._commit_athlete({"icu_athlete_name": icu_athlete_name})
 
     def save_prefs(self, prefs: dict) -> None:
         """Save training preferences to active profile's user_prefs.json."""

@@ -14,6 +14,7 @@ import urllib.error
 import base64
 import http.client
 from datetime import date, timedelta
+from typing import NamedTuple
 import config
 
 _log = logging.getLogger("domestique.training")
@@ -88,8 +89,13 @@ class ICURateLimitError(Exception):
 
 
 class ICUServerError(Exception):
-    """HTTP 5xx from Intervals.icu (after retry budget exhausted) or other 4xx."""
-    pass
+    """HTTP 5xx from Intervals.icu (after retry budget exhausted) or other 4xx.
+
+    ``status`` is the HTTP code when there was one (None for a bad body), so
+    a caller can tell 404 "gone" from 503 "try later" (contract 1.2)."""
+    def __init__(self, *args, status: "int | None" = None):
+        super().__init__(*args)
+        self.status = status
 
 
 class ICUNetworkError(Exception):
@@ -291,7 +297,8 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
                     _body = ""
                 if "scope" in _body.lower() or "access denied" in _body.lower():
                     _log.warning(f"ICU 403 missing-scope on {path}: {_body}")
-                    raise ICUServerError(f"HTTP 403 (scope) on {path}") from e
+                    raise ICUServerError(f"HTTP 403 (scope) on {path}",
+                                         status=403) from e
                 _log.warning(f"ICU HTTP 403 on {path}: {e.reason}")
                 raise ICUAuthError(f"HTTP 403 on {path}: {e.reason}",
                                    status=403) from e
@@ -317,7 +324,8 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
                 _log.debug(f"ICU HTTP 422 on {path}: {e.reason}")
             else:
                 _log.warning(f"ICU HTTP {e.code} on {path}: {e.reason}")
-            raise ICUServerError(f"HTTP {e.code} on {path}: {e.reason}") from e
+            raise ICUServerError(f"HTTP {e.code} on {path}: {e.reason}",
+                                 status=e.code) from e
         except urllib.error.URLError as e:
             last_network_exc = e
             if attempt < 2:
@@ -550,17 +558,46 @@ def fetch_activity_full(activity_id: str) -> dict | None:
     return detail
 
 
-def fetch_activity_fit_file(activity_id: str) -> bytes | None:
-    """v1.0.7 — fetch the raw FIT-file blob for an activity.
+class Fetched(NamedTuple):
+    """What a per-activity fetch got, and why it got nothing when it did.
+
+    ``status`` is one of:
+      ok        -- ``data`` is the payload
+      not_found -- HTTP 404 / 410: intervals.icu says the activity is gone
+      no_data   -- another 4xx (422: a Strava-origin ride ICU will not
+                   re-share; a missing scope): it exists, we cannot have it
+      failed    -- could not ask: network, timeout, truncated body, 429,
+                   5xx, auth, no credentials. Retry on the next pass.
+
+    Why (audit 2026-09-23, data #4): these fetchers answered None for all
+    four, so DFA enrichment could not tell "deleted upstream" from "Wi-Fi
+    blip" and stamped a sticky ``icu_deleted`` on both. Only ``not_found``
+    is evidence that the activity is gone.
+    """
+    status: str
+    data: object = None
+
+
+def _outcome_of(exc: Exception) -> Fetched:
+    status = getattr(exc, "status", None) if isinstance(exc, ICUServerError) else None
+    if status in (404, 410):
+        return Fetched("not_found")
+    if status is not None and 400 <= status < 500 and status != 429:
+        return Fetched("no_data")
+    return Fetched("failed")
+
+
+def fetch_activity_fit_file_result(activity_id: str) -> Fetched:
+    """v1.0.7 — fetch the raw FIT-file blob for an activity, as a Fetched.
 
     ICU exposes the rider's raw FIT at ``/api/v1/activity/<id>/fit-file``.
-    Returns the raw bytes on 200, None on 4xx / 5xx / network failures so
-    the caller can degrade gracefully (no DFA α1 cached, ride still imports).
+    Not through _get: the body is bytes, not JSON, and a FIT is too large to
+    retry three times inside the DFA augment's time budget.
     """
     try:
         _require_credentials()
     except ICUCredentialsMissing:
-        return None
+        return Fetched("failed")
 
     url = f"{config.ICU_BASE}/activity/{activity_id}/fit-file"
     headers = _auth_header()
@@ -570,29 +607,36 @@ def fetch_activity_fit_file(activity_id: str) -> bytes | None:
         with urllib.request.urlopen(req, timeout=30, context=tls_trust.make_context()) as resp:
             status = resp.getcode()
             if 200 <= status < 300:
-                return resp.read()
+                raw = resp.read()
+                return Fetched("ok", raw) if raw else Fetched("no_data")
             _log.warning(f"fetch_activity_fit_file({activity_id}) status={status}")
-            return None
+            return _outcome_of(ICUServerError(status=status))
     except urllib.error.HTTPError as e:
         _log.warning(f"fetch_activity_fit_file({activity_id}) HTTP {e.code}: {e.reason}")
-        return None
-    except (urllib.error.URLError, OSError, TimeoutError) as e:
-        _log.warning(f"fetch_activity_fit_file({activity_id}) network: {e}")
-        return None
+        return _outcome_of(ICUServerError(status=e.code))
+    except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as e:
+        _log.warning(f"fetch_activity_fit_file({activity_id}) network: {e!r}")
+        return Fetched("failed")
 
 
-def fetch_activity_streams(activity_id: str) -> dict | None:
-    """v4.4.0 — fetch raw 1Hz streams for an activity.
+def fetch_activity_fit_file(activity_id: str) -> bytes | None:
+    """The FIT blob, or None on any failure (callers that need to know WHY
+    use :func:`fetch_activity_fit_file_result`)."""
+    r = fetch_activity_fit_file_result(activity_id)
+    return r.data if r.status == "ok" else None
+
+
+def fetch_activity_streams_result(activity_id: str) -> Fetched:
+    """v4.4.0 — fetch raw 1Hz streams for an activity, as a Fetched.
 
     ICU's /api/v1/activity/<id>/streams endpoint returns a list of stream
-    dicts (one per channel: power, heart_rate, cadence, …). Returns None on
-    failure so the detail endpoint can fall back to whatever local FIT it has
-    (or omit samples entirely).
+    dicts (one per channel: power, heart_rate, cadence, …); ``data`` is that
+    list normalised to a dict keyed by stream type.
     """
     try:
         _require_credentials()
     except ICUCredentialsMissing:
-        return None
+        return Fetched("failed")
     try:
         data = _get(f"activity/{activity_id}/streams")
     except ICUServerError as e:
@@ -601,10 +645,10 @@ def fetch_activity_streams(activity_id: str) -> dict | None:
         # error — we fall back to the activity summary. Log at DEBUG so it doesn't
         # spam the log on every Strava ride.
         _log.debug(f"fetch_activity_streams({activity_id}) — no streams: {e}")
-        return None
+        return _outcome_of(e)
     except (ICUAuthError, ICURateLimitError, ICUNetworkError) as e:
         _log.warning(f"fetch_activity_streams({activity_id}) failed: {e}")
-        return None
+        return Fetched("failed")
     # ICU returns a list of {type, data, ...}; normalize to a dict by type.
     if isinstance(data, list):
         out: dict = {}
@@ -615,10 +659,18 @@ def fetch_activity_streams(activity_id: str) -> dict | None:
             d = s.get("data")
             if t and isinstance(d, list):
                 out[t] = d
-        return out
+        return Fetched("ok", out)
     if isinstance(data, dict):
-        return data
-    return None
+        return Fetched("ok", data)
+    return Fetched("no_data")
+
+
+def fetch_activity_streams(activity_id: str) -> dict | None:
+    """The streams dict, or None on any failure (so the detail endpoint can
+    fall back to a local FIT). Callers that need to know WHY use
+    :func:`fetch_activity_streams_result`."""
+    r = fetch_activity_streams_result(activity_id)
+    return r.data if r.status == "ok" else None
 
 
 # ── derived metrics ───────────────────────────────────────────────────────────

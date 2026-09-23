@@ -72,14 +72,40 @@ def test_a_tested_ftp_replaces_an_automatic_one(pm):
 
 
 def test_the_drift_rule_leaves_no_trace_when_it_is_refused(pm):
-    """The auto path used to re-stamp `ftp_source` on athlete.json directly
-    after calling update_ftp, which is the owner's field. A refused write that
-    still writes provenance is worse than no gate at all."""
+    """The 7-day drift rule, as the sync runs it, twice: a tested FTP survives.
+
+    The auto path used to ignore update_ftp's refusal, append an applied
+    ledger row, and re-stamp `ftp_source` "eftp_auto" on athlete.json by hand.
+    The first sync left 300 standing but relabelled it an estimate; the second
+    then met an equal tier and wrote 330 over the test. This drives the real
+    rule (it used to call a helper that does not exist, and skipped every run).
+    """
     import training_planner as tp
 
     pm.update_ftp(300, source="tested_coggan_20min")
-    applied = tp._maybe_apply_eftp_drift(pm, 330) if hasattr(
-        tp, "_maybe_apply_eftp_drift") else None
-    if applied is None:
-        pytest.skip("drift helper not exposed; covered by the unit tests above")
-    assert pm.ftp == 300 and pm.ftp_source == "tested_coggan_20min"
+    pm.save_prefs({"eftp_auto_apply": True})
+    # ten days of eFTP 330: past the +3% threshold and the 7-day streak, and
+    # plausible (the app's guard only rejects <100 W or <60 % of current).
+    series = [{"id": f"2026-09-{d:02d}", "sportInfo": [{"eftp": 330}]}
+              for d in range(10, 20)]
+    for sync in (1, 2):
+        out = tp.check_and_auto_apply_eftp(series)
+        assert out is None, f"sync {sync}: the rule reported {out} for a refused write"
+        assert (pm.ftp, pm.ftp_source) == (300, "tested_coggan_20min"), (
+            f"sync {sync}: FTP {pm.ftp} from {pm.ftp_source!r}; the rider tested 300")
+    assert not [h for h in pm.ftp_test_history if h.get("source") == "eftp_auto"], (
+        "a refused write left an eftp_auto row in the FTP ledger")
+
+
+def test_the_drift_rule_still_applies_over_an_estimate(pm):
+    """Control: the gate refuses by tier, it does not switch the rule off."""
+    import training_planner as tp
+
+    pm.update_ftp(240, source="eftp_icu")
+    pm.save_prefs({"eftp_auto_apply": True})
+    series = [{"id": f"2026-09-{d:02d}", "sportInfo": [{"eftp": 262}]}
+              for d in range(10, 20)]
+    out = tp.check_and_auto_apply_eftp(series)
+    assert out and out["applied"] and out["new_ftp"] == 262
+    assert (pm.ftp, pm.ftp_source) == (262, "eftp_auto")
+    assert [h for h in pm.ftp_test_history if h.get("source") == "eftp_auto"]

@@ -15805,24 +15805,31 @@ def check_and_auto_apply_eftp(wellness_series: list[dict]) -> dict | None:
         new_ftp = int(round(latest_eftp))
         from datetime import date as _d
         today_iso = _d.today().isoformat()
+        # FIX-CONTRACT C5: stamp "eftp_auto" (not "eftp_icu") — this enum
+        # conveys the auto-apply semantics U5's banner gates on. "eftp_icu"
+        # just says "this number came from ICU"; "eftp_auto" says "the 7-day
+        # sustained-drift rule fired and I applied it without asking".
+        #
+        # The profile decides, and it is asked FIRST. It refuses an estimate
+        # over an FTP the rider tested or typed. This used to ignore the
+        # refusal, append an applied ledger row, and then stamp ftp_source
+        # "eftp_auto" on athlete.json by hand: the tested FTP survived the
+        # first sync but was relabelled an estimate, so the second sync met
+        # an equal tier and overwrote it (tested 300 -> 330 in two runs).
+        # A refused write leaves no trace: no ledger row, no provenance, no
+        # applied event. update_ftp stamps the provenance itself when it writes.
+        if pm.update_ftp(new_ftp, source="eftp_auto") is False:
+            log.info(
+                f"EVENT=eftp_auto_refused ftp={ATHLETE_FTP_W} candidate={new_ftp} "
+                f"source={pm.ftp_source} streak_days={streak}"
+            )
+            return None
         pm.record_ftp_test(
             method="manual",  # keep method enum narrow
             ftp=new_ftp,
             source="eftp_auto",
             applied=True,
         )
-        # FIX-CONTRACT C5: stamp "eftp_auto" (not "eftp_icu") — this enum
-        # conveys the auto-apply semantics U5's banner gates on. "eftp_icu"
-        # just says "this number came from ICU"; "eftp_auto" says "the 7-day
-        # sustained-drift rule fired and I applied it without asking".
-        pm.update_ftp(new_ftp, source="eftp_auto")
-        # Redundantly mirror onto athlete.json so any legacy reader that
-        # bypasses ProfileManager.update_ftp still sees the provenance.
-        try:
-            pm._athlete["ftp_source"] = "eftp_auto"
-            pm._write_json(pm.active_dir / "athlete.json", pm._athlete)
-        except Exception:
-            pass
         log.info(
             f"EVENT=eftp_auto_applied old_ftp={ATHLETE_FTP_W} new_ftp={new_ftp} "
             f"streak_days={streak}"

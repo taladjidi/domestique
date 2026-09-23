@@ -62,7 +62,10 @@ def _post(env, body):
                       headers={"content-type": "application/json"})
 
 
+HUGE = 10 ** 400          # an integer literal: json keeps it an int, not inf
+
 BAD = [
+    {"hours_per_week": HUGE}, {"plan_weeks": HUGE}, {"daily_availability": {"0": HUGE}},
     {"hours_per_week": -3}, {"hours_per_week": 1e6}, {"hours_per_week": math.nan},
     {"hours_per_week": math.inf}, {"hours_per_week": 0.5}, {"hours_per_week": 41},
     {"plan_weeks": 260}, {"plan_weeks": -1}, {"weeks": 53}, {"plan_weeks": math.nan},
@@ -93,3 +96,29 @@ def test_the_edges_of_the_limits_still_generate(env):
                  {"hours_per_week": 40, "plan_weeks": 52}):
         r = _post(env, _body(**over))
         assert r.status_code == 200, (over, r.text[:200])
+
+
+def test_null_daily_availability_is_the_default_not_a_500(env):
+    """Fix-forward F9: `"daily_availability": null` passed the check and then
+    `.items()` on None answered 500. Absent and null mean the same."""
+    r = _post(env, _body(daily_availability=None))
+    assert r.status_code == 200, r.text[:200]
+
+
+def test_the_week_limit_counts_the_weeks_the_plan_is_built_with(env):
+    """Fix-forward F9: the check counted ceil(days / 7) from today; the plan
+    is built in whole weeks up to the event, one more near the edge. An
+    event 364 days away answered 200 with a 53-week plan; 371 days, 400.
+    Now: an accepted plan never exceeds the limit, and past the first
+    refusal every later date is refused too."""
+    got = []
+    for days in (350, 358, 361, 364, 371):
+        ev = (clock.today() + timedelta(days=days)).isoformat()
+        r = _post(env, _body(goal="event", event_date=ev))
+        assert r.status_code in (200, 400), (days, r.status_code, r.text[:200])
+        if r.status_code == 200:
+            n = len(r.json()["plan_json"]["weeks"])
+            assert n <= 52, f"event in {days} days: accepted with {n} weeks"
+        got.append(r.status_code)
+    assert got[0] == 200 and got[-1] == 400, got
+    assert got == sorted(got), f"accepted after a refusal: {got}"

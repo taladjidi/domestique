@@ -1014,7 +1014,9 @@ def _generate_input_error(body: dict) -> "str | None":
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             return f"{key} must be a number"
         lo, hi = SETUP_LIMITS[lim]
-        if not math.isfinite(raw) or not (lo <= raw <= hi):
+        # Comparisons only: NaN and +-inf fail them, and math.isfinite raised
+        # OverflowError (a 500) on an integer literal like 10**400 (F9).
+        if not (lo <= raw <= hi):
             return f"{key}={raw} out of range [{lo},{hi}]"
         if integer and raw != int(raw):
             return f"{key} must be a whole number of weeks"
@@ -11276,7 +11278,7 @@ async def api_plan_generate(request: Request):
             max_weekend_hours=body.get("max_weekend", 3.5),
             available_days=available_days,
             rest_days=rest_days,
-            daily_max_hours={int(k): float(v) for k, v in body.get("daily_availability", {}).items()},
+            daily_max_hours={int(k): float(v) for k, v in (body.get("daily_availability") or {}).items()},
             plan_weeks=plan_weeks,
             longest_ride_h_90d=body.get("longest_ride_h_90d"),
             last_ftp_test_date=body.get("last_ftp_test_date"),
@@ -11423,6 +11425,13 @@ async def api_plan_generate(request: Request):
                 # they are in.
                 activities=planner_activities,
             )
+            # The limit applies to the plan as BUILT (fix-forward F9): the
+            # pre-check counts ceil(days / 7) from today, the planner lays
+            # whole weeks up to the event -- an event 364 days away passed
+            # it and got a 53-week plan while 371 days answered 400.
+            if len(weeks) > SETUP_LIMITS["plan_weeks"][1]:
+                raise ValueError(f"the event is {len(weeks)} weeks away; a plan "
+                                 f"covers at most {SETUP_LIMITS['plan_weeks'][1]}")
             plan_path = tp.export_plan_md(goal, phases, weeks)
 
             # Also save structured JSON

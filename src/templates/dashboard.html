@@ -15830,6 +15830,7 @@ async function viewLogs() {
   if (viewer.style.display === 'none') return;
   try {
     const d = await (await fetch('/api/logs?lines=200')).json();
+    if (d.error === 'local-only') { viewer.textContent = 'Logs are readable only on the machine running Domestique.'; return; }
     viewer.textContent = d.lines ? d.lines.join('\n') : 'No logs found';
     viewer.scrollTop = viewer.scrollHeight;
     viewer.insertAdjacentHTML('beforeend', `\n\n--- ${d.total} total lines, ${d.size_kb}KB, ${d.path} ---`);

@@ -7076,12 +7076,15 @@ def _tail_lines(p: Path, n: int = 2000) -> list[str]:
 
 
 @app.get("/api/logs")
-def api_logs(lines: int = Query(100)):
+def api_logs(request: Request, lines: int = Query(100)):
     """Return last N lines of the log file for debugging.
 
     Hard-capped at 2000 lines via seek-from-end tailing so that a bloated
     log file (many MB) can't OOM the process when the debug viewer opens.
+    Local clients only, like /api/diag/* (contract 7.8).
     """
+    if not _diag_local_only(request):
+        return JSONResponse({"error": "local-only"}, status_code=403)
     log_path = domestique_home() / "logs" / "domestique.log"
     if not log_path.exists():
         return {"lines": [], "path": str(log_path), "exists": False}

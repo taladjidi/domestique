@@ -1831,11 +1831,24 @@ def compute_local_ctl(
     52.9 (audit 2026-09-23, rv-facts #1). Both shapes are read, as
     compute_local_atl does: top-level ``tss`` or ``summary.tss``.
 
+    With no ``rides`` given, a rider connected to intervals.icu gets None:
+    their CTL is intervals.icu's, and a missing one is unknown, not a number
+    from their synced records (fitness.state's rule). training_planner's
+    fallback calls this when intervals.icu is unreachable; answering from the
+    ICU records there moved an ICU rider's fallback CTL from 37.0 to 78.9
+    and changed their prescription (review of 2026-09-23).
+
     Returns None if no usable TSS was found so callers can keep their
     fallback.
     """
     import datetime as _dt
     if rides is None:
+        import training
+        try:
+            training._require_credentials()
+            return None                 # an intervals.icu rider
+        except training.ICUCredentialsMissing:
+            pass
         rides = load_all_rides()
     if not rides:
         return None

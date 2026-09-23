@@ -150,3 +150,21 @@ def test_the_collector_itself_sees_a_fit_only_riders_week(rider):
     got = app_module._collect_week_activities(SimpleNamespace(start=ws), today,
                                               include_today=True)
     assert len(got) == 2
+
+
+def test_an_icu_rider_gets_no_local_ctl_from_the_fallback(rider, monkeypatch):
+    """Review finding (2026-09-23): training_planner's CTL fallback calls
+    compute_local_ctl() when intervals.icu is unreachable. Reading
+    load_all_rides() there gave an intervals.icu rider a CTL of 78.9 from
+    their synced records where the base answered 37.0 -- a prescription
+    change, out of scope, and against fitness's rule that an ICU rider's
+    missing value is unknown, not local. Only a rider without ICU gets one."""
+    monkeypatch.setattr(training, "_require_credentials", lambda: None)
+    today = clock.today()
+    for k in range(1, 30):
+        day = (today - dt.timedelta(days=k)).isoformat()
+        rs.persist_icu_activity({"id": f"i{k}", "type": "Ride", "name": "r",
+                                 "start_date_local": f"{day}T08:00:00",
+                                 "moving_time": 3600, "icu_training_load": 95})
+    assert rs.compute_local_ctl() is None
+    assert fitness.state(None, today)["source"] == "none"

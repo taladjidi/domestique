@@ -910,7 +910,10 @@ def _host_name(host: str) -> str:
     """The Host header without its port, lowercased ("[::1]:80" -> "[::1]")."""
     host = host.strip().lower()
     if host.startswith("["):
-        return host[:host.find("]") + 1] if "]" in host else ""
+        name, sep, rest = host.partition("]")
+        if not sep or (rest and not rest.startswith(":")):
+            return ""
+        return name + "]"
     return host.rsplit(":", 1)[0]
 
 
@@ -922,8 +925,10 @@ def _host_allowed(host: str) -> bool:
     return bool(name) and name in {_host_name(h) for h in extra.split(",") if h.strip()}
 
 
-@app.middleware("http")
 async def _allowed_host_check(request, call_next):
+    # Registered LAST in this module (see the end of the file), so it is the
+    # outermost middleware: a refused Host reaches no other middleware -- the
+    # plan heal after a POST under /api/profiles ran for it (review of 7.2).
     if not _host_allowed(request.headers.get("host", "")):
         return StarletteJSONResponse({"error": "host not allowed"}, status_code=400)
     return await call_next(request)
@@ -995,33 +1000,36 @@ def _generate_input_error(body: dict) -> "str | None":
     SETUP_LIMITS before anything is built. -3 / 1e6 / NaN hours and 260 plan
     weeks used to reach the planner (a 500, or minutes of work on a plan
     nobody can ride). Absent fields keep their defaults; plan_weeks 0 means
-    "not set" (the goal's own horizon)."""
-    def _num(key, raw, lim):
-        try:
-            v = float(raw)
-        except (TypeError, ValueError):
-            return f"invalid {key}"
+    "not set" (the goal's own horizon). A field that is present must be a
+    JSON number -- a string or a boolean was stored in the plan as given."""
+    def _num(key, raw, lim, integer=False):
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return f"{key} must be a number"
         lo, hi = SETUP_LIMITS[lim]
-        if not math.isfinite(v) or not (lo <= v <= hi):
+        if not math.isfinite(raw) or not (lo <= raw <= hi):
             return f"{key}={raw} out of range [{lo},{hi}]"
+        if integer and raw != int(raw):
+            return f"{key} must be a whole number of weeks"
         return None
 
     checks = []
-    if body.get("hours_per_week") is not None:
-        checks.append(("hours_per_week", body["hours_per_week"], "hours_per_week"))
+    if "hours_per_week" in body:
+        checks.append(("hours_per_week", body["hours_per_week"], "hours_per_week", False))
     for key in ("weeks", "plan_weeks"):
-        if body.get(key) not in (None, 0, "0", ""):
-            checks.append((key, body[key], "plan_weeks"))
+        if key in body and body[key] != 0:
+            checks.append((key, body[key], "plan_weeks", True))
     for key in ("max_weekday", "max_weekend"):
-        if body.get(key) is not None:
-            checks.append((key, body[key], "day_hours"))
+        if key in body:
+            checks.append((key, body[key], "day_hours", False))
     daily = body.get("daily_availability")
     if daily is not None and not isinstance(daily, dict):
         return "daily_availability must be an object of {weekday: hours}"
     for k, v in (daily or {}).items():
-        checks.append((f"daily_availability[{k}]", v, "day_hours"))
-    for key, raw, lim in checks:
-        err = _num(key, raw, lim)
+        if str(k) not in {"0", "1", "2", "3", "4", "5", "6"}:
+            return f"daily_availability: {k!r} is not a weekday (0-6)"
+        checks.append((f"daily_availability[{k}]", v, "day_hours", False))
+    for key, raw, lim, integer in checks:
+        err = _num(key, raw, lim, integer)
         if err:
             return err
     return None
@@ -11531,7 +11539,7 @@ def _generate_into_store(json_path, mutate) -> None:
     rotates into .bak, nothing lost). Sync -- callers use run_in_threadpool."""
     try:
         tp.update_plan(json_path, mutate)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):   # read failed; mutate never ran
         _log.warning("generate: current_plan.json unreadable -- replacing it")
         with tp.plan_write_lock():
             tp.atomic_write_plan(json_path, mutate(None))
@@ -16740,6 +16748,47 @@ async def api_plan_dismiss_session(request: Request):
         return JSONResponse({"detail": "Dismiss failed"}, 500)
 
 
+def _auto_recalc_fresh(plan: dict) -> "dict | None":
+    """auto-recalc's "fresh" answer (last recalc < 7 days ago, with the
+    decorative event readiness), or None when the plan is due a rebuild.
+    Never raises on the readiness half."""
+    # Check if recalc needed (>7 days since last)
+    last_recalc = plan.get("recalc_date") or plan.get("generated", "")
+    if last_recalc:
+        try:
+            last_dt = datetime.fromisoformat(last_recalc)
+            # Normalize so naive/aware mismatch can't raise TypeError.
+            # Saved plans may include a tz offset (saved_at uses
+            # `.astimezone().isoformat()` elsewhere); strip it so the
+            # subtraction with `clock.now()` is always homogeneous.
+            if last_dt.tzinfo is not None:
+                last_dt = last_dt.replace(tzinfo=None)
+            days_since = (clock.now() - last_dt).days
+            if days_since < 7:
+                # Still fresh — return event readiness only.
+                # 3.3.2 (Lapo #2): readiness is DECORATIVE on this branch —
+                # its own try, so a readiness/metrics exception can never
+                # convert a FRESH verdict into a full plan rebuild (the old
+                # shared except turned any ValueError/TypeError here into a
+                # silent every-visit recalc).
+                readiness = {}
+                try:
+                    current_ctl = _planning_ctl()
+                    g = plan.get("goal", {})
+                    goal = tp.goal_from_dict(g)
+                    if goal.target_date:           # one that parses
+                        if goal.longest_ride_h_90d is None:
+                            goal.longest_ride_h_90d = _longest_ride_h_90d()
+                        readiness = tp.compute_event_readiness(goal, current_ctl)
+                except Exception:  # noqa: BLE001 — decorative readiness only
+                    _log.exception("auto-recalc: fresh-branch readiness failed (returning fresh)")
+                    readiness = {}
+                return {"action": "fresh", "days_since_recalc": days_since, "event_readiness": readiness}
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 @app.post("/api/plan/auto-recalc")
 def api_plan_auto_recalc():
     """Auto-recalculate plan if >7 days since last recalc. Called on tab load.
@@ -16761,39 +16810,9 @@ def api_plan_auto_recalc():
         if plan is None:
             return _reply({"action": "no_plan"})
 
-        # Check if recalc needed (>7 days since last)
-        last_recalc = plan.get("recalc_date") or plan.get("generated", "")
-        if last_recalc:
-            try:
-                last_dt = datetime.fromisoformat(last_recalc)
-                # Normalize so naive/aware mismatch can't raise TypeError.
-                # Saved plans may include a tz offset (saved_at uses
-                # `.astimezone().isoformat()` elsewhere); strip it so the
-                # subtraction with `clock.now()` is always homogeneous.
-                if last_dt.tzinfo is not None:
-                    last_dt = last_dt.replace(tzinfo=None)
-                days_since = (clock.now() - last_dt).days
-                if days_since < 7:
-                    # Still fresh — return event readiness only.
-                    # 3.3.2 (Lapo #2): readiness is DECORATIVE on this branch —
-                    # its own try, so a readiness/metrics exception can never
-                    # convert a FRESH verdict into a full plan rebuild (the old
-                    # shared except turned any ValueError/TypeError here into a
-                    # silent every-visit recalc).
-                    readiness = {}
-                    try:
-                        g = plan.get("goal", {})
-                        goal = tp.goal_from_dict(g)
-                        if goal.target_date:           # one that parses
-                            if goal.longest_ride_h_90d is None:
-                                goal.longest_ride_h_90d = _longest_ride_h_90d()
-                            readiness = tp.compute_event_readiness(goal, current_ctl)
-                    except Exception:  # noqa: BLE001 — decorative readiness only
-                        _log.exception("auto-recalc: fresh-branch readiness failed (returning fresh)")
-                        readiness = {}
-                    return _reply({"action": "fresh", "days_since_recalc": days_since, "event_readiness": readiness})
-            except (ValueError, TypeError):
-                pass
+        fresh = _auto_recalc_fresh(plan)
+        if fresh is not None:          # a recalc that ran meanwhile made it fresh
+            return _reply(fresh)
 
         # Recalc needed — rebuild plan (inputs fetched above, outside the lock)
 
@@ -16873,6 +16892,13 @@ def api_plan_auto_recalc():
         return plan_dict
 
     try:
+        # A fresh plan is only read, never written: answer it without the
+        # plan lock and without the inputs a rebuild needs (3.3.2 Lapo #2: a
+        # metrics failure must never turn a fresh verdict into an error).
+        with open(json_path, encoding="utf-8") as f:
+            fresh = _auto_recalc_fresh(json.load(f))
+        if fresh is not None:
+            return fresh
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
         # whatever runs inside _mutate holds every other plan writer.
         training = cached("training", get_today_metrics)
@@ -17385,7 +17411,8 @@ async def api_ride_import(
 
     # v1.0.3 — best-effort auto-reforecast: a FIT import = 1 new ride.
     # Helper swallows all exceptions; the import response stays unchanged.
-    _maybe_auto_reforecast("default", 1)
+    # In the threadpool: it waits on the plan lock (contract 4.2).
+    await run_in_threadpool(_maybe_auto_reforecast, "default", 1)
 
     return {
         "ride_id": ride_id,
@@ -18365,10 +18392,10 @@ async def api_ride_rpe(ride_id: str, request: Request):
     """
     if not isinstance(ride_id, str) or not re.match(r"^[\w\-]+$", ride_id or ""):
         return JSONResponse({"error": "bad ride_id"}, 400)
-    try:
-        body = await _get_json_body(request)
-    except Exception:
-        body = {}
+    # No fallback to {}: that read as {"rpe": null} and CLEARED the rating on
+    # any unreadable or non-object body (review of contract 7.5). Clearing is
+    # an explicit {"rpe": null}.
+    body = await _get_json_body(request)
     raw = body.get("rpe", None)
     if raw is None:
         rpe = None
@@ -20421,6 +20448,10 @@ def dashboard(request: Request):
     return templates.TemplateResponse(
         request=request, name="dashboard.html",
         context={"active_profile_id": active_profile_id})
+
+
+# Contract 7.2: registered after every other middleware, so it runs first.
+app.middleware("http")(_allowed_host_check)
 
 
 if __name__ == "__main__":

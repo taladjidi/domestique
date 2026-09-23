@@ -1814,34 +1814,42 @@ def get_ride(ride_id: str) -> Optional[dict]:
 def compute_local_ctl(
     days: int = 90,
     tau: int = 42,
+    rides: list[dict] | None = None,
+    today=None,
 ) -> float | None:
-    """F4 (v4.1.0) — compute CTL locally from the saved-ride archive.
+    """F4 (v4.1.0) — compute CTL locally from the rider's rides.
 
-    EWMA over FIT-imported ride TSS values (``ride_<iso>.json`` summaries)
-    with the Coggan τ=42-day time constant. Falls back gracefully when the
-    archive is empty or no ride has a TSS field:
+    EWMA over daily ride TSS with the Coggan τ=42-day time constant:
 
         ctl_new = ctl_prev + (tss_today - ctl_prev) / τ
 
-    Used as a local replacement for the hardcoded ``current_ctl = 37.0``
-    fallback in training_planner.generate_plan when Intervals.icu is
-    offline or returns no wellness data.
+    Reads ``load_all_rides()`` -- the same rides compute_local_atl is given --
+    unless the caller passes ``rides``. It read ``list_rides()``, the legacy
+    ride_*.json summaries nothing writes any more, so a rider whose rides are
+    FIT imports had no CTL at all while their ATL came from the FITs: fitness
+    "unknown", or with one stray legacy file a CTL of 1.4 against an ATL of
+    52.9 (audit 2026-09-23, rv-facts #1). Both shapes are read, as
+    compute_local_atl does: top-level ``tss`` or ``summary.tss``.
 
-    Returns None if no usable TSS was found so callers can keep the
-    original 37.0 constant as a last-resort safety net.
+    Returns None if no usable TSS was found so callers can keep their
+    fallback.
     """
     import datetime as _dt
-    rides = list_rides()
+    if rides is None:
+        rides = load_all_rides()
     if not rides:
         return None
-    cutoff_iso = (clock.today() - _dt.timedelta(days=days)).isoformat()
+    if today is None:
+        today = clock.today()
+    cutoff_iso = (today - _dt.timedelta(days=days)).isoformat()
     per_day: dict[str, float] = {}
     for r in rides:
         started = (r.get("started_at") or "")[:10]
         if not started or started < cutoff_iso:
             continue
-        summary = r.get("summary") or {}
-        tss = summary.get("tss") or 0
+        tss = r.get("tss")
+        if tss is None:
+            tss = (r.get("summary") or {}).get("tss") or 0
         if not tss:
             continue
         try:
@@ -1850,7 +1858,6 @@ def compute_local_ctl(
             continue
     if not per_day:
         return None
-    today = clock.today()
     ctl = 0.0
     d = _dt.date.fromisoformat(min(per_day.keys()))
     while d <= today:
@@ -1858,6 +1865,35 @@ def compute_local_ctl(
         ctl = ctl + (tss_today - ctl) / float(tau)
         d += _dt.timedelta(days=1)
     return round(ctl, 1)
+
+
+def activity_rows_between(start, end, rides: list[dict] | None = None) -> list[dict]:
+    """The rider's rides with start day in [start, end), from
+    ``load_all_rides()`` (intervals.icu records and FIT imports, deduped), in
+    the shape app._collect_week_activities reads: date, start_date_local,
+    tss, duration_min (moving time), intensity_factor, sport, id.
+
+    The collector (daily-adapt, rematch, missed detection) read the
+    activities table and list_rides(); a rider whose rides are FIT imports
+    appeared in neither, so their week was [] and every ridden session
+    looked missed (audit 2026-09-23, rv-struct #2).
+    """
+    lo, hi = str(start)[:10], str(end)[:10]
+    out = []
+    for r in load_all_rides() if rides is None else rides:
+        started = str(r.get("started_at") or "")
+        if not (lo <= started[:10] < hi):
+            continue
+        out.append({
+            "id": r.get("external_id") or r.get("ride_id"),
+            "date": started[:10],
+            "start_date_local": started[:19],
+            "sport": r.get("sport") or "",
+            "tss": r.get("tss"),
+            "duration_min": ride_moving_s(r) / 60,
+            "intensity_factor": r.get("if_pct"),
+        })
+    return out
 
 
 def recent_mean_weekly_tss(

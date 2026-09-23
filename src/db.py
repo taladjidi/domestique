@@ -370,6 +370,25 @@ def init_db():
     db.commit()
 
 
+def _manual_hrv_sql(t: str = "") -> str:
+    """SQL: this wellness row's HRV came from the rider, not intervals.icu.
+
+    The invariant it reads: an HRV intervals.icu supplied is always also in
+    the row's raw_json (what ICU sent). /api/wellness/manual-hrv and the
+    HRV4Training import write only the hrv column, so a typed value is one
+    that raw_json does not carry. sync_wellness keeps the invariant when a
+    later record for the day omits the HRV it keeps (see there).
+    ``t`` qualifies the columns ("wellness." inside an upsert).
+    """
+    hrv, raw = f"{t}hrv", f"{t}raw_json"
+    return (f"({hrv} IS NOT NULL AND ({raw} IS NULL OR NOT json_valid({raw}) "
+            f"OR json_extract({raw}, '$.hrv') IS NULL "
+            f"OR json_extract({raw}, '$.hrv') != {hrv}))")
+
+
+_MANUAL_HRV_SQL = _manual_hrv_sql()
+
+
 def _upsert_icu_metric(db, dt: str, metric: str, value) -> None:
     """Record an intervals.icu value for (date, metric) -- unless the rider
     owns that row.
@@ -428,18 +447,32 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                     # rider typed in themselves (/api/wellness/manual-hrv).
                     # COALESCE is the rule: ICU's value wins when ICU HAS one,
                     # and silence from ICU is not an answer that overwrites.
+                    # Except the HRV the rider typed (contract 2.1: what the
+                    # rider typed survives anything intervals.icu does): it
+                    # is never replaced. And an ICU HRV the COALESCE keeps
+                    # through an HRV-less record stays in raw_json, so
+                    # _manual_hrv_sql still reads it as ICU's -- otherwise a
+                    # purge parked the previous athlete's HRV as "typed"
+                    # (review of 2026-09-23).
                     """INSERT INTO wellness
                        (date, ctl, atl, hrv, rhr, sleep_secs, sleep_score, eftp, raw_json)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(date) DO UPDATE SET
                            ctl         = COALESCE(excluded.ctl, wellness.ctl),
                            atl         = COALESCE(excluded.atl, wellness.atl),
-                           hrv         = COALESCE(excluded.hrv, wellness.hrv),
+                           hrv         = CASE WHEN {manual}
+                                              THEN wellness.hrv
+                                              ELSE COALESCE(excluded.hrv, wellness.hrv) END,
                            rhr         = COALESCE(excluded.rhr, wellness.rhr),
                            sleep_secs  = COALESCE(excluded.sleep_secs, wellness.sleep_secs),
                            sleep_score = COALESCE(excluded.sleep_score, wellness.sleep_score),
                            eftp        = COALESCE(excluded.eftp, wellness.eftp),
-                           raw_json    = excluded.raw_json""",
+                           raw_json    = CASE
+                               WHEN json_extract(excluded.raw_json, '$.hrv') IS NULL
+                                    AND wellness.hrv IS NOT NULL AND NOT {manual}
+                               THEN json_set(excluded.raw_json, '$.hrv', wellness.hrv)
+                               ELSE excluded.raw_json END""".format(
+                        manual=_manual_hrv_sql("wellness.")),
                     (
                         dt,
                         w.get("ctl"),
@@ -1392,15 +1425,6 @@ _ICU_MIRROR_FIELDS = (
     ("max_hr", "max_hr_source", ()),
     ("lthr", "lthr_source", ("lthr_source_date",)),
 )
-
-
-# The wellness HRV came from the rider, not intervals.icu: raw_json (what ICU
-# sent) has no hrv, or a different one. /api/wellness/manual-hrv and the
-# HRV4Training import write only the hrv column.
-_MANUAL_HRV_SQL = (
-    "hrv IS NOT NULL AND (raw_json IS NULL OR NOT json_valid(raw_json) "
-    "OR json_extract(raw_json, '$.hrv') IS NULL "
-    "OR json_extract(raw_json, '$.hrv') != hrv)")
 
 
 def _park_rider_ride_input(profile_dir: Path, db_file: Path, is_active_db: bool) -> None:

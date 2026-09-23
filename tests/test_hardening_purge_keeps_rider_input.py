@@ -162,3 +162,41 @@ def test_through_the_disconnect_endpoint(pm, monkeypatch):
     pm.save_icu_token("fake-token", "i123")       # reconnect, same account
     _sync()
     assert _state() == EXPECTED
+
+
+# ── review findings (2026-09-23) ─────────────────────────────────────────────
+
+def _sync_wellness(records):
+    with mock.patch.object(db, "fetch_wellness", lambda days=90: [dict(r) for r in records]):
+        db.sync_wellness(90)
+
+
+def _hrv(day):
+    row = db.get_db().execute("SELECT hrv FROM wellness WHERE date=?", (day,)).fetchone()
+    return row and row[0]
+
+
+def test_an_icu_hrv_kept_by_a_later_hrv_less_record_is_still_icus(pm):
+    """intervals.icu sends HRV 55, later re-sends the day without one: the
+    sync keeps 55 (silence is not an answer) and it is still ICU's -- a purge
+    removes it, it is not parked as if the rider typed it."""
+    day = "2026-09-19"
+    _sync_wellness([{"id": day, "ctl": 50, "atl": 45, "hrv": 55, "sportInfo": []}])
+    _sync_wellness([{"id": day, "ctl": 51, "atl": 46, "sportInfo": []}])
+    assert _hrv(day) == 55
+    db.purge_profile_data(pm.active_id)
+    assert _hrv(day) is None
+
+
+def test_a_typed_hrv_over_an_icu_one_survives_sync_and_reconnect(pm):
+    """Contract 2.1: typed HRV is back on its day after a reconnect and a
+    sync -- also on a day intervals.icu has its own HRV for."""
+    day = "2026-09-14"
+    icu_day = [{"id": day, "ctl": 50, "atl": 45, "hrv": 72, "sportInfo": []}]
+    _sync_wellness(icu_day)
+    _manual_hrv(day, 80.0)
+    _sync_wellness(icu_day)
+    assert _hrv(day) == 80.0, "the next sync overwrote what the rider typed"
+    db.purge_profile_data(pm.active_id)
+    _sync_wellness(icu_day)
+    assert _hrv(day) == 80.0

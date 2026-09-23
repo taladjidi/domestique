@@ -1420,7 +1420,10 @@ class ProfileManager:
                                         prefix=f"{path.name}.", suffix=".tmp")
         tmp = Path(tmp_name)
         try:
-            os.fchmod(fd, mode or 0o644)
+            # mkstemp creates 0600; give the file the mode os.open(..., 0o644)
+            # gave it before -- umask included, or under umask 077 the rider's
+            # athlete.json became world-readable (review of 2026-09-23).
+            os.fchmod(fd, (mode or 0o644) & ~_umask())
         except (AttributeError, OSError):
             pass  # Windows has no fchmod; mkstemp's 0600 is stricter anyway
         try:
@@ -1486,6 +1489,21 @@ class ProfileManager:
 # filled for one rider is a miss for another, even in the instant between a
 # switch changing the active id and its callbacks clearing the cache.
 cache.set_scope(lambda: getattr(ProfileManager._instance, "_active_id", None))
+
+
+def _umask() -> int:
+    """The process umask, read without changing it where the OS allows
+    (os.umask can only be read by setting it, which races other threads)."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("Umask:"):
+                    return int(line.split()[1], 8)
+    except (OSError, ValueError):
+        pass
+    m = os.umask(0o022)
+    os.umask(m)
+    return m
 
 
 def _safe_profile_dir(pm: "ProfileManager", profile_id: str) -> Path:

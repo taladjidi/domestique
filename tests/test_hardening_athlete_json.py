@@ -254,3 +254,19 @@ def test_the_guard_survives_a_restart(pm):
     assert not path.exists()
     fresh.save_athlete({"ftp": 287, "weight_kg": 71.5})
     assert json.loads(path.read_text())["ftp"] == 287
+
+
+def test_a_profile_file_respects_the_umask(pm):
+    """Review finding: fchmod(0o644) ignored the umask that os.open honoured,
+    so under umask 077 athlete.json became world-readable. .env stays 0600."""
+    import os
+    import stat
+    old = os.umask(0o077)
+    try:
+        pm.save_athlete({"ftp": 250, "weight_kg": 70})
+        pm.save_env("i1", "k")
+    finally:
+        os.umask(old)
+    mode = lambda p: stat.S_IMODE(p.stat().st_mode)   # noqa: E731
+    assert mode(pm.active_dir / "athlete.json") == 0o600
+    assert mode(pm.active_dir / ".env") == 0o600

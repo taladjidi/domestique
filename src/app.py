@@ -740,6 +740,21 @@ app = FastAPI(title="Domestique", version=_VERSION, lifespan=lifespan)
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse as StarletteJSONResponse
 
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+
+
+@app.exception_handler(RequestValidationError)
+async def body_not_an_object_handler(request: StarletteRequest, exc: RequestValidationError):
+    """Contract 7.5: a `body: dict` route given a JSON list / string / null
+    (an error on the whole body, loc == ("body",)) answers 400, like the
+    `_get_json_body` routes; other validation errors keep FastAPI's 422."""
+    if any(tuple(e.get("loc") or ()) == ("body",) for e in exc.errors()):
+        return StarletteJSONResponse(status_code=400,
+                                     content={"detail": "JSON body must be an object"})
+    return await request_validation_exception_handler(request, exc)
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: StarletteRequest, exc: Exception):
     log.exception(f"Unhandled exception in {request.url.path}")
@@ -12387,11 +12402,8 @@ async def api_plan_add_race(request: Request):
     json_path = _plan_dir() / "current_plan.json"
     if not json_path.exists():
         return JSONResponse({"error": "No active plan found"}, 404)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    ev_date = str((body or {}).get("date") or "").strip()
+    body = await _get_json_body(request)
+    ev_date = str(body.get("date") or "").strip()
     if not ev_date:
         return JSONResponse({"error": "date required (YYYY-MM-DD)"}, status_code=400)
     try:

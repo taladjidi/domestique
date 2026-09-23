@@ -28,10 +28,15 @@ def _icu_verify():
 
 async def _get_json_body(request) -> dict:
     try:
-        return await request.json()
+        body = await request.json()
     except Exception as e:
         log.debug(f"JSON parse failed on {request.url.path}: {e}")
         raise HTTPException(status_code=400, detail="invalid JSON body")
+    # Contract 7.5: every caller reads it as an object; a list / string / null
+    # used to reach `.get` and answer 500.
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    return body
 
 
 def _diag_local_only(request: Request) -> bool:

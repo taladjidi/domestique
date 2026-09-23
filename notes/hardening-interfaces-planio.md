@@ -112,10 +112,10 @@ event loop today (4.2).
 | 3 | R 3924-3925, W 4049 | `api_readiness_apply_tier_down` (async) | unlocked | `_mutate` = 3926-4048. `_reply` for the 404 (3937) and the `ok: False` no-ops (3940, 3951, 3954, 3958). Hoist `tp.load_workout_library()` (3976), `db.query_activities(days=120)` (4016) and `cached("training", get_today_metrics)` (4020) above the call. |
 | 4 | R 4159-4160, W 4342 | `api_plan_auto_adjust` (async) | unlocked | `dry_run` never writes: leave its unlocked read. Real path: `_mutate` = 4166-4342, returns `working` iff `actions` else `None`; `_reply` for the 500 at 4302. Hoist library (4245), activities/training (4309-4315). A write error keeps the 500 at 4345 (catch around the call). |
 | 5 | R 9335-9336, W 9378 | `api_today_session_persist` (async) | unlocked | `_mutate` = 9337-9378; `_reply` for the 404 at 9376. |
-| 6 | W 9884 | `_advance_continuous_deload` (sync helper), reached from `_maybe_advance_continuous_deload` (9759), whose only caller is `_maybe_auto_reforecast` 11447-11455 **after** its lock is released, on a fresh unlocked read | unlocked | Delete the write at 9884 (the helper already mutates `plan` in place). Replace 11447-11455 with `tp.update_plan(json_path, _deload)` where `_deload(plan)`: return `None` unless `_plan_is_continuous(plan)` (11449); `before = plan.get("deload_advance")`; `_maybe_advance_continuous_deload(plan, json_path)`; return `plan` iff `plan.get("deload_advance") is not before`, else `None`; set `written = "deload_advanced"` as today. |
+| 6 | W 9884 | `_advance_continuous_deload` (sync helper), reached from `_maybe_advance_continuous_deload` (9759), whose only caller is `_maybe_auto_reforecast` 11447-11455 **after** its lock is released, on a fresh unlocked read | unlocked | Delete the write at 9884 (the helper already mutates `plan` in place). Replace 11447-11455 with `tp.update_plan(json_path, _deload)` where `_deload(plan)`: return `None` unless `_plan_is_continuous(plan)` (11449); `before = plan.get("deload_advance")`; `_maybe_advance_continuous_deload(plan, json_path)`; return `plan` iff `plan.get("deload_advance") is not before`, else `None`; set `written = "deload_advanced"` as today. **Tests:** 5 tests in tests/test_340_continuous_w2.py (TestDeloadAdvance::test_monotony_trip_converts_current_week, ::test_acwr_trip_converts_current_week, TestDeloadRevert::test_revert_restores_remaining_days_and_latches, and two more) call `_maybe_advance_continuous_deload` directly and read the FILE back; deleting the write alone fails them (review: 5 failed / 33 passed). Update them to call it through `tp.update_plan(path, ...)` as the new caller does. |
 | 7 | R 9906-9907, W 9928 | `api_continuous_deload_revert` (async) | unlocked | `_mutate` = 9908-9928; `_reply` for `nothing_to_revert` (9910) and `week_passed` (9916). |
 | 8 | L 10458, W 10463 | `_maybe_heal_plan_files` (sync; boot 722 and `_heal_plan_on_disk` via run_in_threadpool 10514) | L; R 10459-10460 | `stats = None`; `_heal(fresh)`: `stats = tp.heal_unmatched_sessions_dict(fresh, library, hr_bias=_hr_bias())`; return `fresh` iff `stats["healed"]`. Then, outside, the `_PLAN_HEAL_SEEN` stamp and `plan_data.clear(); plan_data.update(written)` when written. Library already loaded before (10457). |
-| 9 | R 11158-11171, W 11335 | `api_plan_generate` (async) | unlocked (reads the old plan's availability blocks, writes a new plan) | `_mutate` = 11155-11335 (from the `_existing_plan` read to the write; the old plan arrives as the argument instead of the `open`); return `plan_dict`. No `return` inside that range (11274 is a nested def). `ValueError` from `tp.generate_plan` propagates to the existing 400 at 11356-11360. Hoist `cached("training", get_today_metrics)` (11188) and the prefs read (11024). |
+| 9 | R 11158-11171, W 11335 | `api_plan_generate` (async) | unlocked (reads the old plan's availability blocks, writes a new plan) | `_mutate` = 11155-11335 (from the `_existing_plan` read to the write; the old plan arrives as the argument instead of the `open`); return `plan_dict`. No `return` inside that range (11274 is a nested def). `ValueError` from `tp.generate_plan` propagates to the existing 400 at 11356-11360. **Corrupt plan:** today generate catches `json.JSONDecodeError` on its read and builds a fresh plan -- it is the action that repairs a corrupt file. `update_plan` raises that JSONDecodeError (a ValueError) before `mutate` runs, which would turn into the 400 with the parse error. Keep the repair: `try: tp.update_plan(json_path, _mutate)` / `except json.JSONDecodeError: tp.atomic_write_plan(json_path, _mutate(None))` (the corrupt file rotates into `.bak`, nothing lost), with `_mutate` treating `None` as "no old availability". Hoist `cached("training", get_today_metrics)` (11188) and the prefs read (11024). |
 | 10 | L 11393, W 11443 | `_maybe_auto_reforecast` (sync: sync thread, 17069, 18332) | L; R 11397-11398 | `_mutate` = 11399-11443; the two `return None` (11420, 11440) become `return None` from `_mutate` (nothing written; `written` stays None). Hoist `db.query_activities(days=120)` and `cached("training", ...)` (11424-11425) above. Then site 6. |
 | 11 | R 11469-11470, W 11574 | `api_plan_reforecast` (async) | unlocked | `_mutate` = 11471-11574; hoist training (11503) and activities. |
 | 12 | R 11610-11611, W 11633 | `api_mark_unavailable` (async) | unlocked | Validate the body (11612-11627) before the call (it does not read the plan); `_mutate` = the append + write. |
@@ -149,9 +149,16 @@ After the conversion:
   `tp.update_plan(` call (sites 2-24 minus 1 -> 21 or so, after 6 folds into
   10). The reference conversion of sites 17 and 24 alone drops the count to
   20 and fails it, as expected.
+- The 4.2 test drives move-session only. The other two handlers that take
+  the lock on the event loop today (sites 2, 16, 18 are "loop!") are covered
+  only by the structural rule above (no lock call inside an `async def`) --
+  write it as a test, not just a count.
 - Remove the two `@WAVE2` strict-xfail markers in
   `tests/test_hardening_plan_store.py`; the tests are the contract:
-  `test_move_racing_auto_recalc_both_persist` (4.1) and
+  `test_move_racing_auto_recalc_both_persist` (4.1; asserts BOTH writes
+  persist -- the move, and the recalc's `recalc_date` -- so converting only
+  one of the two handlers fails it: verified, "the recalc was overwritten by
+  the move's stale copy") and
   `test_event_loop_answers_while_a_slow_writer_holds_the_plan` (4.2). With
   only sites 17 and 24 converted (Appendix A) both pass (3/3 runs); unconverted,
   they fail with "the move was overwritten by the recalc's stale copy" and
@@ -195,10 +202,12 @@ the accessor at the planner.
    (1265). Keep `_BUNDLED_WORKOUT_DIR` (1208, the setup allow-list).
    `diag` already reports `tp.WORKOUT_DIR` (19975-19977).
 4. Tests that bind `app_module.WORKOUT_DIR = ...` must bind
-   `tp.WORKOUT_DIR` instead: test_363_block_eval_production_path,
-   test_account_flow, test_calendar_push_workout, test_capacity_cap,
-   test_icu_push, test_plan_entry_continuity, and
-   test_profile_path_rebinding (whose `test_apply_profile_paths_still_rebinds`
+   `tp.WORKOUT_DIR` instead. Measured by the reviewer with steps 1-2 applied:
+   25 failures, in test_363_block_eval_production_path,
+   test_calendar_push_workout, test_icu_push and
+   test_profile_path_rebinding; test_account_flow, test_capacity_cap and
+   test_plan_entry_continuity bind it too but still pass (update them
+   anyway once the global is gone). test_profile_path_rebinding (whose `test_apply_profile_paths_still_rebinds`
    pins `WORKOUT_DIR = wp` in the source; it becomes "the accessor returns the
    planner's directory").
 5. Remove the strict-xfail marker on
@@ -210,6 +219,10 @@ the accessor at the planner.
    downloads 200, the push reports no `file_missing`. Unchanged it fails:
    `app.active_workout_dir()` = the new folder, `tp.active_workout_dir()` =
    the bundled library.
+6. Known gap, not in the contract's wording: sessions planned BEFORE the
+   directory change still name files from the old library and 404 until the
+   plan is regenerated (the self-heal only fills sessions with no file). The
+   e2e test checks files planned after the save.
 
 profile_manager.py (storage agent / Wave 2, optional): `apply_training_dirs`
 and `_apply_profile_paths` hold the same three-step resolution twice; once
@@ -235,6 +248,17 @@ ride_storage.py:1831, db.py:397 / 466, fitness_estimation.py:137 and
 profile_manager.py:240 also index or document `sportInfo[0]`.
 
 ### Appendix A — reference conversion of sites 17 and 24 (verified)
+
+**It is the minimal mechanical conversion, NOT the recommended one:** it
+leaves `cached("training", ...)`, `_planning_ctl()`, `fetch_wellness` and
+the other plan-independent fetches INSIDE `_recalc`, i.e. an intervals.icu
+fetch can run while the plan lock is held. Do the hoists the table lists
+(row 24); the tests do not notice because they stub `fetch_wellness`. Note
+also that `_planning_ctl` / `_fitness_state` / `_chronic_weekly_tss_safe`
+call `cached(...)` again inside `_apply_plan_update` and
+`_regenerate_plan_dict` (sites 10, 14, 15, 16): hoisting the outer call only
+warms the cache; if a failed fetch is not cached (contract 1.3), the retry
+happens inside the lock.
 
 Generated by a scratch script and run against this branch: the two strict
 xfail tests pass, and the move-session / auto-recalc suites

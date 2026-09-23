@@ -220,6 +220,9 @@ def test_move_racing_auto_recalc_both_persist(app_plan, monkeypatch) -> None:
     assert res["move"].status_code == 200, res["move"].text
     assert res["recalc"].json().get("action") == "recalculated"
     assert moved_on_disk(), "the move was overwritten by the recalc's stale copy"
+    # ...and the recalc was not overwritten by the move's stale copy either
+    assert _read(jp)["recalc_date"][:10] == clock.today().isoformat(), \
+        "the recalc was overwritten by the move's stale copy"
 
 
 @WAVE2

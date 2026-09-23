@@ -1990,18 +1990,24 @@ def api_profile_banister_validation(refresh: int = Query(0)):
     Calls ``oos_validation.validate_banister_oos()`` which fits τ on weeks
     1..N-4 and predicts the trailing 4-week holdout. Returns MAE per
     metric + bootstrap CIs + Hellard 2006 literature comparison. Cached
-    for 24 hours via the standard ``_cache``/``_cache_ts`` mechanism;
-    pass ``?refresh=1`` to force recompute.
+    for 24 hours per profile through ``cached()``; pass ``?refresh=1`` to
+    force recompute.
 
     PATCH G4: ``validate_banister_oos`` calls ``fit_tau_per_athlete``
     with ``persist=False`` so this endpoint never pollutes the live
     nls_fit τ values. PATCH G12: 24h lazy cache, no scheduled task.
     """
-    cache_key = "banister_oos_default"
-    now = time.time()
-    ttl = 24 * 3600  # 24h
-    if not refresh and cache_key in _cache and now - _cache_ts.get(cache_key, 0) < ttl:
-        return _cache[cache_key]
+    # Through cached() (contract 5.3): an entry is served only to the profile
+    # it was filled for, and a fill a switch's clear_cache overtook is not
+    # stored. The hand-written `_cache[...]` it replaces had neither, and its
+    # key no profile: A's validation, in flight at the switch, went to B.
+    cache_key = "banister_oos"
+    if refresh:
+        _cache.pop(cache_key, None)
+    return cached(cache_key, _banister_oos_or_empty, ttl=24 * 3600)
+
+
+def _banister_oos_or_empty() -> dict:
     try:
         import oos_validation
         result = oos_validation.validate_banister_oos("default")
@@ -2022,8 +2028,6 @@ def api_profile_banister_validation(refresh: int = Query(0)):
             "pmax_fitness_mae_pct": None,
             "tau_fits_used": {},
         }
-    _cache[cache_key] = result
-    _cache_ts[cache_key] = now
     return result
 
 

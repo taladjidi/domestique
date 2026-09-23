@@ -149,8 +149,8 @@ After the conversion:
   `tp.update_plan(` call (sites 2-24 minus 1 -> 21 or so, after 6 folds into
   10). The reference conversion of sites 17 and 24 alone drops the count to
   20 and fails it, as expected.
-- The 4.2 test drives move-session only. The other two handlers that take
-  the lock on the event loop today (sites 2, 16, 18 are "loop!") are covered
+- The 4.2 test drives move-session only. The three handlers that take
+  the lock on the event loop today (sites 2, 16, 18, "loop!") are covered
   only by the structural rule above (no lock call inside an `async def`) --
   write it as a test, not just a count.
 - Remove the two `@WAVE2` strict-xfail markers in

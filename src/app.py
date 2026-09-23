@@ -12,6 +12,7 @@ import collections
 import functools
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -966,7 +967,48 @@ SETUP_LIMITS: dict[str, list[float]] = {
     "age": [10, 100],
     "cp": [100, 500],
     "wprime_j": [5000, 40000],
+    # /api/plan/generate (contract 7.6): the plan-weeks stepper's range, and
+    # one day's hours (max_weekday / max_weekend / daily_availability).
+    "plan_weeks": [1, 52],
+    "day_hours": [0, 24],
 }
+
+
+def _generate_input_error(body: dict) -> "str | None":
+    """Contract 7.6: the generate form's numbers, checked against
+    SETUP_LIMITS before anything is built. -3 / 1e6 / NaN hours and 260 plan
+    weeks used to reach the planner (a 500, or minutes of work on a plan
+    nobody can ride). Absent fields keep their defaults; plan_weeks 0 means
+    "not set" (the goal's own horizon)."""
+    def _num(key, raw, lim):
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return f"invalid {key}"
+        lo, hi = SETUP_LIMITS[lim]
+        if not math.isfinite(v) or not (lo <= v <= hi):
+            return f"{key}={raw} out of range [{lo},{hi}]"
+        return None
+
+    checks = []
+    if body.get("hours_per_week") is not None:
+        checks.append(("hours_per_week", body["hours_per_week"], "hours_per_week"))
+    for key in ("weeks", "plan_weeks"):
+        if body.get(key) not in (None, 0, "0", ""):
+            checks.append((key, body[key], "plan_weeks"))
+    for key in ("max_weekday", "max_weekend"):
+        if body.get(key) is not None:
+            checks.append((key, body[key], "day_hours"))
+    daily = body.get("daily_availability")
+    if daily is not None and not isinstance(daily, dict):
+        return "daily_availability must be an object of {weekday: hours}"
+    for k, v in (daily or {}).items():
+        checks.append((f"daily_availability[{k}]", v, "day_hours"))
+    for key, raw, lim in checks:
+        err = _num(key, raw, lim)
+        if err:
+            return err
+    return None
 
 
 @app.get("/api/setup/limits")
@@ -11013,6 +11055,9 @@ def _replaced_weeks_before(old_plan: dict, cutoff: date) -> list[dict]:
 async def api_plan_generate(request: Request):
     """Generate a training plan from UI form data."""
     body = await _get_json_body(request)
+    _bad = _generate_input_error(body)
+    if _bad:
+        return JSONResponse({"detail": _bad}, status_code=400)
     try:
 
         # Load saved training prefs as defaults (from setup wizard)
@@ -11060,6 +11105,9 @@ async def api_plan_generate(request: Request):
                                  else clock.today())
             _days = (target_date - _anchor_for_weeks).days
             plan_weeks = max(4, -(-_days // 7))  # ceil division
+            if plan_weeks > SETUP_LIMITS["plan_weeks"][1]:
+                raise ValueError(f"the event is {plan_weeks} weeks away; a plan "
+                                 f"covers at most {SETUP_LIMITS['plan_weeks'][1]}")
 
         # Phase-split editor (v3.2.0): user week-vector from the editor. Sent
         # only when custom AND ≠ recommendation; validity-gated inside

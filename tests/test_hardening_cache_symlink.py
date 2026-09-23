@@ -70,3 +70,16 @@ def test_a_failed_cache_write_leaves_no_temp_file(tmp_path, monkeypatch):
         tp._write_library_index([], 0, 0.0)          # best-effort: swallowed
         workout_facts._write_cache_file(lib, {})     # best-effort: swallowed
     assert sorted(p.name for p in lib.iterdir()) == []
+
+
+def test_cache_files_are_readable_by_others(tmp_path, monkeypatch):
+    """mkstemp creates 0600; a cache written that way ships unreadable to
+    any other user of a packaged bundle (a 50 s re-parse on every launch)."""
+    import stat
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    monkeypatch.setattr(tp, "WORKOUT_DIR", lib)
+    tp._write_library_index([], 0, 0.0)
+    workout_facts._write_cache_file(lib, {})
+    for name in (tp._LIBRARY_INDEX_FILENAME, workout_facts.FACTS_FILENAME):
+        assert stat.S_IMODE((lib / name).stat().st_mode) == 0o644, name

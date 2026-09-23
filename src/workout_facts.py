@@ -225,6 +225,11 @@ def atomic_write_text(path: Path, text: str) -> None:
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
+        # mkstemp makes the file 0600; the caches are shared, non-secret
+        # files (and ship in the packaged builds), so give them the usual
+        # 0644 or another user of the bundle cannot read them.
+        if hasattr(os, "fchmod"):        # POSIX; Windows has no modes to fix
+            os.fchmod(fd, 0o644)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
         os.replace(tmp, path)

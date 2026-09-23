@@ -830,6 +830,7 @@ def sync_activities(days: int = 90, _snapshot=None) -> int:
             db.rollback()
             raise
         db.commit()
+        _restore_parked_race_flags(db, [str(a.get("id")) for a in data if a.get("id")])
 
     # v2.5.0 W3: mirror the athlete-level lthr / athlete_max_hr carried on
     # every ICU activity payload into the active profile — same post-batch
@@ -838,6 +839,25 @@ def sync_activities(days: int = 90, _snapshot=None) -> int:
     _refresh_hr_from_activities(snapshot)
 
     return count
+
+
+def _restore_parked_race_flags(db, ids) -> None:
+    """Put back the race flags a disconnect purge parked (contract 2.1) on
+    the rides this batch just brought back. Best effort: a failure leaves
+    them parked for the next pass, never breaks the sync."""
+    try:
+        import ride_storage
+        parked = ride_storage.stashed_rider_input(ids, ("is_race",))
+        restored = {}
+        for aid, values in parked.items():
+            cur = db.execute("UPDATE activities SET is_race = ? WHERE id = ?",
+                             (1 if values.get("is_race") else 0, aid))
+            if cur.rowcount > 0:
+                restored[aid] = values
+        db.commit()
+        ride_storage.forget_stashed_rider_input(restored)
+    except Exception as e:  # noqa: BLE001 — stays parked; retried next pass
+        log.warning("restoring parked race flags failed: %s", e)
 
 
 def run_sync(days: int = 90) -> dict:
@@ -1356,11 +1376,51 @@ _ICU_MIRROR_FIELDS = (
 )
 
 
+# The wellness HRV came from the rider, not intervals.icu: raw_json (what ICU
+# sent) has no hrv, or a different one. /api/wellness/manual-hrv and the
+# HRV4Training import write only the hrv column.
+_MANUAL_HRV_SQL = (
+    "hrv IS NOT NULL AND (raw_json IS NULL OR NOT json_valid(raw_json) "
+    "OR json_extract(raw_json, '$.hrv') IS NULL "
+    "OR json_extract(raw_json, '$.hrv') != hrv)")
+
+
+def _park_rider_ride_input(profile_dir: Path, db_file: Path, is_active_db: bool) -> None:
+    """Copy RPE / FTP-test verdict (ride records) and is_race (activities)
+    into the profile's rider_input.json, keyed by intervals.icu id."""
+    import ride_storage
+    parked: dict = {}
+    for f in sorted((profile_dir / "rides" / "icu").glob("*.json")):
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict):
+            values = {k: rec[k] for k in ride_storage.RIDER_RIDE_KEYS
+                      if rec.get(k) is not None}
+            if values:
+                parked[f.stem] = values
+    if db_file.exists():
+        conn = get_db() if is_active_db else sqlite3.connect(str(db_file), timeout=10)
+        try:
+            for (aid,) in conn.execute("SELECT id FROM activities WHERE is_race = 1"):
+                parked.setdefault(str(aid), {})["is_race"] = 1
+        except sqlite3.OperationalError:
+            pass  # no activities table / no is_race column yet
+        finally:
+            if not is_active_db:
+                conn.close()
+    ride_storage.stash_rider_input(profile_dir, parked)
+    if parked:
+        log.info("EVENT=rider_input_parked rides=%d", len(parked))
+
+
 def purge_profile_data(profile_id: str) -> dict:
     """Wipe ICU-synced data for ``profile_id`` (disconnect / different-athlete
     reconnect — contract A4).
 
-    Deletes every row in activities / wellness / sync_log, plus the
+    Deletes every row in activities / sync_log, every wellness row except
+    the rider's typed HRV (kept, stripped of intervals.icu values), plus the
     intervals.icu-sourced athlete_metrics rows (vo2max/eftp/w_prime/pmax/
     max_hr auto-logs — residual rows from the first athlete otherwise
     resurface through the mirrors). Wipes the profile's ICU-derived ARCHIVES
@@ -1369,7 +1429,10 @@ def purge_profile_data(profile_id: str) -> dict:
     ride summaries are USER data and survive. Resets the icu-sourced
     athlete.json mirrors (lthr / max_hr / wprime / pmax where
     *_source == "icu") so the profile's numbers fall back to defaults until
-    the next athlete syncs. Manual values are never touched.
+    the next athlete syncs. Manual values are never touched: the rider's
+    RPE, FTP-test verdict and race flags are parked in
+    ``<profile>/rider_input.json`` first and put back when the same ride is
+    synced again (contract 2.1).
 
     A10: holds the sync write gate for the whole wipe and bumps the sync
     epoch, so an in-flight pass that FETCHED before the purge fails its
@@ -1395,6 +1458,17 @@ def purge_profile_data(profile_id: str) -> dict:
 
         removed = {"activities": 0, "wellness": 0, "sync_log": 0,
                    "athlete_metrics_icu": 0, "archive_files": 0}
+        db_file = profile_dir / "health_tracker.db"
+        is_active_db = (
+            profile_id == getattr(pm, "active_id", None)
+            and DB_PATH is not None
+            and Path(DB_PATH) == db_file
+        )
+
+        # What the rider typed is not the mirror (contract 2.1). Park the
+        # ride keys only the rider can supply BEFORE anything is removed; a
+        # failed write raises here and nothing is deleted.
+        _park_rider_ride_input(profile_dir, db_file, is_active_db)
 
         # ICU-derived archives (post-AC2a these live inside the profile dir).
         # rides/icu/ is wholly ICU-synced (records + .last_sync_at); wellness/
@@ -1410,21 +1484,31 @@ def purge_profile_data(profile_id: str) -> dict:
                     _shutil.rmtree(str(_arch))
                 except OSError as e:
                     log.warning("purge: failed to remove %s: %s", _arch, e)
-        db_file = profile_dir / "health_tracker.db"
         if db_file.exists():
-            is_active_db = (
-                profile_id == getattr(pm, "active_id", None)
-                and DB_PATH is not None
-                and Path(DB_PATH) == db_file
-            )
             conn = get_db() if is_active_db else sqlite3.connect(str(db_file), timeout=10)
             try:
-                for table in ("activities", "wellness", "sync_log"):
+                for table in ("activities", "sync_log"):
                     try:
                         cur = conn.execute(f"DELETE FROM {table}")  # noqa: S608 — fixed names
                         removed[table] = cur.rowcount if cur.rowcount >= 0 else 0
                     except sqlite3.OperationalError:
                         pass  # table absent in a legacy/partial DB
+                # A wellness row whose HRV the rider typed (manual entry or
+                # HRV4Training import: the hrv column differs from what
+                # intervals.icu sent in raw_json) keeps that HRV and loses
+                # every intervals.icu value; every other row goes. The sync's
+                # COALESCE then keeps it unless intervals.icu has an HRV for
+                # the day -- the rule the sync already applies.
+                try:
+                    conn.execute(
+                        f"UPDATE wellness SET ctl = NULL, atl = NULL, rhr = NULL, "
+                        f"sleep_secs = NULL, sleep_score = NULL, eftp = NULL, "
+                        f"raw_json = '{{}}' WHERE {_MANUAL_HRV_SQL}")  # noqa: S608
+                    cur = conn.execute(
+                        f"DELETE FROM wellness WHERE NOT ({_MANUAL_HRV_SQL})")  # noqa: S608
+                    removed["wellness"] = cur.rowcount if cur.rowcount >= 0 else 0
+                except sqlite3.OperationalError:
+                    pass
                 try:
                     cur = conn.execute(
                         "DELETE FROM athlete_metrics WHERE source = 'intervals.icu'"

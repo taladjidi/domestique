@@ -259,6 +259,76 @@ def update_ride(ride_id, mutator) -> "dict | None":
         path, lambda cur: None if cur is None else mutator(cur))
 
 
+# ── rider input that outlives the intervals.icu mirror ──────────────────────
+# Disconnecting intervals.icu (or switching the profile to another account)
+# removes the mirror: rides/icu/ and the activities rows. What only the rider
+# could supply on those rides -- RPE, the FTP-test verdict, the race flag --
+# used to go with it and never came back (audit 2026-09-23, data #1).
+# db.purge_profile_data now parks it here, keyed by intervals.icu id, and the
+# sync puts it back when the same ride returns: persist_icu_activity for the
+# record keys, db.sync_activities for is_race.
+RIDER_INPUT_FILE = "rider_input.json"
+RIDER_RIDE_KEYS = _RIDER_INPUT_CARRY_KEYS + _FTP_TEST_REVIEW_CARRY_KEYS
+
+
+def stash_rider_input(profile_dir: Path, rides: dict) -> None:
+    """Merge ``{icu_id: {key: value}}`` into the profile's rider_input.json.
+    Raises on a failed write: the caller must not delete what was not kept."""
+    if not rides:
+        return
+
+    def _merge(cur):
+        kept = dict((cur or {}).get("rides") or {})
+        for ext, values in rides.items():
+            kept[str(ext)] = {**kept.get(str(ext), {}), **values}
+        return {**(cur or {}), "rides": kept}
+    update_json_record(Path(profile_dir) / RIDER_INPUT_FILE, _merge)
+
+
+def stashed_rider_input(ext_ids, keys) -> dict:
+    """``{icu_id: {key: value}}`` parked for these rides (read only)."""
+    try:
+        path = _active_profile_dir() / RIDER_INPUT_FILE
+    except RuntimeError:
+        return {}
+    if not path.exists():
+        return {}
+    try:
+        rides = json.loads(path.read_text(encoding="utf-8")).get("rides") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    out = {}
+    for ext in ext_ids:
+        got = {k: v for k, v in (rides.get(str(ext)) or {}).items() if k in keys}
+        if got:
+            out[str(ext)] = got
+    return out
+
+
+def forget_stashed_rider_input(restored: dict) -> None:
+    """Drop what was put back (``{icu_id: {key: value}}``), so it is never
+    applied twice. Called only after the restoring write succeeded."""
+    if not restored:
+        return
+    try:
+        path = _active_profile_dir() / RIDER_INPUT_FILE
+    except RuntimeError:
+        return
+
+    def _drop(cur):
+        if not cur:
+            return None
+        rides = dict(cur.get("rides") or {})
+        for ext, values in restored.items():
+            left = {k: v for k, v in (rides.get(ext) or {}).items() if k not in values}
+            if left:
+                rides[ext] = left
+            else:
+                rides.pop(ext, None)
+        return {**cur, "rides": rides}
+    update_json_record(path, _drop)
+
+
 def _pick_first(d: dict, *keys):
     """First of ``keys`` present on ``d`` with a truthy value, else None."""
     for k in keys:
@@ -931,13 +1001,23 @@ def persist_icu_activity(activity: dict, carry_hydrated: bool = True) -> Path | 
         # Only fill DFA keys the fresh ICU payload didn't already provide.
         for k, v in prior_dfa.items():
             norm.setdefault(k, v)
+        # Rider input parked by a disconnect purge comes back with its ride.
+        # After the prior carry: a value on the record is the newer edit.
+        for k, v in parked.get(icu_id, {}).items():
+            norm.setdefault(k, v)
         return norm
 
+    parked = stashed_rider_input([icu_id], RIDER_RIDE_KEYS)
     try:
         update_json_record(path, _carry)
     except OSError as e:
         log.warning(f"persist_icu_activity({icu_id}) failed: {e}")
         return None
+    try:
+        forget_stashed_rider_input(parked)
+    except OSError as e:
+        log.warning(f"persist_icu_activity({icu_id}): restored rider input "
+                    f"stays parked: {e}")
     # v1.3.0 PR-DETECTION final step (audit §4): compute PRs against the
     # 90-day rolling window after the envelope is on disk so compute_ride_prs
     # can read the just-written ride_id from cache. On failure keep the prior

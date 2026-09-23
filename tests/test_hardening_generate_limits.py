@@ -122,3 +122,20 @@ def test_the_week_limit_counts_the_weeks_the_plan_is_built_with(env):
         got.append(r.status_code)
     assert got[0] == 200 and got[-1] == 400, got
     assert got == sorted(got), f"accepted after a refusal: {got}"
+
+
+@pytest.mark.parametrize("over", [
+    {"rest_days": 5}, {"rest_days": ["x"]}, {"rest_days": [9]},
+    {"longest_ride_h_90d": math.nan}, {"longest_ride_h_90d": "abc"},
+    {"longest_ride_h_90d": HUGE}, {"longest_ride_h_90d": -1},
+], ids=lambda o: json.dumps(o)[:40])
+def test_other_malformed_fields_are_400_not_500(env, over):
+    """Review of the F9 fix: rest_days and longest_ride_h_90d reached the
+    planner unchecked (500s, or a string stored in the goal)."""
+    r = _post(env, _body(**over))
+    assert r.status_code == 400, (over, r.status_code, r.text[:200])
+
+
+def test_null_rest_days_is_the_default(env):
+    r = _post(env, _body(rest_days=None))
+    assert r.status_code == 200, r.text[:200]

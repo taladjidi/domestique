@@ -1031,6 +1031,12 @@ def _generate_input_error(body: dict) -> "str | None":
     for key in ("max_weekday", "max_weekend"):
         if key in body:
             checks.append((key, body[key], "day_hours", False))
+    rest = body.get("rest_days")
+    if rest is not None and (not isinstance(rest, list) or any(
+            isinstance(d, bool) or not isinstance(d, int) or not 0 <= d <= 6 for d in rest)):
+        return "rest_days must be a list of weekdays (0-6)"
+    if body.get("longest_ride_h_90d") is not None:
+        checks.append(("longest_ride_h_90d", body["longest_ride_h_90d"], "day_hours", False))
     daily = body.get("daily_availability")
     if daily is not None and not isinstance(daily, dict):
         return "daily_availability must be an object of {weekday: hours}"
@@ -11223,7 +11229,10 @@ async def api_plan_generate(request: Request):
         if event_date_str:
             target_date = date.fromisoformat(event_date_str)
 
-        rest_days = [int(d) for d in body.get("rest_days", _prefs.get("rest_days", [0]))]
+        rest_days = body.get("rest_days")          # null means absent: the prefs
+        if rest_days is None:
+            rest_days = _prefs.get("rest_days", [0])
+        rest_days = [int(d) for d in rest_days]
         all_days = list(range(7))
         available_days = [d for d in all_days if d not in rest_days]
         plan_weeks = int(body.get("weeks", body.get("plan_weeks", 0)))

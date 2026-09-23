@@ -786,14 +786,14 @@ class ProfileManager:
         if max_hr_manual is not None:
             self._set_max_hr(int(max_hr_manual), "manual")
 
-    def _commit_athlete(self, changes: dict) -> None:
+    def _commit_athlete(self, changes: dict, drop=()) -> None:
         """Write athlete.json with ``changes`` applied, and only then take
         them in memory. _write_json may refuse the write (a damaged file with
         no good copy); updating first left GET /api/settings showing an FTP
         the 400 said was not saved, and the next accepted write persisted a
-        refused FTP test (fix-forward F4)."""
+        refused FTP test (fix-forward F4). ``drop`` names keys to remove."""
         with self._write_lock:
-            new = {**self._athlete, **changes}
+            new = {k: v for k, v in {**self._athlete, **changes}.items() if k not in drop}
             self._write_json(self.active_dir / "athlete.json", new)
             self._athlete = new
 

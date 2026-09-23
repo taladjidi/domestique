@@ -298,3 +298,27 @@ def test_a_profile_file_respects_the_umask(pm):
     mode = lambda p: stat.S_IMODE(p.stat().st_mode)   # noqa: E731
     assert mode(pm.active_dir / "athlete.json") == 0o600
     assert mode(pm.active_dir / ".env") == 0o600
+
+
+def test_a_purge_racing_a_settings_save_keeps_memory_and_disk_equal(pm, monkeypatch):
+    """Review of the F4 fix: db.purge_profile_data dropped the ICU mirrors
+    from pm._athlete in place and wrote that dict, outside _commit_athlete.
+    Since F4 swaps in a new dict, a save landing between purge's read and
+    its write was reverted on disk (memory 300, disk 250)."""
+    pm.save_athlete({"ftp": 250, "weight_kg": 70})
+    pm._set_fact("wprime", 20000, "icu")                 # an intervals.icu mirror
+    orig, fired = pm._write_json, []
+
+    def racing(path, data):
+        if path.name == "athlete.json" and not fired and "wprime_j" not in data:
+            t = threading.Thread(target=lambda: pm.save_athlete({"ftp": 300}))
+            fired.append(t)
+            t.start()
+            t.join(0.5)         # unfixed: lands now; fixed: waits for the purge's lock
+        return orig(path, data)
+    monkeypatch.setattr(pm, "_write_json", racing)
+    db.purge_profile_data(pm.active_id)
+    fired[0].join(5)
+    disk = json.loads((pm.active_dir / "athlete.json").read_text())
+    assert pm._athlete.get("wprime_j") is None and disk.get("wprime_j") is None
+    assert pm._athlete.get("ftp") == disk.get("ftp") == 300, (pm._athlete.get("ftp"), disk.get("ftp"))

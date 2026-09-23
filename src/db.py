@@ -1565,27 +1565,33 @@ def purge_profile_data(profile_id: str) -> dict:
                 if not is_active_db:
                     conn.close()
 
-        # Reset icu-sourced athlete.json mirrors. Active profile: through the
-        # in-memory dict (kept coherent); other profiles: edit the file.
+        # Reset icu-sourced athlete.json mirrors. Active profile: through
+        # pm._commit_athlete, under its write lock (edited in place, a
+        # settings save landing between the read and the write was reverted
+        # on disk -- review of the F4 fix); other profiles: edit the file.
+        def _mirror_keys(athlete):
+            drop = []
+            for value_key, source_key, extras in _ICU_MIRROR_FIELDS:
+                if str(athlete.get(source_key, "") or "") == "icu":
+                    drop += [value_key, source_key, *extras]
+            return drop
+
         athlete_path = profile_dir / "athlete.json"
         if profile_id == getattr(pm, "active_id", None):
-            athlete = pm._athlete
+            with pm._write_lock:
+                drop = _mirror_keys(pm._athlete)
+                if drop:
+                    pm._commit_athlete({}, drop=drop)
         else:
             try:
                 athlete = json.loads(athlete_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, ValueError):
                 athlete = None
-        if isinstance(athlete, dict):
-            changed = False
-            for value_key, source_key, extras in _ICU_MIRROR_FIELDS:
-                if str(athlete.get(source_key, "") or "") == "icu":
-                    athlete.pop(value_key, None)
-                    athlete.pop(source_key, None)
-                    for k in extras:
-                        athlete.pop(k, None)
-                    changed = True
-            if changed:
-                pm._write_json(athlete_path, athlete)
+            if isinstance(athlete, dict):
+                drop = _mirror_keys(athlete)
+                if drop:
+                    pm._write_json(athlete_path,
+                                   {k: v for k, v in athlete.items() if k not in drop})
 
         log.info("EVENT=profile_purged profile=%s removed=%s", profile_id, removed)
         return removed

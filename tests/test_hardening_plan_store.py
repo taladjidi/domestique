@@ -251,3 +251,109 @@ def test_event_loop_answers_while_a_slow_writer_holds_the_plan(app_plan) -> None
     assert r.status_code == 200
     assert res["move"].status_code == 200
     assert elapsed < 0.5, f"/api/version took {elapsed:.2f}s behind the plan lock"
+
+
+# ── fix-forward F1: the training fetch never runs on the event loop ─────────
+
+def _training_readers():
+    race = (clock.today() + timedelta(weeks=3)).isoformat()
+    return [
+        ("/api/readiness/apply-tier-down", {}),
+        ("/api/plan/auto-adjust", {"scope": "today"}),
+        ("/api/plan/generate", {"goal": "general", "hours_per_week": 7.0,
+                                "plan_weeks": 4, "rest_days": [0]}),
+        ("/api/plan/reforecast", None),
+        ("/api/plan/save-availability", {"availability": {}}),
+        ("/api/plan/regenerate", {}),
+        ("/api/plan/add-race", {"date": race, "priority": "B"}),
+        ("/api/plan/update", None),
+    ]
+
+
+def test_no_async_handler_reads_the_training_metrics_on_the_event_loop(app_plan, monkeypatch) -> None:
+    """The eight async handlers that need CTL/TSB read
+    `cached("training", get_today_metrics)` -- an intervals.icu fetch on a
+    cold or expired cache -- on the event loop: during an outage every
+    request on the server waited for it (fix-forward F1: /api/version 12 s).
+    Each route must read it, and never from the loop's thread."""
+    import asyncio
+    import cache
+    from fastapi.testclient import TestClient
+    A, jp, *_ = app_plan
+    original = jp.read_text()
+    where = []
+
+    def metrics(*a, **k):
+        try:
+            asyncio.get_running_loop()
+            where.append("loop")
+        except RuntimeError:
+            where.append("pool")
+        return {"ctl": 50.0, "atl": 45.0, "tsb": 5.0}
+    monkeypatch.setattr(A, "get_today_metrics", metrics)
+    c = TestClient(A.app, base_url="http://127.0.0.1")
+    for route, body in _training_readers():
+        jp.write_text(original)
+        cache.clear_cache()
+        where.clear()
+        r = c.post(route) if body is None else c.post(route, json=body)
+        assert r.status_code < 500, (route, r.status_code, r.text[:200])
+        assert where, f"{route} never read the training metrics (test is vacuous)"
+        assert "loop" not in where, f"{route} fetched the training metrics on the event loop"
+
+
+def test_an_outage_neither_stalls_the_loop_nor_asks_per_request(app_plan, monkeypatch, request) -> None:
+    """The evaluator's probe (p_loop_stall): intervals.icu takes 1 s to fail,
+    the training cache holds an expired good value, three reforecasts arrive.
+    slim/6: ICU asked once, /api/version 2.1 s behind it; unfixed branch:
+    asked 6x, /api/version 12 s. Now: asked once, the loop never waits."""
+    import anyio.from_thread
+    import cache
+    import config
+    import training as tr
+    from fastapi.testclient import TestClient
+    A = app_plan[0]
+    monkeypatch.setattr(A, "get_today_metrics", tr.get_today_metrics)
+    # Not monkeypatch: config resolves ICU_* through a module __getattr__
+    # (see test_hardening_metrics_cache's fixture).
+    config.ICU_ATHLETE_ID, config.ICU_API_KEY = "i1", "k"
+    request.addfinalizer(lambda: [config.__dict__.pop(k, None)
+                                  for k in ("ICU_ATHLETE_ID", "ICU_API_KEY")])
+    state = {"up": True, "asks": 0}
+
+    def wellness(days=42):
+        state["asks"] += 1
+        if state["up"]:
+            return [{"id": clock.today().isoformat(), "ctl": 60.0, "atl": 55.0, "sportInfo": []}]
+        time.sleep(1.0)
+        raise tr.ICUNetworkError("timed out")
+    monkeypatch.setattr(tr, "fetch_wellness", wellness)
+    monkeypatch.setattr(tr, "fetch_activities", lambda days=7: [])
+    cache.clear_cache()
+    assert cache.cached("training", tr.get_today_metrics)["ctl"] == 60.0
+    cache._cache_ts["training"] -= 301
+    state.update(up=False, asks=0)
+    c = TestClient(A.app, base_url="http://127.0.0.1")
+    lat, codes, stop = [], [], threading.Event()
+    with anyio.from_thread.start_blocking_portal() as portal:
+        c.portal = portal
+        def poll():
+            while not stop.is_set():
+                t0 = time.monotonic()
+                c.get("/api/version")
+                lat.append(time.monotonic() - t0)
+                time.sleep(0.05)
+        p = threading.Thread(target=poll)
+        p.start()
+        time.sleep(0.2)
+        ws = [threading.Thread(target=lambda: codes.append(c.post("/api/plan/reforecast").status_code))
+              for _ in range(3)]
+        [w.start() for w in ws]
+        [w.join(60) for w in ws]
+        stop.set()
+        p.join(10)
+        c.portal = None
+    cache.clear_cache()
+    assert codes == [200] * 3, codes
+    assert state["asks"] == 1, f"intervals.icu asked {state['asks']}x for one outage window"
+    assert max(lat) < 0.5, f"/api/version waited {max(lat):.2f}s behind the outage"

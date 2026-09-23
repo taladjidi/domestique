@@ -4157,7 +4157,7 @@ async def api_readiness_apply_tier_down(request: Request):
         except Exception:
             activities = []
         try:
-            current_tsb = cached("training", get_today_metrics).get("tsb")
+            current_tsb = (await run_in_threadpool(cached, "training", get_today_metrics)).get("tsb")
         except Exception:
             current_tsb = None
         await run_in_threadpool(tp.update_plan, json_path, _mutate)
@@ -4227,7 +4227,7 @@ async def api_plan_auto_adjust(request: Request):
         except Exception:
             return JSONResponse({"error": "severity unavailable"}, 503)
         try:
-            sev = _cts(profile_id, today_iso) or {}
+            sev = await run_in_threadpool(_cts, profile_id, today_iso) or {}
         except Exception:
             _log.exception("auto-adjust: compute_training_severity failed")
             return JSONResponse({"error": "severity unavailable"}, 503)
@@ -4477,7 +4477,7 @@ async def api_plan_auto_adjust(request: Request):
     except Exception:
         activities = []
     try:
-        current_tsb = cached("training", get_today_metrics).get("tsb")
+        current_tsb = (await run_in_threadpool(cached, "training", get_today_metrics)).get("tsb")
     except Exception:
         current_tsb = None
     try:
@@ -11322,8 +11322,8 @@ async def api_plan_generate(request: Request):
         current_ctl = None
         recent_weekly_tss = None
         try:
-            training = cached("training", get_today_metrics)
-            current_ctl = _fitness_state()["ctl"]     # None: the planner's own fallback
+            training = await run_in_threadpool(cached, "training", get_today_metrics)
+            current_ctl = (await run_in_threadpool(_fitness_state))["ctl"]     # None: the planner's own fallback
         except Exception:
             current_ctl = None
         recent_weekly_tss = _chronic_weekly_tss_safe()
@@ -11770,8 +11770,8 @@ async def api_plan_reforecast():
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
         # whatever runs inside _mutate holds every other plan writer.
         activities = db.query_activities(days=120)   # actual training data (SQLite)
-        training = cached("training", get_today_metrics)
-        current_ctl = _planning_ctl()
+        training = await run_in_threadpool(cached, "training", get_today_metrics)
+        current_ctl = await run_in_threadpool(_planning_ctl)
         current_tsb = training.get("tsb")
         try:
             today_d = clock.today()
@@ -11979,7 +11979,7 @@ async def api_save_availability(request: Request):
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
         # whatever runs inside _mutate holds every other plan writer.
         try:
-            current_tsb = cached("training", get_today_metrics).get("tsb")
+            current_tsb = (await run_in_threadpool(cached, "training", get_today_metrics)).get("tsb")
         except Exception:
             current_tsb = None
         try:
@@ -12607,8 +12607,8 @@ async def api_plan_regenerate_dynamic(request: Request):
         # 19+ bit-of-entropy nonce per call — guaranteed different across two
         # back-to-back POSTs on any modern OS clock.
         seed_salt = time.time_ns()
-        training = cached("training", get_today_metrics)
-        current_ctl = _planning_ctl()
+        training = await run_in_threadpool(cached, "training", get_today_metrics)
+        current_ctl = await run_in_threadpool(_planning_ctl)
         activities = db.query_activities(days=120)
         await run_in_threadpool(tp.update_plan, json_path, _mutate)
         return out["r"]
@@ -12682,8 +12682,8 @@ async def api_plan_add_race(request: Request):
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
         # whatever runs inside _mutate holds every other plan writer.
         seed_salt = time.time_ns()
-        training = cached("training", get_today_metrics)
-        current_ctl = _planning_ctl()
+        training = await run_in_threadpool(cached, "training", get_today_metrics)
+        current_ctl = await run_in_threadpool(_planning_ctl)
         activities = db.query_activities(days=120)
         await run_in_threadpool(tp.update_plan, json_path, _mutate)
         return out["r"]
@@ -12744,7 +12744,7 @@ async def api_plan_update(debounce: int = Query(0)):
     try:
         # Fetched before the plan lock; the store call runs off the event loop
         # (contracts 4.1 / 4.2: this took the lock ON the loop).
-        training = cached("training", get_today_metrics)
+        training = await run_in_threadpool(cached, "training", get_today_metrics)
         activities = db.query_activities(days=120)
         await run_in_threadpool(tp.update_plan, json_path, _update)
         if "r" in out:

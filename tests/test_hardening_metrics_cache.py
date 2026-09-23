@@ -101,3 +101,32 @@ def test_a_partial_answer_is_served_but_not_held_for_the_full_ttl(icu, monkeypat
     assert got["ctl"] == 60.0 and got["recent_activities"] == []
     left = 300 - (time.time() - cache._cache_ts["training"])
     assert left <= 30.5, f"a partial answer was held for {left:.0f}s"
+
+
+def test_an_outage_asks_intervals_once_per_hold_not_once_per_read(icu, monkeypatch):
+    """Fix-forward F1: the stale-served failure recorded nothing, so every
+    read during an outage asked intervals.icu again -- three reforecasts
+    behind a 2 s-failing fetch took 12.1 s and asked 6x (slim/6: 2.2 s, 1x,
+    because it cached its `{}` for the TTL). The failure now holds the last
+    good value for a TTL window: one ask per window, like slim/6."""
+    asks = {"n": 0}
+    inner = tr.fetch_wellness
+
+    def counting(days=42):
+        asks["n"] += 1
+        return inner(days)
+    monkeypatch.setattr(tr, "fetch_wellness", counting)
+    assert _read()["ctl"] == 60.0
+    cache._cache_ts["training"] -= 301           # expired
+    icu["up"] = False
+    asks["n"] = 0
+    got = [_read().get("ctl") for _ in range(5)]
+    import threading
+    ts = [threading.Thread(target=lambda: got.append(_read().get("ctl"))) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join(10) for t in ts]
+    assert got == [60.0] * 9, got
+    assert asks["n"] == 1, f"intervals.icu asked {asks['n']}x during one outage window"
+    cache._cache_ts["training"] -= 301           # the hold ends: ask again
+    icu["up"] = True
+    assert _read()["ctl"] == 60.0 and asks["n"] == 2

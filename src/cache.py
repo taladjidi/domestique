@@ -134,6 +134,13 @@ def _fill(key, fn, ttl):
         # If API call fails (no internet, DNS error), return stale cache --
         # this profile's, never another's.
         if key in _cache and _cache_scope.get(key) == scope:
+            # ...and hold it for a TTL, so the source is asked once per
+            # window during an outage, as slim/6 did (it cached its `{}` for
+            # the TTL). Unrecorded, every read asked again: three
+            # reforecasts behind a 2 s-failing fetch asked 6x and took 12 s
+            # (fix-forward F1). A 30 s hold would ask 10x per window.
+            if _still_current(scope, generation):
+                _cache_ts[key] = now
             return _defensive_copy(_cache[key])
         # v1.6.0 — log under E_CACHE_<key>-or-GENERIC and stick the empty
         # result for only 30s so transient errors don't sit in cache for

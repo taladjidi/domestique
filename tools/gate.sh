@@ -9,6 +9,14 @@
 #    (load-dependent timeouts, or pollution from another test under xdist)
 # 3. with a baseline label: NEW = real failures absent from the baseline's
 #    real set, and passes-alone ids absent from the baseline are listed too
+#
+# A full run with no pytest summary line did not finish: the gate prints
+# "NO PYTEST SUMMARY" and exits 3 (it used to print "real: 0" and pass).
+#
+# Offline: uv honours UV_OFFLINE=1 by itself (it is the env form of
+# `uv run --offline`). Inside a network namespace set it, and keep uv's cache
+# reachable (the real HOME, or UV_CACHE_DIR): without either, uv tries PyPI,
+# fails, and the run ends before pytest starts -- caught by the check above.
 set -u
 WT=${1:?worktree}; LABEL=${2:?label}; BASE=${3:-}
 S=${GATE_OUT:-/tmp/domestique-gate}
@@ -28,6 +36,16 @@ PYT=(uv run --no-project --quiet --with pytest --with pytest-timeout --with pyte
 
 date > "$OUT.full.txt"
 timeout 3300 "${PYT[@]}" -n 5 -q --timeout=900 --tb=no -rfE tests/ >> "$OUT.full.txt" 2>&1
+# No summary line means the run never finished (uv could not build its
+# environment, the interpreter did not start, the timeout fired): there are
+# no FAILED lines to count either, and on 2026-09-23 that read "real: 0".
+SUMMARY=$(grep -E '^=* *[0-9]+ [a-z]+.* in [0-9.]+s' "$OUT.full.txt" | tail -1)
+if [ -z "$SUMMARY" ]; then
+  echo "== $LABEL: NO PYTEST SUMMARY -- the full run did not finish; this is a FAILED gate"
+  echo "-- last lines of $OUT.full.txt:"
+  tail -n 15 "$OUT.full.txt" | sed 's/^/   /'
+  exit 3
+fi
 # SUBFAILED too: a subtest failure prints `SUBFAILED(k='v', ...) tests/x.py::T::t`
 # and was invisible here, so on 2026-09-17 the gate reported "real: 0" while
 # test_b4_deload_long_ride had two failing subtests. The subtest parameters are
@@ -45,7 +63,7 @@ while read -r t; do
 done < "$OUT.unknown.txt"
 git checkout -- src/workouts/.library_index.json src/workouts/.workout_facts.json 2>/dev/null
 
-echo "== $LABEL: $(grep -E '(passed|failed).* in [0-9.]+s' "$OUT.full.txt" | tail -1)"
+echo "== $LABEL: $SUMMARY"
 echo "not-known: $(wc -l < "$OUT.unknown.txt")   real: $(wc -l < "$OUT.real.txt")   passes-alone: $(wc -l < "$OUT.alone.txt")"
 echo "-- real:";         sed 's/^/   /' "$OUT.real.txt"
 echo "-- passes-alone:"; sed 's/^/   /' "$OUT.alone.txt"

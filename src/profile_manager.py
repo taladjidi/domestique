@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 import logging
@@ -96,6 +97,14 @@ class ProfileManager:
         self._device_prefs: dict = {}
         self._registry: dict = {}
         self._switch_lock = threading.RLock()
+        # Serialises every profile-JSON write (snapshot + temp file + replace)
+        # and the read-modify-writes of _athlete. Re-entrant: the RMWs call
+        # _write_json while holding it.
+        self._write_lock = threading.RLock()
+        # athlete.json paths whose unparseable content was moved aside this
+        # process: until a write carries the required keys again, a partial
+        # write (a sync mirror) must not become the rider's whole file.
+        self._corrupt_moved: set[Path] = set()
         self._on_switch_callbacks: list[Callable] = []
 
     @classmethod
@@ -797,16 +806,17 @@ class ProfileManager:
                         fact.field, v, fact.lo, fact.hi, source)
             return False
 
-        current = self._athlete.get(fact.source_field)
-        if current in fact.tiers and fact.tiers[source] < fact.tiers[current]:
-            log.info("set %s: keeping %s%s from %s; refused %d from the "
-                     "lower-priority source %s", fact.field,
-                     self._athlete.get(fact.field), fact.unit, current, v, source)
-            return False
+        with self._write_lock:  # the priority check and the write are one step
+            current = self._athlete.get(fact.source_field)
+            if current in fact.tiers and fact.tiers[source] < fact.tiers[current]:
+                log.info("set %s: keeping %s%s from %s; refused %d from the "
+                         "lower-priority source %s", fact.field,
+                         self._athlete.get(fact.field), fact.unit, current, v, source)
+                return False
 
-        self._athlete[fact.field] = v
-        self._athlete[fact.source_field] = source
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
+            self._athlete[fact.field] = v
+            self._athlete[fact.source_field] = source
+            self._write_json(self.active_dir / "athlete.json", self._athlete)
         log.info("set %s=%d %s source=%s", fact.field, v, fact.unit, source)
         return True
 
@@ -981,10 +991,11 @@ class ProfileManager:
             "source": str(source or ""),
             "applied": bool(applied),
         }
-        hist = list(self._athlete.get("ftp_test_history", []))
-        hist.append(entry)
-        self._athlete["ftp_test_history"] = hist
-        self._write_json(self.active_dir / "athlete.json", self._athlete)
+        with self._write_lock:  # two concurrent tests must both be kept
+            hist = list(self._athlete.get("ftp_test_history", []))
+            hist.append(entry)
+            self._athlete["ftp_test_history"] = hist
+            self._write_json(self.active_dir / "athlete.json", self._athlete)
         log.info(
             f"record_ftp_test: method={method} ftp={ftp} "
             f"source={source!r} applied={applied}"
@@ -1293,16 +1304,64 @@ class ProfileManager:
     # callers that walked the dict do not crash.
 
     def _load_json(self, path: Path) -> dict:
-        if path.exists():
-            try:
-                return json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                pass
+        """The file's dict; {} when it is absent or empty (mid-setup).
+
+        A non-empty file that does not parse to a dict is NOT read as {}: it
+        is moved aside to ``<name>.corrupt-<timestamp>`` and logged at
+        WARNING. Reading it as {} let the next write -- the sync thread's
+        LTHR mirror, every 30 minutes -- persist its own few keys over the
+        rider's FTP, weight and test history, with no copy left (audit
+        2026-09-23, data #6).
+        """
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        except OSError as e:
+            log.warning("could not read %s: %s", path, e)
+            return {}
+        if not raw.strip():
+            return {}
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            return data
+        aside = path.with_name(
+            f"{path.name}.corrupt-{clock.now().strftime('%Y%m%dT%H%M%S%f')}")
+        try:
+            os.replace(str(path), str(aside))
+        except OSError as e:
+            log.warning("%s is corrupt and could not be moved aside (%s); "
+                        "reading it as empty", path, e)
+        else:
+            log.warning("%s is corrupt (%d bytes that are not a JSON object); "
+                        "moved aside to %s", path, len(raw), aside.name)
+        with self._write_lock:
+            self._corrupt_moved.add(Path(path))
         return {}
 
     def _write_json(self, path: Path, data: dict) -> None:
-        """Atomic JSON write (tmp + fsync + os.replace)."""
-        self._write_text_atomic(path, json.dumps(data, indent=2))
+        """Atomic JSON write (unique tmp + fsync + os.replace), serialised.
+
+        The snapshot is taken under the write lock, so writes land in the
+        order their snapshots were taken and the last file on disk holds
+        every change made before it.
+        """
+        path = Path(path)
+        with self._write_lock:
+            if path in self._corrupt_moved:
+                if path.name == "athlete.json" and not all(
+                        data.get(k) not in (None, "") for k in _REQUIRED_ATHLETE_KEYS):
+                    log.warning(
+                        "not writing %s: its previous content was corrupt and "
+                        "moved aside, and this write (keys %s) lacks %s -- it "
+                        "would become the rider's whole file", path,
+                        sorted(data), list(_REQUIRED_ATHLETE_KEYS))
+                    return
+                self._corrupt_moved.discard(path)
+            self._write_text_atomic(path, json.dumps(dict(data), indent=2))
 
     def _write_text_atomic(self, path: Path, content: str, *, mode: Optional[int] = None) -> None:
         """Atomic text write: write to .tmp, fsync, os.replace onto target.
@@ -1315,8 +1374,17 @@ class ProfileManager:
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode or 0o644)
+        # A UNIQUE temp name in the same directory. The fixed `<name>.tmp`
+        # was shared by concurrent writers: one os.replace moved the other's
+        # temp away and the second raised FileNotFoundError (audit
+        # 2026-09-23, data #6; 40-91 of 400 writes failed under two threads).
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
+                                        prefix=f"{path.name}.", suffix=".tmp")
+        tmp = Path(tmp_name)
+        try:
+            os.fchmod(fd, mode or 0o644)
+        except (AttributeError, OSError):
+            pass  # Windows has no fchmod; mkstemp's 0600 is stricter anyway
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)

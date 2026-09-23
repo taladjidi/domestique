@@ -6286,7 +6286,7 @@ async function drainPRToastQueue() {
   if (_prToastsDrained) return;
   _prToastsDrained = true;
   try {
-    const r = await fetch('/api/profile/pr-toast-queue?drain=1');
+    const r = await fetch('/api/profile/pr-toast-queue/drain', {method: 'POST'});
     if (!r.ok) return;
     const d = await r.json();
     if (!d || !Array.isArray(d.queue) || d.queue.length === 0) return;
@@ -7241,6 +7241,9 @@ async function loadHome() {
     // deload advance), and no GET writes the plan now (week-view contract P8).
     // No force=1, so the 1 h sync throttle holds; the adaptation still runs
     // once a day. When it wrote, the cards that read the plan repaint.
+    // The background intervals.icu sync (1 h throttle; forced when today has
+    // no ride yet). GETs used to start it as a side effect (contract 7.4).
+    fetch('/api/icu/lazy-sync', {method: 'POST'}).catch(() => {});
     fetch('/api/rides/sync', {method: 'POST'})
       .then(r => r.ok ? r.json() : null)
       .then(j => {

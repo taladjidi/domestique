@@ -4576,16 +4576,8 @@ def api_activities():
     # exception so the diag ring carries evidence when the homepage list is
     # mysteriously empty.
     try:
-        # v4.4.2 §B1+B2: wire lazy ICU sync here so the frontpage triggers
-        # syncs (loadHome calls /api/activities, not /api/calendar). Also
-        # force-resync if today's date isn't cached locally.
-        # v1.6.3: fire-and-forget so the request thread never blocks on the
-        # per-ride FIT-download/DFA augment loop (was the root cause of the
-        # frontpage-hangs-30s bug).
-        try:
-            _kick_lazy_icu_sync(force_if_today_missing=True)
-        except Exception as _e:
-            _log.debug(f"/api/activities: lazy ICU sync kick swallowed: {_e}")
+        # The lazy ICU sync is started by POST /api/icu/lazy-sync, which the
+        # dashboard calls on load; a GET changes nothing (contract 7.4).
         training = cached("training", get_today_metrics)
         activities = training.get("recent_activities", [])
         if activities:
@@ -10036,14 +10028,6 @@ def api_today_session():
 
 def _api_today_session_impl():
     """Internal — actual /api/today-session compute path."""
-    # v4.4.2 §B1+B2: lazy ICU sync hook so frontpage triggers it.
-    # v1.6.3: fire-and-forget background thread so the request returns
-    # immediately with cached state; sync settles in the background.
-    try:
-        _kick_lazy_icu_sync(force_if_today_missing=True)
-    except Exception as _e:
-        _log.debug(f"/api/today-session: lazy ICU sync kick swallowed: {_e}")
-
     today_str = clock.today().isoformat()
     _jp = _plan_dir() / "current_plan.json"
     _stored = _read_stored_plan()
@@ -15411,22 +15395,9 @@ def api_calendar():
     current plan. Each week aggregates planned/actual TSS + zone-time
     minutes. Each session carries a ``card_state`` field for UI dispatch.
 
-    v4.4.0: ICU-synced activities surface here too. Lazy-syncs on the first
-    /api/calendar call after boot if creds are present and last sync was
-    > 1 hour ago.
+    v4.4.0: ICU-synced activities surface here too (synced by
+    POST /api/icu/lazy-sync and /api/rides/sync, not by this read).
     """
-    # v4.4.0 — best-effort ICU sync hook (no-op when creds missing or throttled).
-    # v4.4.2 §B2: force-resync if today's date isn't represented locally and
-    # last_sync was > 30 min ago (catches "user just rode, ICU has it but
-    # cache is stale" case).
-    # v1.6.3: fire-and-forget — endpoint must not block on the per-ride FIT
-    # augment loop.  Calendar serves the existing local cache; the next
-    # /api/calendar after the sync completes will reflect new rides.
-    try:
-        _kick_lazy_icu_sync(force_if_today_missing=True)
-    except Exception as _e:
-        _log_error(error_codes.Codes.CALENDAR_ICU_SYNC, exc=_e)
-
     plan: dict = {}
     json_path = _plan_dir() / "current_plan.json"
     if json_path.exists():
@@ -18205,21 +18176,25 @@ def api_ride_prs(ride_id: str):
 
 
 @app.get("/api/profile/pr-toast-queue")
-def api_profile_pr_toast_queue(drain: int = Query(0)):
+def api_profile_pr_toast_queue():
     """v1.3.0 IMPL-PR-DETECTION (W2B-G4 fix) — read pending PR toasts.
 
-    The dashboard polls this on init to surface a single line per ride
-    that landed a major PR since the user last opened the page. Per
-    PATCH G7 the cap is one entry per ride. Pass ``?drain=1`` to clear
-    the queue after read (the dashboard does this on the first poll
-    each session so toasts don't replay forever).
+    One line per ride that landed a major PR since the rider last opened
+    the dashboard (PATCH G7: one entry per ride). Read-only: the dashboard
+    takes and clears the queue with POST .../drain (contract 7.4 -- the old
+    ``?drain=1`` made this GET consume the toasts).
     """
     queue = _read_pr_toast_queue()
-    if drain:
-        try:
-            _write_pr_toast_queue([])
-        except Exception as e:
-            _log.debug(f"pr-toast-queue drain failed: {e}")
+    return {"queue": queue, "count": len(queue)}
+
+
+@app.post("/api/profile/pr-toast-queue/drain")
+def api_profile_pr_toast_queue_drain():
+    """Return the pending PR toasts and clear the queue (the dashboard's
+    first read each session, so toasts don't replay forever)."""
+    queue = _read_pr_toast_queue()
+    if queue:
+        _write_pr_toast_queue([])
     return {"queue": queue, "count": len(queue)}
 
 
@@ -18281,6 +18256,15 @@ def _kick_lazy_icu_sync(force_if_today_missing: bool = False) -> bool:
         daemon=True,
     ).start()
     return True
+
+
+@app.post("/api/icu/lazy-sync")
+def api_icu_lazy_sync():
+    """Start the best-effort background intervals.icu sync (throttled, and a
+    no-op without credentials). The dashboard calls it on load; before
+    contract 7.4 GET /api/activities, /api/today-session and /api/calendar
+    each started it as a side effect."""
+    return {"started": _kick_lazy_icu_sync(force_if_today_missing=True)}
 
 
 def _maybe_lazy_icu_sync(force_if_today_missing: bool = False) -> None:

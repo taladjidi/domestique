@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -184,8 +185,10 @@ class TestIcuActivitySync(_IcuSyncBase):
                         break
             self.assertTrue(found_actual, "ICU ride did not surface in /api/calendar")
 
-    def test_lazy_sync_fires_on_first_calendar_call(self):
-        """Wave-2 §1: lazy sync hook fires once, then throttled.
+    def test_lazy_sync_fires_on_the_explicit_post_not_the_calendar_read(self):
+        """Wave-2 §1: lazy sync hook fires once, then throttled. Since
+        contract 7.4 the dashboard starts it with POST /api/icu/lazy-sync;
+        GET /api/calendar no longer does.
 
         We can't directly assert the throttle (it writes to disk and reads
         elapsed time), but we CAN observe that fetch_recent_activities is
@@ -204,6 +207,14 @@ class TestIcuActivitySync(_IcuSyncBase):
             return_value=[],
         ) as mock_fetch:
             self.client.get("/api/calendar")
+            for t in threading.enumerate():
+                if t.name == "domestique.icu_sync":
+                    t.join(10)
+            self.assertEqual(mock_fetch.call_count, 0)
+            self.client.post("/api/icu/lazy-sync")
+            for t in threading.enumerate():
+                if t.name == "domestique.icu_sync":
+                    t.join(10)
             self.assertGreaterEqual(mock_fetch.call_count, 1)
 
 

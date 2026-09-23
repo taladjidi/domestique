@@ -1,9 +1,10 @@
-"""v4.4.2 §B1+B2 — lazy ICU sync wired into more endpoints.
+"""v4.4.2 §B1+B2 — the lazy ICU sync, and when it fires.
 
-Verifies that the lazy ICU sync hook fires from /api/activities,
-/api/today-session, and /api/calendar (not just /api/calendar as in
-v4.4.0/v4.4.1), and that force-resync triggers when today's date isn't
-represented locally.
+Until contract 7.4 (2026-09-23) GET /api/activities, /api/today-session and
+/api/calendar each started it as a side effect. No GET mutates state now:
+the dashboard starts it with POST /api/icu/lazy-sync on load. These tests
+assert both halves, and that the force-resync still triggers when today's
+date isn't represented locally.
 """
 from __future__ import annotations
 
@@ -43,6 +44,13 @@ def _icu_activity(icu_id: str = "12345", when: str = None, duration_s: int = 360
         "icu_power_hr_zone_times": [600, 1500, 800, 400, 200, 100, 0],
         "icu_intervals": [],
     }
+
+
+def _join_sync():
+    import threading
+    for t in threading.enumerate():
+        if t.name == "domestique.icu_sync":
+            t.join(10)
 
 
 class _LazySyncBase(unittest.TestCase):
@@ -86,8 +94,9 @@ class _LazySyncBase(unittest.TestCase):
 
 
 class TestLazyIcuSyncOnActivities(_LazySyncBase):
-    def test_api_activities_triggers_sync_when_last_sync_stale(self):
-        """§B1: /api/activities triggers a sync when last_sync_at > 1h ago."""
+    def test_get_activities_does_not_sync_the_post_does(self):
+        """Contract 7.4: GET /api/activities starts nothing; POST /api/icu/lazy-sync
+        syncs when last_sync_at > 1h ago."""
         last = self._base / "rides" / "icu" / ".last_sync_at"
         last.parent.mkdir(parents=True, exist_ok=True)
         last.write_text(str(time.time() - 7200))  # 2h ago
@@ -98,12 +107,17 @@ class TestLazyIcuSyncOnActivities(_LazySyncBase):
             training_module, "fetch_recent_activities", return_value=[]
         ) as mock_fetch:
             self.client.get("/api/activities")
+            _join_sync()
+            self.assertEqual(mock_fetch.call_count, 0)
+            self.client.post("/api/icu/lazy-sync")
+            _join_sync()
             self.assertGreaterEqual(mock_fetch.call_count, 1)
 
 
 class TestLazyIcuSyncOnTodaySession(_LazySyncBase):
-    def test_api_today_session_triggers_sync_when_last_sync_stale(self):
-        """§B1: /api/today-session triggers a sync when last_sync_at > 1h ago."""
+    def test_get_today_session_does_not_sync_the_post_does(self):
+        """Contract 7.4: GET /api/today-session starts nothing; POST /api/icu/lazy-sync
+        syncs when last_sync_at > 1h ago."""
         last = self._base / "rides" / "icu" / ".last_sync_at"
         last.parent.mkdir(parents=True, exist_ok=True)
         last.write_text(str(time.time() - 7200))
@@ -113,14 +127,18 @@ class TestLazyIcuSyncOnTodaySession(_LazySyncBase):
         ), patch.object(
             training_module, "fetch_recent_activities", return_value=[]
         ) as mock_fetch:
-            # Don't care about response payload — just that sync is invoked.
             self.client.get("/api/today-session")
+            _join_sync()
+            self.assertEqual(mock_fetch.call_count, 0)
+            self.client.post("/api/icu/lazy-sync")
+            _join_sync()
             self.assertGreaterEqual(mock_fetch.call_count, 1)
 
 
-class TestLazyIcuSyncOnCalendarUnchanged(_LazySyncBase):
-    def test_api_calendar_still_triggers_sync_existing_behavior(self):
-        """§B1: /api/calendar continues to trigger lazy sync (v4.4.0 behavior preserved)."""
+class TestLazyIcuSyncOnCalendar(_LazySyncBase):
+    def test_get_calendar_does_not_sync_the_post_does(self):
+        """Contract 7.4: GET /api/calendar starts nothing; POST /api/icu/lazy-sync
+        syncs when last_sync_at > 1h ago."""
         last = self._base / "rides" / "icu" / ".last_sync_at"
         last.parent.mkdir(parents=True, exist_ok=True)
         last.write_text(str(time.time() - 7200))
@@ -131,6 +149,10 @@ class TestLazyIcuSyncOnCalendarUnchanged(_LazySyncBase):
             training_module, "fetch_recent_activities", return_value=[]
         ) as mock_fetch:
             self.client.get("/api/calendar")
+            _join_sync()
+            self.assertEqual(mock_fetch.call_count, 0)
+            self.client.post("/api/icu/lazy-sync")
+            _join_sync()
             self.assertGreaterEqual(mock_fetch.call_count, 1)
 
 
@@ -154,7 +176,8 @@ class TestForceResyncWhenTodayMissing(_LazySyncBase):
             training_module, "fetch_recent_activities",
             return_value=[_icu_activity("force1")],
         ) as mock_fetch:
-            self.client.get("/api/calendar")
+            self.client.post("/api/icu/lazy-sync")
+            _join_sync()
             # Must have called the underlying ICU fetch — proves force-path
             # ran even though we're inside the 1h throttle window.
             self.assertGreaterEqual(mock_fetch.call_count, 1)

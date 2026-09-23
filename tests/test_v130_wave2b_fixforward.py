@@ -119,8 +119,9 @@ class W2BG4ToastQueueEndpoint(unittest.TestCase):
         repo = Path(__file__).resolve().parent.parent
         html = (repo / "src" / "templates" / "dashboard.html").read_text(
             encoding="utf-8")
-        # The toast-queue path must appear in a fetch call.
-        self.assertIn("/api/profile/pr-toast-queue?drain=1", html)
+        # The toast-queue drain must appear in a fetch call -- a POST since
+        # contract 7.4 (a GET must not consume the toasts).
+        self.assertIn("/api/profile/pr-toast-queue/drain", html)
         # And the drain function must be defined.
         self.assertIn("drainPRToastQueue", html)
 

@@ -130,3 +130,34 @@ def test_an_outage_asks_intervals_once_per_hold_not_once_per_read(icu, monkeypat
     cache._cache_ts["training"] -= 301           # the hold ends: ask again
     icu["up"] = True
     assert _read()["ctl"] == 60.0 and asks["n"] == 2
+
+
+def test_after_a_cold_outage_recovery_shows_within_30_s(icu, monkeypatch):
+    """Review of the F1 fix: the stale-value hold also caught the `{}` a
+    cold failure stores, so a second failure re-held it for 300 s and the
+    dashboard stayed blank for five minutes after intervals.icu came back.
+    A failure placeholder, and a Partial, keep the 30 s hold."""
+    now = {"t": 1_000_000.0}
+    monkeypatch.setattr(cache.time, "time", lambda: now["t"])
+    icu["up"] = False
+    assert not _read()                    # t=0: cold, down
+    now["t"] += 31
+    assert not _read()                    # t=31: still down, asked again
+    now["t"] += 31
+    icu["up"] = True
+    assert _read().get("ctl") == 60.0, "recovery hidden behind a re-held failure"
+
+
+def test_a_stale_partial_is_re_held_for_30_s_not_the_ttl(icu, monkeypatch):
+    now = {"t": 1_000_000.0}
+    monkeypatch.setattr(cache.time, "time", lambda: now["t"])
+
+    def activities_down(days=7):
+        raise tr.ICUNetworkError("blip")
+    monkeypatch.setattr(tr, "fetch_activities", activities_down)
+    assert _read()["ctl"] == 60.0         # a Partial
+    now["t"] += 31
+    icu["up"] = False
+    assert _read()["ctl"] == 60.0         # served stale
+    left = 300 - (now["t"] - cache._cache_ts["training"])
+    assert left <= 30.5, f"a stale Partial was re-held for {left:.0f}s"

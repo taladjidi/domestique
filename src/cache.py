@@ -139,8 +139,11 @@ def _fill(key, fn, ttl):
             # the TTL). Unrecorded, every read asked again: three
             # reforecasts behind a 2 s-failing fetch asked 6x and took 12 s
             # (fix-forward F1). A 30 s hold would ask 10x per window.
+            # Not a failure placeholder or a Partial: those keep their 30 s
+            # hold, or the rider sees intervals.icu's recovery 5 min late.
             if _still_current(scope, generation):
-                _cache_ts[key] = now
+                short = isinstance(_cache[key], (Unavailable, Partial)) and ttl > 30
+                _cache_ts[key] = now - (ttl - 30) if short else now
             return _defensive_copy(_cache[key])
         # v1.6.0 — log under E_CACHE_<key>-or-GENERIC and stick the empty
         # result for only 30s so transient errors don't sit in cache for
@@ -154,7 +157,7 @@ def _fill(key, fn, ttl):
         }.get(key, error_codes.Codes.CACHE_GENERIC)
         _log_error(cache_code, exc=e, cache_key=key)
         if _still_current(scope, generation):
-            _cache[key] = {}
+            _cache[key] = Unavailable()     # served as {}; marks the failure
             _cache_scope[key] = scope
             if ttl > 30:
                 _cache_ts[key] = now - (ttl - 30)

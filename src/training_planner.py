@@ -387,7 +387,9 @@ def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None
     Called after a full XML parse so the index self-heals when missing/stale.
     Best-effort: a read-only workouts dir (e.g. inside the notarized app
     bundle) just means the next cold call re-parses — never fatal. Written via
-    a tmp file + atomic rename so a concurrent reader never sees a half file.
+    workout_facts.atomic_write_text (a fresh same-dir temp file + os.replace)
+    so a concurrent reader never sees a half file and a symlink planted in a
+    shared workout dir is never followed (contract 3.4).
     """
     index_path = WORKOUT_DIR / _LIBRARY_INDEX_FILENAME
     payload = {
@@ -399,10 +401,7 @@ def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None
         "rows": rows,
     }
     try:
-        tmp_path = index_path.with_suffix(".json.tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        tmp_path.replace(index_path)
+        workout_facts.atomic_write_text(index_path, json.dumps(payload))
     except OSError as e:
         log.debug("library_index write skipped (%s)", e)
 

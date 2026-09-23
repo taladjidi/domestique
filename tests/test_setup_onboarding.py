@@ -6,6 +6,8 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import app as app_module  # noqa: E402
@@ -187,17 +189,28 @@ def test_pick_folder_webview_cancel_is_empty_not_tkinter(monkeypatch):
     assert hits == []                               # cancel must NOT re-prompt
 
 
-def test_pick_folder_falls_back_to_tkinter_without_window(monkeypatch):
-    wv = _fake_webview(("/ignored",), windows=False)  # dev/browser run
+@pytest.mark.parametrize("webview_present", [True, False])
+def test_pick_folder_without_a_window_opens_no_dialog(monkeypatch, webview_present):
+    """Contract 7.3: with no webview window (the headless server behind
+    nginx, a dev run) the request used to open a Tk dialog on the server's
+    desktop and hold a worker thread 60 s; ~40 requests froze the app
+    (audit 2026-09-23, rv-http #4). It answers at once, empty, with a reason."""
+    import time
+    wv = _fake_webview(("/ignored",), windows=False)
     hits = []
     tk, fd = _fake_tkinter("/Users/t/GPX", hits)
-    monkeypatch.setitem(sys.modules, "webview", wv)
+    fd.askdirectory = lambda **kw: (hits.append(kw), time.sleep(5))[1]
+    monkeypatch.setitem(sys.modules, "webview", wv if webview_present else None)
     monkeypatch.setitem(sys.modules, "tkinter", tk)
     monkeypatch.setitem(sys.modules, "tkinter.filedialog", fd)
+    t0 = time.monotonic()
     r = client.get("/api/setup/pick-folder")
-    assert r.json() == {"path": "/Users/t/GPX"}
+    assert time.monotonic() - t0 < 1.0
+    body = r.json()
+    assert body["path"] == ""
+    assert body.get("reason")
     assert wv.calls == []
-    assert len(hits) == 1
+    assert hits == []
 
 
 def test_setup_page_render_smoke():

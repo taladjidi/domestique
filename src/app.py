@@ -1132,8 +1132,7 @@ def _pick_folder_webview():
     ``create_file_dialog`` bridge launcher.JsApi uses for saves).
 
     Returns the picked path, ``""`` when the user cancels, or ``None`` when
-    no webview window exists (bare-server/dev run) so the caller falls back
-    to tkinter.
+    no webview window exists (bare-server/dev run).
     """
     try:
         import webview
@@ -1149,37 +1148,19 @@ def _pick_folder_webview():
 
 @app.get("/api/setup/pick-folder")
 def setup_pick_folder():
-    """Open a native OS folder picker dialog and return the selected path.
+    """Open the app window's native folder picker and return the selected path.
 
-    Prefers the pywebview dialog (native, correctly parented); tkinter is the
-    fallback for runs without a webview window — the bundle keeps tkinter for
-    exactly this (see domestique.spec excludes comment).
+    Only the pywebview dialog (native, parented to the app window). Without
+    a window -- the headless server behind nginx, a dev run in a browser --
+    there is nobody at the server's desktop to answer a dialog: the old
+    tkinter fallback opened one there and held a worker thread 60 s, and
+    ~40 requests froze the app (contract 7.3). The rider types the path.
     """
     native = _pick_folder_webview()
     if native is not None:
         return {"path": native}
-    import threading
-
-    result = {"path": ""}
-
-    def _pick():
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            folder = filedialog.askdirectory(title="Select Folder")
-            root.destroy()
-            result["path"] = folder or ""
-        except Exception:
-            result["path"] = ""
-
-    # Run in thread to avoid blocking (tkinter needs main thread on some OS)
-    t = threading.Thread(target=_pick)
-    t.start()
-    t.join(timeout=60)
-    return {"path": result["path"]}
+    return {"path": "", "reason": "No folder picker in a browser session: "
+                                  "type the folder's full path instead."}
 
 
 # Guards against concurrent wizard submissions clobbering each other.

@@ -698,6 +698,9 @@ async function pickFolder(btn, inputId) {
       input.style.borderColor = 'var(--green)';
       _markTouched(inputId, false);
       persistState();
+    } else if (data.reason) {
+      input.placeholder = data.reason;
+      input.focus();
     }
   } catch(e) {}
   btn.innerHTML = '&#128193; Browse';

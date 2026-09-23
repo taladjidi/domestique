@@ -89,3 +89,15 @@ def test_control_no_credentials_is_an_answer_not_a_failure(monkeypatch):
                         lambda: (_ for _ in ()).throw(tr.ICUCredentialsMissing("x")))
     m = tr.get_today_metrics()
     assert m == {} and not isinstance(m, cache.Unavailable)
+
+
+def test_a_partial_answer_is_served_but_not_held_for_the_full_ttl(icu, monkeypatch):
+    """Review finding: wellness answered but the activities fetch failed ->
+    `recent_activities: []` was cached for the full 300 s."""
+    def activities_down(days=7):
+        raise tr.ICUNetworkError("blip")
+    monkeypatch.setattr(tr, "fetch_activities", activities_down)
+    got = _read()
+    assert got["ctl"] == 60.0 and got["recent_activities"] == []
+    left = 300 - (time.time() - cache._cache_ts["training"])
+    assert left <= 30.5, f"a partial answer was held for {left:.0f}s"

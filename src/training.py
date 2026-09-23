@@ -606,7 +606,7 @@ def _outcome_of(exc: Exception) -> Fetched:
     status = getattr(exc, "status", None) if isinstance(exc, ICUServerError) else None
     if status in (404, 410):
         return Fetched("not_found")
-    if status is not None and 400 <= status < 500 and status != 429:
+    if status is not None and 400 <= status < 500 and status not in (408, 429):
         return Fetched("no_data")
     return Fetched("failed")
 
@@ -820,11 +820,13 @@ def get_today_metrics() -> dict:
     mono, strain = compute_monotony_strain(wellness)
 
     # recent activities (last 7 days)
+    partial = False
     try:
         activities = fetch_activities(days=7)
     except (ICUAuthError, ICURateLimitError, ICUServerError, ICUNetworkError) as e:
         _log.warning("get_today_metrics: activities fetch failed (%s)", e)
         activities = []
+        partial = True     # served, but the cache must not hold it 5 minutes
     # v3.11.6 (issue #11) — an activity intervals.icu will not re-share (it
     # reached ICU via Strava) is a stub with no name, type or duration. The
     # ride store has refused those since v3.8.1; this list feeds the homepage
@@ -901,7 +903,8 @@ def get_today_metrics() -> dict:
     # contract preserved).
     effective_taus = _effective_taus_from_db()
 
-    return {
+    from cache import Partial
+    return (Partial if partial else dict)({
         "date": today_rec["id"],
         "ctl": round(ctl, 1) if ctl is not None else None,
         "atl": round(atl, 1) if atl is not None else None,
@@ -915,7 +918,7 @@ def get_today_metrics() -> dict:
         # (v1.0.6) and the planner's CTL/ATL EWMA path. Always present —
         # consumers can read these without an availability check.
         "effective_taus": effective_taus,
-    }
+    })
 
 
 def _effective_taus_from_db() -> dict:

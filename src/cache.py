@@ -86,6 +86,13 @@ class Unavailable(dict):
     """
 
 
+class Partial(dict):
+    """An answer with a piece missing (the source half-failed): served as it
+    is, but held only 30 s instead of the full TTL, so the missing piece is
+    asked for again soon (training.get_today_metrics when the activities
+    fetch failed; review of 2026-09-23)."""
+
+
 class _FillFailed(Exception):
     pass
 
@@ -149,7 +156,8 @@ def _fill(key, fn, ttl):
         return {}
     if _still_current(scope, generation):
         _cache[key] = result
-        _cache_ts[key] = now
+        _cache_ts[key] = (now - (ttl - 30) if isinstance(result, Partial) and ttl > 30
+                          else now)
         _cache_scope[key] = scope
     # else: a clear_cache() or a profile switch landed while fn() ran, so the
     # result describes what was true before it. The caller that asked still

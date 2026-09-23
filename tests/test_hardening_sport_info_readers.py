@@ -95,3 +95,27 @@ def test_the_guard_in_front_of_auto_apply_reads_the_cycling_eftp(monkeypatch):
     monkeypatch.setattr(tp, "check_and_auto_apply_eftp", lambda series: None)
     app_module._guarded_check_and_auto_apply_eftp(_days(3))
     assert seen == [250]
+
+
+# ── fix-forward F5 ───────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("info,want", [
+    # a Ride entry without eFTP beside a VirtualRide that has it
+    ([{"type": "Ride", "wPrime": 20000}, {"type": "VirtualRide", "eftp": 262}], 262),
+    # gravel and MTB are cycling too
+    ([{"type": "Run", "eftp": 330}, {"type": "GravelRide", "eftp": 241}], 241),
+    ([{"type": "Run", "eftp": 330}, {"type": "MountainBikeRide", "eftp": 238}], 238),
+    # control: two cycling entries with a value -> the first listed
+    ([{"type": "Ride", "eftp": 250}, {"type": "VirtualRide", "eftp": 262}], 250),
+    # control: no cycling entry at all
+    ([{"type": "Run", "eftp": 330}, {"type": "Swim"}], None),
+])
+def test_the_cycling_entry_is_any_ride_type_and_the_one_with_the_value(info, want):
+    """Fix-forward F5: only Ride / VirtualRide counted, and the first of them
+    won even when it carried no eFTP -- a Ride without eFTP hid the
+    VirtualRide eFTP, and a gravel-only rider had none."""
+    import training
+    ci = training.cycling_sport_info({"sportInfo": info})
+    assert ci.get("eftp") == want, ci
+    if len(info) == 2 and info[0].get("wPrime"):
+        assert ci.get("wPrime") == 20000      # each value from the entry carrying it

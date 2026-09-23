@@ -353,7 +353,10 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
 
 # ── wellness (CTL / ATL / TSB / HRV / RHR / sleep) ──────────────────────────
 
-CYCLING_SPORT_TYPES = ("Ride", "VirtualRide")
+# The *Ride types intervals.icu uses (app._CYCLING_SPORTS' taxonomy) whose
+# power is the rider's own: e-bikes (assisted) and handcycles (arms) are not
+# a cycling FTP.
+CYCLING_SPORT_TYPES = ("Ride", "VirtualRide", "GravelRide", "MountainBikeRide")
 
 
 def cycling_sport_info(wellness_record) -> dict:
@@ -364,14 +367,21 @@ def cycling_sport_info(wellness_record) -> dict:
     took entry [0], so for a rider whose first entry is Run a run eFTP (330)
     was stored and shown as the cycling one: a +32% "update your FTP" banner
     (audit 2026-09-23, rv-facts #4). The one helper every reader uses: the
-    first Ride / VirtualRide entry. A record whose entries carry no ``type``
-    at all (older payloads and fixtures) is read as before, entry [0].
+    cycling entries (CYCLING_SPORT_TYPES), each value taken from the first
+    of them that carries it -- a Ride entry without eFTP must not hide the
+    VirtualRide eFTP (fix-forward F5). A record whose entries carry no
+    ``type`` at all (older payloads and fixtures) is read as before, entry [0].
     """
     info = wellness_record.get("sportInfo") if isinstance(wellness_record, dict) else None
     entries = [e for e in info if isinstance(e, dict)] if isinstance(info, list) else []
+    out: dict = {}
     for e in entries:
         if e.get("type") in CYCLING_SPORT_TYPES:
-            return e
+            for k, v in e.items():
+                if out.get(k) is None:
+                    out[k] = v
+    if out:
+        return out
     if entries and not any("type" in e for e in entries):
         return entries[0]
     return {}

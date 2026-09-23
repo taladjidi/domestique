@@ -210,3 +210,47 @@ def test_an_empty_file_is_mid_setup_not_corruption(pm):
     path.write_text("")
     pm._load_active_profile()
     assert not list(path.parent.glob("athlete.json.corrupt-*"))
+
+
+# ── review findings (2026-09-23) ─────────────────────────────────────────────
+
+def test_a_corrupt_file_is_restored_from_the_last_good_copy(pm):
+    """With the last good athlete.json kept beside it, a torn file costs the
+    rider nothing: the load restores FTP, weight and test history."""
+    path, torn = _torn(pm)
+    pm._load_active_profile()
+    assert pm.ftp == 287 and pm.weight_kg == 71.5
+    assert len(pm.ftp_test_history) == 3
+    assert next(path.parent.glob("athlete.json.corrupt-*")).read_text() == torn
+
+
+def _torn_without_backup(pm):
+    path, torn = _torn(pm)
+    for b in path.parent.glob("athlete.json.bak"):
+        b.unlink()
+    pm._load_active_profile()
+    return path
+
+
+def test_with_no_good_copy_a_partial_edit_is_refused_loudly(pm):
+    """Refused, not silently dropped: the review found save_athlete({"ftp":
+    260}) wrote nothing and update_ftp(265) returned True."""
+    path = _torn_without_backup(pm)
+    with pytest.raises(ValueError):
+        pm.save_athlete({"ftp": 260})
+    with pytest.raises(ValueError):
+        pm.update_ftp(265)
+    assert not path.exists()
+
+
+def test_the_guard_survives_a_restart(pm):
+    """After a restart the torn file is absent (moved aside), not corrupt; the
+    aside copy is what says a partial write must not become the file."""
+    path = _torn_without_backup(pm)
+    ProfileManager._instance = None
+    fresh = ProfileManager.get()
+    with pytest.raises(ValueError):
+        fresh.save_athlete({"lthr": 170, "lthr_source": "icu"})
+    assert not path.exists()
+    fresh.save_athlete({"ftp": 287, "weight_kg": 71.5})
+    assert json.loads(path.read_text())["ftp"] == 287

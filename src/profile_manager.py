@@ -1313,42 +1313,75 @@ class ProfileManager:
         LTHR mirror, every 30 minutes -- persist its own few keys over the
         rider's FTP, weight and test history, with no copy left (audit
         2026-09-23, data #6).
+
+        athlete.json keeps its last good content in ``athlete.json.bak``
+        (written with every save): a corrupt or missing athlete.json is
+        restored from it. With no good copy, athlete.json is marked so that
+        a write lacking ftp and weight_kg is refused -- also after a restart,
+        when the moved-aside copy is what remains of it.
         """
+        path = Path(path)
+        data, corrupt = self._read_json_file(path)
+        if corrupt:
+            aside = path.with_name(
+                f"{path.name}.corrupt-{clock.now().strftime('%Y%m%dT%H%M%S%f')}")
+            try:
+                os.replace(str(path), str(aside))
+            except OSError as e:
+                log.warning("%s is corrupt and could not be moved aside (%s); "
+                            "reading it as empty", path, e)
+            else:
+                log.warning("%s is corrupt (not a JSON object); moved aside to "
+                            "%s", path, aside.name)
+        if data is not None:
+            return data
+        if path.name != "athlete.json":
+            return {}
+        backup, _ = self._read_json_file(self._backup_path(path))
+        if backup and (corrupt or not path.exists()):
+            log.warning("%s restored from its last good copy %s", path,
+                        self._backup_path(path).name)
+            return backup
+        if corrupt or any(path.parent.glob(f"{path.name}.corrupt-*")):
+            with self._write_lock:
+                self._corrupt_moved.add(path)
+        return {}
+
+    @staticmethod
+    def _read_json_file(path: Path) -> "tuple[dict | None, bool]":
+        """(dict, False) when it parses to one; (None, False) when absent,
+        unreadable or empty; (None, True) when it holds something else."""
         try:
             raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return {}
+            return None, False
         except OSError as e:
             log.warning("could not read %s: %s", path, e)
-            return {}
+            return None, False
         if not raw.strip():
-            return {}
+            return None, False
         try:
             data = json.loads(raw)
         except ValueError:
-            data = None
-        if isinstance(data, dict):
-            return data
-        aside = path.with_name(
-            f"{path.name}.corrupt-{clock.now().strftime('%Y%m%dT%H%M%S%f')}")
-        try:
-            os.replace(str(path), str(aside))
-        except OSError as e:
-            log.warning("%s is corrupt and could not be moved aside (%s); "
-                        "reading it as empty", path, e)
-        else:
-            log.warning("%s is corrupt (%d bytes that are not a JSON object); "
-                        "moved aside to %s", path, len(raw), aside.name)
-        with self._write_lock:
-            self._corrupt_moved.add(Path(path))
-        return {}
+            return None, True
+        return (data, False) if isinstance(data, dict) else (None, True)
+
+    @staticmethod
+    def _backup_path(path: Path) -> Path:
+        return path.with_name(path.name + ".bak")
 
     def _write_json(self, path: Path, data: dict) -> None:
         """Atomic JSON write (unique tmp + fsync + os.replace), serialised.
 
         The snapshot is taken under the write lock, so writes land in the
         order their snapshots were taken and the last file on disk holds
-        every change made before it.
+        every change made before it. athlete.json also refreshes its
+        ``.bak`` (the last good copy _load_json restores from).
+
+        Raises ValueError for an athlete.json write that lacks ftp and
+        weight_kg while the file's previous content was lost to corruption:
+        it would become the rider's whole file. Raised, not swallowed -- an
+        edit that did not land must not report success.
         """
         path = Path(path)
         with self._write_lock:
@@ -1357,12 +1390,16 @@ class ProfileManager:
                         data.get(k) not in (None, "") for k in _REQUIRED_ATHLETE_KEYS):
                     log.warning(
                         "not writing %s: its previous content was corrupt and "
-                        "moved aside, and this write (keys %s) lacks %s -- it "
-                        "would become the rider's whole file", path,
+                        "moved aside, and this write (keys %s) lacks %s", path,
                         sorted(data), list(_REQUIRED_ATHLETE_KEYS))
-                    return
+                    raise ValueError(
+                        "athlete.json was damaged and set aside; enter your FTP "
+                        "and weight to recreate it")
                 self._corrupt_moved.discard(path)
-            self._write_text_atomic(path, json.dumps(dict(data), indent=2))
+            content = json.dumps(dict(data), indent=2)
+            self._write_text_atomic(path, content)
+            if path.name == "athlete.json":
+                self._write_text_atomic(self._backup_path(path), content)
 
     def _write_text_atomic(self, path: Path, content: str, *, mode: Optional[int] = None) -> None:
         """Atomic text write: write to .tmp, fsync, os.replace onto target.

@@ -53,6 +53,8 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
+import tempfile
 import threading
 from pathlib import Path
 
@@ -212,13 +214,37 @@ def _stale_fallback(workout_dir: Path) -> dict:
         return cached
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` through a fresh temp file in the same
+    directory, then os.replace. The library caches share it (contract 3.4).
+
+    mkstemp opens with O_CREAT|O_EXCL and a random name, so a symlink planted
+    in a writable workout directory is never followed -- the old fixed
+    ``<cache>.tmp`` name wrote through one into any file the app could write.
+    A failure removes the temp file and re-raises."""
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        # mkstemp makes the file 0600; the caches are shared, non-secret
+        # files (and ship in the packaged builds), so give them the usual
+        # 0644 or another user of the bundle cannot read them.
+        if hasattr(os, "fchmod"):        # POSIX; Windows has no modes to fix
+            os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _write_cache_file(workout_dir: Path, facts: dict) -> None:
     """Atomic best-effort write (read-only dir just means no persistence)."""
-    path = _cache_path(workout_dir)
     try:
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(_serialize(facts), encoding="utf-8")
-        tmp.replace(path)
+        atomic_write_text(_cache_path(workout_dir), _serialize(facts))
     except OSError as e:
         log.debug("facts cache write skipped (%s)", e)
 

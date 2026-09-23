@@ -12,6 +12,7 @@ import urllib.request
 import tls_trust  # v3.11.4 — one verifier for every intervals.icu connection
 import urllib.error
 import base64
+import http.client
 from datetime import date, timedelta
 import config
 
@@ -324,13 +325,17 @@ def _get(path: str, params: dict | None = None) -> list | dict | None:
                 continue
             _log.warning(f"ICU URL error on {path}: {e.reason}")
             raise ICUNetworkError(f"URL error on {path}: {e.reason}") from e
-        except (TimeoutError, OSError) as e:
+        # http.client.HTTPException: a body cut short (IncompleteRead) or a
+        # garbled status line is a dropped connection. It is not an OSError,
+        # so it used to escape untyped and unretried -- and the sync loop's
+        # substring test read "IncompleteRead(4031 bytes read...)" as a 403.
+        except (TimeoutError, OSError, http.client.HTTPException) as e:
             last_network_exc = e
             if attempt < 2:
                 time.sleep(2 ** attempt + random.random())
                 continue
-            _log.warning(f"ICU connection error on {path}: {e}")
-            raise ICUNetworkError(f"Connection error on {path}: {e}") from e
+            _log.warning(f"ICU connection error on {path}: {e!r}")
+            raise ICUNetworkError(f"Connection error on {path}: {e!r}") from e
 
     # Defensive: should not reach here.
     if last_network_exc is not None:

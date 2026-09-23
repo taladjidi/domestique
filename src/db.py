@@ -1172,6 +1172,12 @@ def _is_auth_error(exc: Exception) -> bool:
             return True
     except Exception:
         pass
+    # A truncated body is a network event. Its message carries a byte count
+    # ("IncompleteRead(4031 bytes read, 12 more expected)") that the
+    # substring test below reads as a 403 (audit 2026-09-23, integ #9).
+    import http.client
+    if isinstance(exc, http.client.HTTPException):
+        return False
     msg = str(exc).lower()
     return "401" in msg or "403" in msg or "unauthorized" in msg
 

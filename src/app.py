@@ -7700,14 +7700,26 @@ _icu_push_timer: "threading.Timer | None" = None
 # swap-triggered push 422'd four times and the UI had nothing to show. GET
 # /api/icu/push now carries this so the sync status can surface error +
 # error_detail without waiting for the user to press the button.
-_icu_push_last_result: "dict | None" = None
+# Keyed by profile id (contract 5.7): one module-wide result showed rider B
+# the push counts and errors of rider A's calendar.
+_icu_push_last_result: "dict[str, dict]" = {}
 
 
-def _icu_push_note_result(res: dict) -> None:
-    """Record a reconcile result (+timestamp) for the status endpoint."""
-    global _icu_push_last_result
+def _icu_active_pid() -> "str | None":
     try:
-        _icu_push_last_result = {"at": clock.now().isoformat(), **res}
+        from profile_manager import ProfileManager
+        return ProfileManager.get().active_id
+    except Exception:
+        return None
+
+
+def _icu_push_note_result(res: dict, pid: "str | None" = None) -> None:
+    """Record a reconcile result (+timestamp) for the status endpoint, under
+    the profile it ran for (default: the active one)."""
+    try:
+        pid = pid or _icu_active_pid()
+        if pid is not None:
+            _icu_push_last_result[pid] = {"at": clock.now().isoformat(), **res}
     except Exception:
         pass
 
@@ -7743,7 +7755,7 @@ def _icu_push_debounced_run(expected_pid: str) -> None:
             return
         import icu_calendar_push
         res = icu_calendar_push.reconcile()
-        _icu_push_note_result(res)
+        _icu_push_note_result(res, expected_pid)
         # 3.3.1 hotfix (B3b): this line omitted `error` entirely — the
         # tester's swap-triggered 422 failed with a clean-looking log line.
         _log.info("EVENT=icu_push_debounced pushed=%s updated=%s deleted=%s "
@@ -7791,7 +7803,9 @@ def _icu_push_cancel_pending() -> None:
             _icu_push_timer = None
 
 
-_icu_push_last_daily: "str | None" = None
+# The day each profile's daily reconcile last ran (contract 5.7): one
+# module-wide date let rider A's reconcile latch the day for rider B too.
+_icu_push_last_daily: "dict[str, str]" = {}
 
 
 def _after_background_sync() -> None:
@@ -7817,19 +7831,22 @@ def _icu_push_daily_from_sync() -> None:
     day, riding the 30-min sync loop (D3b). This is what rolls the 14-day
     horizon forward on mutation-free days and mirrors boot-time plan writes
     — the atomic_write_plan hook is deliberately registered AFTER those."""
-    global _icu_push_last_daily
+    pid = None
     try:
         if not _icu_push_sync_enabled():
             return
-        today = clock.today().isoformat()
-        if _icu_push_last_daily == today:
+        pid = _icu_active_pid()
+        if pid is None:
             return
-        _icu_push_last_daily = today
+        today = clock.today().isoformat()
+        if _icu_push_last_daily.get(pid) == today:
+            return
+        _icu_push_last_daily[pid] = today
         import icu_calendar_push
         res = icu_calendar_push.reconcile()
-        _icu_push_note_result(res)
+        _icu_push_note_result(res, pid)
         if res.get("error"):
-            _icu_push_last_daily = None   # transient — retry next sync pass
+            _icu_push_last_daily.pop(pid, None)   # transient — retry next sync pass
         # 3.3.1 hotfix (B3b): + error_detail (the ICU body excerpt) so a
         # rejected batch is a one-log diagnosis instead of a bare http_422.
         _log.info("EVENT=icu_push_daily pushed=%s updated=%s deleted=%s "
@@ -7838,7 +7855,8 @@ def _icu_push_daily_from_sync() -> None:
                   res.get("needs_reconnect"), res.get("error"),
                   res.get("error_detail"))
     except Exception:
-        _icu_push_last_daily = None
+        if pid is not None:
+            _icu_push_last_daily.pop(pid, None)
         _log.warning("daily ICU calendar push failed", exc_info=True)
 
 
@@ -7868,7 +7886,7 @@ def api_icu_push_status():
         # 3.3.1 hotfix (B3b): outcome of the most recent reconcile (any
         # trigger), incl. error + error_detail — background pushes are no
         # longer silent to the UI.
-        "last_result": _icu_push_last_result,
+        "last_result": _icu_push_last_result.get(_icu_active_pid() or ""),
     }
 
 

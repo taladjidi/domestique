@@ -680,7 +680,7 @@ class TestDailyFromSync:
         stub.pm.save_prefs({"icu_calendar_sync": True})
         calls = []
         monkeypatch.setattr(icp, "reconcile", lambda: calls.append(1) or {})
-        monkeypatch.setattr(app_module, "_icu_push_last_daily", None)
+        monkeypatch.setattr(app_module, "_icu_push_last_daily", {})
         app_module._icu_push_daily_from_sync()
         app_module._icu_push_daily_from_sync()
         assert calls == [1]                 # second pass same day = no-op
@@ -688,16 +688,16 @@ class TestDailyFromSync:
     def test_disabled_toggle_never_runs(self, stub, monkeypatch):
         calls = []
         monkeypatch.setattr(icp, "reconcile", lambda: calls.append(1) or {})
-        monkeypatch.setattr(app_module, "_icu_push_last_daily", None)
+        monkeypatch.setattr(app_module, "_icu_push_last_daily", {})
         app_module._icu_push_daily_from_sync()
-        assert calls == [] and app_module._icu_push_last_daily is None
+        assert calls == [] and app_module._icu_push_last_daily == {}
 
     def test_transient_error_retries_next_pass(self, stub, monkeypatch):
         stub.pm.save_prefs({"icu_calendar_sync": True})
         monkeypatch.setattr(icp, "reconcile", lambda: {"error": "net_down"})
-        monkeypatch.setattr(app_module, "_icu_push_last_daily", None)
+        monkeypatch.setattr(app_module, "_icu_push_last_daily", {})
         app_module._icu_push_daily_from_sync()
-        assert app_module._icu_push_last_daily is None   # latch released
+        assert app_module._icu_push_last_daily == {}   # latch released
 
     def test_sync_loop_calls_post_sync_callback(self, stub, monkeypatch):
         """The db-side hook actually fires after a successful pass."""

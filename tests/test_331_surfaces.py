@@ -363,7 +363,7 @@ class TestB3bHttpObservability:
         """POST /api/icu/push (button) stores the result; GET /api/icu/push
         (the sync status the UI polls) surfaces error + error_detail — a
         background 422 is no longer silent."""
-        app_module._icu_push_last_result = None
+        app_module._icu_push_last_result.clear()
         _apikey(stub)
         _write_plan([_sess(D1)])
         fake.fail["POST"] = (422, b"ICU says: event 0 invalid")

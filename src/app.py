@@ -1737,7 +1737,10 @@ def api_profiles_update(profile_id: str, body: dict):
     from profile_manager import ProfileManager
     _validate_profile_id(profile_id)
     pm = ProfileManager.get()
-    pm.update_profile(profile_id, name=body.get("name"), color=body.get("color"))
+    try:
+        pm.update_profile(profile_id, name=body.get("name"), color=body.get("color"))
+    except LookupError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
     return {"ok": True}
 
 
@@ -1748,6 +1751,8 @@ def api_profiles_delete(profile_id: str):
     pm = ProfileManager.get()
     try:
         pm.delete_profile(profile_id)
+    except LookupError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": True}

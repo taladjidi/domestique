@@ -482,6 +482,11 @@ class ProfileManager:
             # wizard. Otherwise blocking here traps the user when they've
             # decided to purge everything.
             profiles = self._registry.get("profiles", [])
+            # Contract 7.1: an id the registry does not list changes nothing.
+            # "Last profile" below is counted from the registry, so a repeated
+            # DELETE of an already-deleted id used to clear the active pointer.
+            if not any(p.get("id") == profile_id for p in profiles):
+                raise LookupError(f"Profile '{profile_id}' not found")
             is_last = len(profiles) <= 1
             if profile_id == self._active_id and not is_last:
                 raise ValueError("Cannot delete active profile")
@@ -543,6 +548,8 @@ class ProfileManager:
                     if color is not None:
                         p["color"] = color
                     break
+            else:
+                raise LookupError(f"Profile '{profile_id}' not found")
             self._save_registry()
 
     def clear_bootstrapped(self) -> None:

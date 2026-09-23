@@ -40,6 +40,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import shutil
 import sys
 import threading
@@ -483,10 +484,12 @@ def atomic_write_plan(json_path: "Path | str", plan: dict) -> None:
     v1.6.2:
       - Refuses to write an empty / non-dict plan (guards the bug where a
         mutation produced ``{}`` or ``None`` and silently nuked the live file).
-      - Rotates existing live → .bak → .bak2 ... → .bak7 BEFORE writing, so
-        a crash mid-write still leaves at least 7 prior snapshots intact.
-      - Writes to `<json_path>.tmp` and atomic-renames on success. If the
-        write or rotation raises, the live file is unchanged.
+      - Writes and fsyncs `<json_path>.tmp` FIRST, then rotates live → .bak →
+        .bak2 ... → .bak7, then atomic-renames. A write that fails (disk
+        full, unserialisable plan, unwritable temp) raises before the
+        rotation, so it leaves the live file AND the backup chain untouched
+        (contract 3.3: rotating first let seven failed writes turn the chain
+        into eight copies of one generation).
     """
     if not isinstance(plan, dict) or not plan:
         raise ValueError(
@@ -496,10 +499,17 @@ def atomic_write_plan(json_path: "Path | str", plan: dict) -> None:
     p = Path(json_path)
     tmp = p.with_suffix('.tmp')
     with _plan_write_lock:
+        f = open(tmp, "w", encoding="utf-8")
+        try:
+            with f:
+                json.dump(plan, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         if p.exists():
             _rotate_plan_backups(p)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(plan, f, indent=2, default=str)
         tmp.replace(p)
     cb = post_write_callback
     if cb is not None:

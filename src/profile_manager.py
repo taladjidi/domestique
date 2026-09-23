@@ -23,6 +23,7 @@ Per-profile WORKOUT_DIR resolution order (used on switch):
 
 from __future__ import annotations
 
+import cache  # the shared response cache (scoped to the active profile below)
 import clock  # the one clock every module reads (see src/clock.py)
 import facts  # the registry of who owns which number (see src/facts.py)
 import json
@@ -1443,6 +1444,12 @@ class ProfileManager:
 
 # ── Module-private helpers (not on the class so they can't be monkey-patched
 # as an instance-level bypass) ───────────────────────────────────────────────
+
+# Cached values are scoped to the active profile (contract 5.3): an entry
+# filled for one rider is a miss for another, even in the instant between a
+# switch changing the active id and its callbacks clearing the cache.
+cache.set_scope(lambda: getattr(ProfileManager._instance, "_active_id", None))
+
 
 def _safe_profile_dir(pm: "ProfileManager", profile_id: str) -> Path:
     """Validate a caller-supplied profile_id and return the absolute on-disk

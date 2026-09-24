@@ -14374,7 +14374,11 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                        if x is not None and x.session_type != "rest" and x.day >= today
                        and not getattr(x, "is_race", False))
             for s in w.sessions:
+                # An adaptation chose this session's file and length (a TSB
+                # easing, a tier-down, a regenerate keeping it): it is not
+                # re-fitted, or the easing's own restore no longer finds it.
                 if (not _pending_ahead(s, today) or _rider_owned(s)
+                        or getattr(s, "adapted", False)
                         or s.session_type == "ftp_test" or getattr(s, "is_opener", False)):
                     continue
                 row = rows.get((s.zwo_file or "").strip())
@@ -14390,6 +14394,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                 # hard slot spends intensity the week's hard share did not plan.
                 cc = _content_class_for_row(row)
                 fits = [r for r in lib if _content_class_for_row(r) == cc
+                        and float(r.get("Score") or 0) >= _class_aware_score_floor(cc)
                         and slot - _slot_file_band_min(slot)
                         <= float(r.get("Duration(min)") or 0) <= slot + max(3, 0.05 * slot)]
                 if fits:

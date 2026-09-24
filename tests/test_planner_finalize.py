@@ -1298,3 +1298,21 @@ def test_l4_the_slot_does_not_grow_past_the_day_or_the_week():
     assert wk.sessions[0].duration_min < 90
     assert sum(s.tss_estimate for s in wk.sessions) <= 100 + 1
     assert sum(s.tss_estimate for s in wk.sessions) <= 100 + 1
+
+
+def test_l3_l4_an_adapted_kept_session_is_not_refitted(monkeypatch):
+    """d05724d2's refit re-served the owner's adapted 09-24 (a 95-min file on
+    a 90-min slot, TSS 68 -> 54) after the ramp had read it: two regenerates
+    disagreed again (week 09-28's target 381 -> 373). And a TSB-eased day that
+    was refitted no longer matched what the easing wrote, so it was never
+    restored (test_reforecast_fatigue)."""
+    base = gen(owner("continuous"))
+    t = G0 + _dt.timedelta(days=3)
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    longer = next(f for f, r in rows.items() if f.startswith("endurance_steady_68pct_95min"))
+    wk2 = next(w for w in base if w.start > t)
+    s = next(x for x in wk2.sessions if x.session_type == "z2")
+    s.adapted, s.zwo_file, s.duration_min, s.tss_estimate = True, longer, 80, 60
+    clock.freeze(t)
+    tp.finalize_weeks(base, owner("continuous"))
+    assert s.zwo_file == longer and s.duration_min == 80

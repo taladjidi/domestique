@@ -14063,16 +14063,49 @@ def _library_rows(library) -> dict:
     return {(r.get("File") or "").strip(): r for r in (library or []) if r.get("File")}
 
 
+# The intensity ladder a slot and a file are both placed on (D3/D4: what the
+# rider rides is the file's content, so it may not sit above the slot). The
+# classifier's content classes on one side, the planner's slot types on the
+# other; the FTP test and the race stand outside it.
+_CONTENT_RANK = {"recovery": 0, "endurance": 0, "endurance_intervals": 0,
+                 "tempo": 1, "tempo_intervals": 1, "tempo_ladder": 1,
+                 "sweet_spot": 2, "sweet_spot_ladder": 2,
+                 "threshold": 3, "threshold_ladder": 3, "over_under": 3,
+                 "double_threshold": 3,
+                 "vo2max": 4, "vo2_short": 4, "vo2_ladder": 4,
+                 "anaerobic": 5, "neuromuscular": 5}
+_SLOT_RANK = {"recovery": 0, "z2": 0, "long_z2": 0, "endurance": 0, "tempo": 1,
+              "sweetspot": 2, "threshold": 3, "overunder": 3, "double_threshold": 3,
+              "vo2max": 4, "sprint": 5}
+
+
+def _above_slot(slot_type: str, row) -> bool:
+    """Is this library row's content harder than the slot may serve?"""
+    cap = _SLOT_RANK.get(slot_type)
+    if cap is None or row is None:
+        return False
+    return _CONTENT_RANK.get(_content_class_for_row(row), 0) > cap
+
+
+def _within_slot(slot_type: str, library) -> list:
+    """The library rows a slot may serve; all of them when none would."""
+    ok = [r for r in library or [] if not _above_slot(slot_type, r)]
+    return ok or list(library or [])
+
+
 def _serve_file(s, library, **kw) -> None:
     """Give ``s`` a library file (contract 6.2). match_zwo keeps an easy slot
-    on easy content and spends at most the slot's budget. With no candidate
-    the session keeps what it had: a blank card is not better (v3.11.5)."""
+    on easy content and spends at most the slot's budget; the pool is the
+    content no harder than the slot (a tempo slot the G3 downshift emptied was
+    served a sweet-spot file: the evaluation of b7be0395, M3). With no
+    candidate the session keeps what it had: a blank card is not better
+    (v3.11.5)."""
     old = (s.zwo_file, s.zwo_name)
     dur = int(s.duration_min or 0)
     s.zwo_file = ""
     s.zwo_name = ""
     try:
-        match_zwo(s, library, exact_duration=True,
+        match_zwo(s, _within_slot(s.session_type, library), exact_duration=True,
                   micro_only=bool(kw.pop("micro_only", False)), **kw)
     except Exception:  # noqa: BLE001 — a day without a file beats a crash
         log.debug("final step: no file for %s", getattr(s, "day", "?"), exc_info=True)
@@ -14225,9 +14258,14 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                 if not from_calendar:
                     s.description = "Rest day"
                 continue
-            # 6.2 -- a file the library holds. An empty library is a cache
-            # fault, not a verdict on the plan's files (the 3.3.1 collapse).
-            if rows and (getattr(s, "zwo_file", "") or "").strip() not in rows:
+            # 6.2 -- a file the library holds, no harder than the slot (D4; a
+            # downshift stays downshifted). An empty library is a cache fault,
+            # not a verdict on the plan's files (the 3.3.1 collapse). The
+            # opener's short touches are its point, and a test is its file.
+            _f = (getattr(s, "zwo_file", "") or "").strip()
+            if rows and (_f not in rows or (
+                    not getattr(s, "is_opener", False) and s.session_type != "ftp_test"
+                    and _above_slot(s.session_type, rows.get(_f)))):
                 _serve_file(s, lib, week_num=w.week_num, day_idx=off,
                             plan_start_date=anchor, seed_salt=seed_salt, micro_only=micro)
             if s.session_type == "ftp_test":

@@ -825,3 +825,60 @@ def test_m2_a_day_the_budget_rested_is_not_a_free_slot():
     clock.freeze(G0 + _dt.timedelta(days=3))
     assert not [x for x in app_module._compute_missed_suggestions(plan, G0 + _dt.timedelta(days=3))
                 if x.get("suggested_date") == "2026-09-19"]
+
+
+# M3 (evaluation of b7be0395): the final step never serves content above the
+# slot's class -- a downshift stays downshifted (D3/D4).
+
+_RANK = {"recovery": 0, "endurance": 0, "endurance_intervals": 0,
+         "tempo": 1, "tempo_intervals": 1, "tempo_ladder": 1,
+         "sweet_spot": 2, "sweet_spot_ladder": 2,
+         "threshold": 3, "threshold_ladder": 3, "over_under": 3,
+         "vo2max": 4, "vo2_short": 4, "vo2_ladder": 4,
+         "anaerobic": 5, "neuromuscular": 5}
+_SLOT = {"recovery": 0, "z2": 0, "long_z2": 0, "tempo": 1, "sweetspot": 2,
+         "threshold": 3, "overunder": 3, "vo2max": 4, "sprint": 5}
+
+
+@pytest.mark.parametrize("slot", ["tempo", "sweetspot", "threshold", "z2"])
+@pytest.mark.parametrize("dur", [45, 60, 83, 110])
+def test_m3_a_fileless_slot_is_served_content_no_harder_than_it(slot, dur):
+    """The G3 downshift turned the owner's 10-01 sweetspot into tempo and
+    emptied its file; the final step served sweetspot_3x750s-210s_92pct_83min
+    (sweet-spot content, IF 0.81) where base served tempo_1x70min_78pct."""
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    t = _MON
+    s = _s(3, slot, dur, round(dur / 60 * tp.TSS_PER_HOUR[slot]), "")
+    wk = _w([s], target=900)
+    clock.freeze(t)
+    tp.finalize_weeks([wk], _goal(daily_max_hours={d: 3.0 for d in range(6)}))
+    got = wk.sessions[0]
+    cc = tp._content_class_for_row(rows[got.zwo_file])
+    assert _RANK.get(cc, 0) <= _SLOT[slot], (slot, dur, got.zwo_file, cc)
+
+
+def test_m3_a_file_above_its_slot_is_served_again():
+    """A tempo slot still holding the sweet-spot file it was downshifted from
+    (a pass that re-typed it without re-matching) rides as sweet spot."""
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    ss = "tempo_5x1min-1min_115pct_60min.zwo"                # classified sweet_spot
+    assert tp._content_class_for_row(rows[ss]) == "sweet_spot"
+    wk = _w([_s(3, "tempo", 60, 65, ss)], target=900)
+    clock.freeze(_MON)
+    tp.finalize_weeks([wk], _goal())
+    got = wk.sessions[0].zwo_file
+    assert _RANK[tp._content_class_for_row(rows[got])] <= 1, got
+
+
+def test_m3_the_owner_downshift_stays_tempo():
+    plan = {"goal": tp.goal_to_dict(owner()), "weeks": [tp.week_to_dict(w) for w in gen(owner())]}
+    day = next(s for w in plan["weeks"] for s in w["sessions"]
+               if s["day"] > "2026-09-20" and s["session_type"] == "sweetspot")
+    day.update(session_type="tempo", zwo_file="", zwo_name="", adapted=True,
+               description="G3 polarization breach: sweetspot → tempo (Seiler/Stöggl/Treff)")
+    clock.freeze(G0 + _dt.timedelta(days=3))
+    tp.reforecast_dict(plan, tsb_series={})
+    got = next(s for w in plan["weeks"] for s in w["sessions"] if s["day"] == day["day"])
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    assert got["session_type"] == "tempo"
+    assert _RANK[tp._content_class_for_row(rows[got["zwo_file"]])] <= 1, got["zwo_file"]

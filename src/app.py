@@ -11334,12 +11334,6 @@ async def api_plan_generate(request: Request):
             elif not _pw_reason:
                 goal.phase_weeks = None
 
-        # v4.5.0 IMPL-PLANNER: mint a fresh seed_salt so the FIRST plan is no
-        # longer deterministic (was missing here — only /api/plan/regenerate
-        # passed seed_salt previously, so the very first generate run always
-        # produced the same library picks). Mirrors the regenerate pattern.
-        seed_salt = time.time_ns()
-
         # v1.3.2 — read PERSISTED availability calendar from existing plan and
         # pass overrides to generate_plan. Pre-fix, /api/plan/generate ignored
         # plan["availability"] entirely → freshly generated plan produced
@@ -11422,7 +11416,7 @@ async def api_plan_generate(request: Request):
                     old_availability_full = {}
 
             phases, weeks = tp.generate_plan(
-                goal, seed_salt=seed_salt,
+                goal,
                 availability_overrides=availability_overrides or None,
                 athlete=athlete,
                 current_ctl=current_ctl,
@@ -12054,7 +12048,6 @@ def _regenerate_plan_dict(
     *,
     current_ctl: float,
     activities: "list[dict]",
-    seed_salt: int,
 ) -> "tuple[dict, dict]":
     """v1.8.24 — shared regenerate-from-today core (extracted from
     /api/plan/regenerate so the manual endpoint AND the auto-on-sync path use
@@ -12062,8 +12055,7 @@ def _regenerate_plan_dict(
 
     Reconstructs the Goal + PlannedWeek list from ``plan`` (round-tripping ALL
     session fields so regenerate_from_today's v1.8.20 preservation sees the
-    rider's edits), runs ``tp.regenerate_from_today`` with the supplied
-    ``seed_salt`` (nonzero ⇒ per-call ZWO/HIT variety), and overlays the
+    rider's edits), runs ``tp.regenerate_from_today``, and overlays the
     regenerated phases/weeks onto a shallow copy of the original plan so every
     top-level key (availability, reforecast_date, goal, …) survives.
 
@@ -12111,7 +12103,6 @@ def _regenerate_plan_dict(
     # compute event targets on regen too.
     athlete = _planner_athlete()
 
-    # Regenerate (seed_salt forces shuffle variance per call — B3)
     # The rider's chronic load, fetched once: the rebuild's ACWR ceiling and
     # the drift chip's snapshot read the same number.
     _recent_wtss = _chronic_weekly_tss_safe()
@@ -12120,7 +12111,6 @@ def _regenerate_plan_dict(
         current_ctl=current_ctl,
         unavailable_periods=unavailable,
         activities=activities,
-        seed_salt=seed_salt,
         recent_weekly_tss=_recent_wtss,
     )
     # Pass athlete only if regenerate_from_today accepts it (the kwarg is being
@@ -12168,9 +12158,6 @@ def _regenerate_plan_dict(
         plan_dict["phase_weeks_status"] = _pws
     else:
         plan_dict.pop("phase_weeks_status", None)
-    # v4.3.0 B3: persist the per-regen entropy salt so external readers
-    # (UI, tests) can detect that a fresh regen happened.
-    plan_dict["last_regen_at"] = seed_salt
     # P4.2 (v3.0.0) — refresh the drift snapshot: a regen re-anchors the plan
     # on live fitness, so the chip's baseline moves with it.
     plan_dict["ctl_snapshot"] = tp.plan_ctl_snapshot(current_ctl, _recent_wtss)
@@ -12480,9 +12467,8 @@ def _apply_plan_update(
     )
 
     if do_regen:
-        seed_salt = time.time_ns()
         plan_dict, regen_info = _regenerate_plan_dict(
-            plan, current_ctl=current_ctl, activities=activities, seed_salt=seed_salt,
+            plan, current_ctl=current_ctl, activities=activities,
         )
         plan_dict["gap_regen_latch"] = {"key": episode_key, "at": now_iso}
         ramp_weeks = regen_info.get("recovery_ramp_weeks", 0) if isinstance(regen_info, dict) else 0
@@ -12626,11 +12612,9 @@ async def api_plan_regenerate_dynamic(request: Request):
 
     Science: Mujika 2000/2001/2003, Gabbett 2016, Gundersen 2016.
 
-    v4.3.0 B3: now mints a fresh ``seed_salt = time.time_ns()`` on each call
-    and writes it into ``plan["last_regen_at"]``. The salt is forwarded into
-    ``regenerate_from_today`` → ``plan_week`` → ``_pick_session`` and
-    ``match_zwo`` so consecutive regenerations produce visibly different
-    HIT-variant + ZWO-pick distributions.
+    Same inputs, same plan (contract 6.11): v4.3.0 B3 salted every call with
+    ``time.time_ns()`` so two regenerations differed, and with them this
+    week's load (192..249 TSS for one stored plan and a frozen clock).
 
     v1.8.24 — body delegates to the shared ``_regenerate_plan_dict`` core.
     """
@@ -12649,7 +12633,7 @@ async def api_plan_regenerate_dynamic(request: Request):
             return _reply(JSONResponse({"error": "No active plan found"}, 404))
 
         plan_dict, regen_info = _regenerate_plan_dict(
-            plan, current_ctl=current_ctl, activities=activities, seed_salt=seed_salt,
+            plan, current_ctl=current_ctl, activities=activities,
         )
 
         out["r"] = {"ok": True, "plan_json": plan_dict, "regen_info": regen_info}
@@ -12658,10 +12642,6 @@ async def api_plan_regenerate_dynamic(request: Request):
     try:
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
         # whatever runs inside _mutate holds every other plan writer.
-        # v4.3.0 B3: per-regen entropy salt. time.time_ns() gives us a fresh
-        # 19+ bit-of-entropy nonce per call — guaranteed different across two
-        # back-to-back POSTs on any modern OS clock.
-        seed_salt = time.time_ns()
         training = await run_in_threadpool(cached, "training", get_today_metrics)
         current_ctl = await run_in_threadpool(_planning_ctl)
         activities = db.query_activities(days=120)
@@ -12727,7 +12707,7 @@ async def api_plan_add_race(request: Request):
         goal["events"] = events
 
         plan_dict, regen_info = _regenerate_plan_dict(
-            plan, current_ctl=current_ctl, activities=activities, seed_salt=seed_salt,
+            plan, current_ctl=current_ctl, activities=activities,
         )
 
         out["r"] = {"ok": True, "plan_json": plan_dict, "regen_info": regen_info, "added": new_event}
@@ -12736,7 +12716,6 @@ async def api_plan_add_race(request: Request):
     try:
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
         # whatever runs inside _mutate holds every other plan writer.
-        seed_salt = time.time_ns()
         training = await run_in_threadpool(cached, "training", get_today_metrics)
         current_ctl = await run_in_threadpool(_planning_ctl)
         activities = db.query_activities(days=120)

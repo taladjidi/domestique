@@ -100,7 +100,7 @@ def test_regenerate_stamps_recalc_date():
     plan["recalc_date"] = "2026-01-01T00:00:00"
 
     new_plan, _info = app_module._regenerate_plan_dict(
-        plan, current_ctl=50.0, activities=[], seed_salt=1)
+        plan, current_ctl=50.0, activities=[])
 
     assert new_plan.get("regenerated", "").startswith(str(today.year))
     stamped = new_plan.get("recalc_date", "")

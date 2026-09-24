@@ -1,8 +1,8 @@
-"""v4.3.0 IMPL-SERVER B3 — /api/plan/regenerate must produce visibly
-different ZWO picks across consecutive calls.
+"""v4.3.0 IMPL-SERVER B3 — the planner's pick salt, and (contract 6.11)
+/api/plan/regenerate reproducible for the same stored plan.
 
-Spec (MASTER §3, §4):
-  - regenerate twice → ≥30% of session zwo_file picks differ
+Spec (MASTER §3, §4), as amended by contract 6.11:
+  - regenerate twice on the same plan → identical output (was: ≥30% differ)
   - same seed_salt (deterministic mode) → identical output
   - 100 regens → ≥80% of library candidates exercised across the population
 
@@ -73,16 +73,6 @@ def _mk_plan_dict(monday: date) -> dict:
     }
 
 
-def _zwo_picks(plan_json: dict) -> list[str]:
-    """Flatten every session's zwo_file across all weeks."""
-    out = []
-    for w in plan_json.get("plan_json", {}).get("weeks", []) or plan_json.get("weeks", []):
-        for s in w.get("sessions", []):
-            if s.get("zwo_file"):
-                out.append(s["zwo_file"])
-    return out
-
-
 class RegenerateShuffleBase(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -106,46 +96,21 @@ class RegenerateShuffleBase(unittest.TestCase):
         return json.loads((self._tmp / "current_plan.json").read_text())
 
 
-class TestRegenerateShufflesAcrossCalls(RegenerateShuffleBase):
-    """B3 acceptance: two consecutive regens must diverge ≥30% of picks."""
+class TestRegenerateIsReproducible(RegenerateShuffleBase):
+    """Contract 6.11 (2026-09-24) replaces B3's "two regenerations differ by
+    >=30%": same inputs, same plan. B3's per-call time.time_ns() salt moved
+    this week's load as well as the picks; variety now comes from the planner's
+    own keys (plan start, profile, week, day, type), which the two salt tests
+    below still pin."""
 
-    def test_two_regens_differ_at_least_30pct(self):
+    def test_two_regens_of_the_same_plan_agree(self):
+        stored = (self._tmp / "current_plan.json").read_text()
         r1 = self.client.post("/api/plan/regenerate")
         self.assertEqual(r1.status_code, 200, r1.text)
-        picks1 = _zwo_picks(r1.json())
-
-        # Tiny sleep so time.time_ns() returns a different value.
-        import time
-        time.sleep(0.005)
-
+        (self._tmp / "current_plan.json").write_text(stored)
         r2 = self.client.post("/api/plan/regenerate")
         self.assertEqual(r2.status_code, 200, r2.text)
-        picks2 = _zwo_picks(r2.json())
-
-        if not picks1 or not picks2:
-            self.skipTest("library too sparse to assert shuffle")
-        n = min(len(picks1), len(picks2))
-        if n < 5:
-            self.skipTest(f"only {n} picks available")
-        diffs = sum(1 for a, b in zip(picks1, picks2) if a != b)
-        ratio = diffs / n
-        self.assertGreaterEqual(
-            ratio, 0.30,
-            f"regen shuffle weak: {diffs}/{n} = {ratio:.2%} differ "
-            f"(need ≥30%)"
-        )
-
-    def test_last_regen_at_changes_per_call(self):
-        r1 = self.client.post("/api/plan/regenerate")
-        salt1 = self._read_plan().get("last_regen_at")
-        import time
-        time.sleep(0.005)
-        r2 = self.client.post("/api/plan/regenerate")
-        salt2 = self._read_plan().get("last_regen_at")
-        self.assertIsNotNone(salt1)
-        self.assertIsNotNone(salt2)
-        self.assertNotEqual(salt1, salt2,
-                            "last_regen_at must differ across calls")
+        self.assertEqual(r1.json()["plan_json"]["weeks"], r2.json()["plan_json"]["weeks"])
 
 
 class TestSeedSaltDeterminismPreserved(RegenerateShuffleBase):

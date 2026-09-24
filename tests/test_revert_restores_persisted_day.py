@@ -112,7 +112,7 @@ def test_the_stash_survives_a_rebuild(client_with_plan):
         "reason": "HRV below baseline", "session_type": "z2",
         "duration_min": 60, "tss_estimate": 45})
     rebuilt, _info = app_module._regenerate_plan_dict(
-        json.loads(path.read_text()), current_ctl=40.0, activities=[], seed_salt=7)
+        json.loads(path.read_text()), current_ctl=40.0, activities=[])
     path.write_text(json.dumps(rebuilt), encoding="utf-8")
     assert _today_session(path)["session_type"] == "z2", "the adapted day was kept"
     r = client.post("/api/readiness/revert-cap", json={"signal": "any"})

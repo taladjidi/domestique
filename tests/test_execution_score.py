@@ -412,7 +412,7 @@ def test_execution_survives_regenerate_plan_dict(monkeypatch):
     plan["goal"] = {"type": "general", "hours_per_week": 6,
                     "event_date": (today + timedelta(weeks=6)).isoformat()}
     new_plan, _info = app_module._regenerate_plan_dict(
-        plan, current_ctl=50.0, activities=[], seed_salt=1)
+        plan, current_ctl=50.0, activities=[])
     past = [s for w in new_plan["weeks"] for s in w["sessions"]
             if s.get("day") == monday.isoformat()]
     assert past, "past session disappeared from regenerated plan"

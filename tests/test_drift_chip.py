@@ -119,7 +119,7 @@ def test_regenerate_stamps_fresh_snapshot(monkeypatch):
     plan["ctl_snapshot"] = tp.plan_ctl_snapshot(99.0, 999.0,
                                                 generated_on="2026-01-01")
     new_plan, _info = app_module._regenerate_plan_dict(
-        plan, current_ctl=48.0, activities=[], seed_salt=3)
+        plan, current_ctl=48.0, activities=[])
     snap = new_plan["ctl_snapshot"]
     assert snap["current_ctl"] == 48.0          # refreshed, not carried over
     assert snap["recent_weekly_tss"] == 390.0

@@ -882,3 +882,117 @@ def test_m3_the_owner_downshift_stays_tempo():
     rows = {r["File"]: r for r in tp.load_workout_library()}
     assert got["session_type"] == "tempo"
     assert _RANK[tp._content_class_for_row(rows[got["zwo_file"]])] <= 1, got["zwo_file"]
+
+
+# D-D / D-C (evaluation of b7be0395): the last shortening leaves every slot
+# a file that fits it, and the unload week is lightest after the final step.
+
+def _too_long(weeks, t):
+    """Pending sessions whose file runs past the slot's band when the library
+    holds a file of the same class inside it (the coherence pass's own test)."""
+    lib = tp.load_workout_library()
+    rows = {r["File"]: r for r in lib}
+    out = []
+    for w in weeks:
+        for s in w.sessions:
+            if (s.day < t or s.session_type in ("rest", "ftp_test") or s.is_race
+                    or getattr(s, "is_opener", False) or s.status != "pending"):
+                continue
+            r = rows.get(s.zwo_file)
+            if r is None:
+                continue
+            fd, band = float(r["Duration(min)"]), tp._slot_file_band_min(s.duration_min)
+            if fd - s.duration_min <= band:
+                continue
+            cc = tp._content_class_for_row(r)
+            if any(tp._content_class_for_row(x) == cc
+                   and abs(float(x["Duration(min)"] or 0) - s.duration_min) <= band for x in lib):
+                out.append((str(s.day), s.session_type, s.duration_min, s.zwo_file))
+    return out
+
+
+def _sweep_goal(kind, t, rest, daily, hpw, weeks=0, race_in=None):
+    """The reviewer's sweep riders (zz_probe/sweep_gen.py), as goals."""
+    td = None
+    if race_in is not None:
+        d = t + _dt.timedelta(weeks=race_in)
+        td = d + _dt.timedelta(days=(6 - d.weekday()) % 7)
+        weeks = max(4, -(-(td - t).days // 7)) if kind == "event" else weeks
+    return tp.Goal(goal_type=kind, target_date=td, rest_days=list(rest),
+                   available_days=[d for d in range(7) if d not in rest],
+                   daily_max_hours=dict(daily), max_weekday_hours=2.0, max_weekend_hours=3.5,
+                   hours_per_week=hpw, plan_weeks=weeks,
+                   event_km=(160 if kind == "event" else 0),
+                   event_climb_m=(2000 if kind == "event" else 0))
+
+
+@pytest.mark.parametrize("case", [
+    # rider, day: where 02a0f514..fe6b0b36's last shortening left the slot
+    # shorter than its file (z2 33 min serving a 60 min file; 58 vs 75; 72 vs 90)
+    ("everyday-vo2", "2026-09-17"), ("owner-event12", "2026-10-06"),
+    ("event6-defaults", "2026-09-18")])
+def test_dd_no_slot_is_left_shorter_than_its_file(case, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "ICU_ATHLETE_ID", "gate-athlete")    # the sweep's seed
+    name, day = case
+    t = _dt.date.fromisoformat(day)
+    g, ctl, rwt, ftp = {
+        "everyday-vo2": (lambda: _sweep_goal("vo2max", t, [], {d: 1.0 for d in range(7)}, 7,
+                                             weeks=8), 45, 300, 300),
+        "owner-event12": (lambda: _sweep_goal("event", t, [4], {**DAILY, 5: 3.0}, 12.5,
+                                              race_in=12), 55, 380, 247),
+        "event6-defaults": (lambda: _sweep_goal("event", t, [0], {}, 10, race_in=6),
+                            50, 380, 247)}[name]
+    clock.freeze(t)
+    weeks = tp.generate_plan(g(), seed_salt=t.toordinal(), current_ctl=ctl,
+                             recent_weekly_tss=rwt, athlete={"ftp": ftp, "weight_kg": 72})[1]
+    assert not _too_long(weeks, t)
+
+
+def test_dc_the_unload_week_is_lightest_after_the_final_step(monkeypatch):
+    """weekend-event8 generated 2026-10-06: the unload week came out at 80 TSS
+    against 78 in its block, because the unload pass ran before the last
+    re-match and re-stamp (D-C)."""
+    import config
+    monkeypatch.setattr(config, "ICU_ATHLETE_ID", "gate-athlete")    # the sweep's seed
+    t = _dt.date(2026, 10, 6)
+    g = lambda: _sweep_goal("event", t, [0, 1, 2, 3, 4], {5: 4.0, 6: 4.0}, 8, race_in=8)  # noqa: E731
+    clock.freeze(t)
+    weeks = tp.generate_plan(g(), seed_salt=t.toordinal(), current_ctl=40,
+                             recent_weekly_tss=250, athlete={"ftp": 247, "weight_kg": 72})[1]
+    assert not [str(v) for v in pi.audit(weeks, g(), today=t) if v.rule == "stepback_lightest"]
+
+
+def test_dc_an_extended_block_keeps_its_unload_week_lightest(monkeypatch):
+    """The reviewer's sweep, owner-cont generated Thursday 2026-09-17 and
+    extended on the Sunday: the unload week came out at 322 TSS against 281 in
+    its block -- the unload pass ran in generate alone (D-C)."""
+    import config
+    monkeypatch.setattr(config, "ICU_ATHLETE_ID", "gate-athlete")
+    b0, t = _dt.date(2026, 9, 17), _dt.date(2026, 9, 20)
+    g = lambda: _sweep_goal("continuous", b0, [4], {**DAILY, 5: 3.0}, 12.5)  # noqa: E731
+    clock.freeze(b0)
+    base = tp.generate_plan(g(), seed_salt=b0.toordinal(), current_ctl=55,
+                            recent_weekly_tss=380, athlete={"ftp": 247})[1]
+    rides = [{"date": (b0 + _dt.timedelta(days=i)).isoformat(), "tss": 60.0}
+             for i in range(3) if (b0 + _dt.timedelta(days=i)).weekday() != 4]
+    clock.freeze(t)
+    weeks = tp.extend_continuous_plan(g(), copy.deepcopy(base), 55, recent_activities=rides,
+                                      athlete={"ftp": 247}, recent_weekly_tss=380,
+                                      seed_salt=7)[1]
+    assert not [str(v) for v in pi.audit(weeks, g(), today=t) if v.rule == "stepback_lightest"]
+
+
+def test_dd_the_re_match_does_not_take_the_week_back_over_its_budget(monkeypatch):
+    """weekend-event8 generated Sunday 2026-09-27: one ordered round left the
+    week at 56 TSS against a 46 budget -- the re-match to the band served a
+    heavier file after the budget was set, so the final step repeats budget,
+    unload and re-match until they agree."""
+    import config
+    monkeypatch.setattr(config, "ICU_ATHLETE_ID", "gate-athlete")
+    t = _dt.date(2026, 9, 27)
+    g = lambda: _sweep_goal("event", t, [0, 1, 2, 3, 4], {5: 4.0, 6: 4.0}, 8, race_in=8)  # noqa: E731
+    clock.freeze(t)
+    weeks = tp.generate_plan(g(), seed_salt=t.toordinal(), current_ctl=40,
+                             recent_weekly_tss=250, athlete={"ftp": 247, "weight_kg": 72})[1]
+    assert not [str(v) for v in pi.audit(weeks, g(), today=t) if v.rule == "weekly_volume"]

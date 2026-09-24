@@ -9295,7 +9295,7 @@ def generate_plan(
             _d += timedelta(days=1)
     finalize_weeks(weeks, goal, library=library, calendar=_cal, rides=activities,
                    normal_week=recent_weekly_tss, plan_start_date=plan_start_date,
-                   seed_salt=seed_salt, unload_lighter=True)
+                   seed_salt=seed_salt)
 
     _report_acwr(weeks, recent_weekly_tss)
     return phases, weeks
@@ -10524,9 +10524,17 @@ def _enforce_stepback_is_lightest(weeks: list) -> None:
     load; bounded loop (≤ sessions per week, stops once all easy slots hit the
     floor).
     """
+    # Only what is still to ride is shed: a done, missed, moved or past day is
+    # a record, and since the final step runs this on every entry point the
+    # week under way can be an unload week.
+    _today = clock.today()
+
     def _wk_tss(w):
+        # Training load, as the auditor counts it (plan_invariants._training):
+        # an FTP test is a measurement, and the race is not a dose.
         return sum((s.tss_estimate or 0) for s in w.sessions
-                   if s and s.session_type != "rest")
+                   if s and s.session_type not in ("rest", "ftp_test")
+                   and not getattr(s, "is_race", False))
     for i, wk in enumerate(weeks):
         if not getattr(wk, "is_stepback", False):
             continue
@@ -10557,7 +10565,8 @@ def _enforce_stepback_is_lightest(weeks: list) -> None:
                     if s and s.session_type != "rest"
                     and (s.duration_min or 0) > _VOLUME_MIN_SESSION_MIN
                     and not _session_is_hit(s)
-                    and not _protect_race(s)]  # FC3: race entry never shrunk
+                    and not _race_shape_frozen(s)
+                    and getattr(s, "day", _today) >= _today]  # FC3: race entry never shrunk
             if not easy:
                 break  # every easy slot already at/under the floor
             easy.sort(key=lambda kv: -(kv[1].duration_min or 0))
@@ -10590,7 +10599,8 @@ def _enforce_stepback_is_lightest(weeks: list) -> None:
                 break
             easy = [(idx, s) for idx, s in enumerate(wk.sessions)
                     if s and s.session_type != "rest" and not _session_is_hit(s)
-                    and not _protect_race(s)]  # FC3: race entry never rested
+                    and not _race_shape_frozen(s)
+                    and getattr(s, "day", _today) >= _today]  # FC3: race entry never rested
             if len(easy) <= 1:
                 break  # keep at least one easy recovery spin
             easy.sort(key=lambda kv: (kv[1].duration_min or 0))  # drop the shortest first
@@ -14189,7 +14199,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                    rides: "list | None" = None,
                    normal_week: "float | None" = None,
                    plan_start_date: "date | None" = None,
-                   seed_salt: int = 0, unload_lighter: bool = False) -> "set[date]":
+                   seed_salt: int = 0) -> "set[date]":
     """The last act of every entry point on the weeks it returns.
 
     Rules, in the order they must run (each assumes the ones above it):
@@ -14335,27 +14345,37 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         gross = target * 7 / span if 0 < span < 7 else target
         return max(0.0, min(target - ridden(wk.start), gross - ridden(monday)))
 
-    _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
-                                   normal_week=normal_week, library=lib)
-    # generate's own rhythm pass: an unload week lighter than its block
-    # (Issurin's 3:1), judged on the loads just set.
-    if unload_lighter:
+    # The budget, then the unload week, then a file that fits what is left of
+    # each slot, then its served load -- in that order. The last shortening
+    # used to come after the re-match, leaving slots below their files (the
+    # head unit got a longer workout than planned: generate's
+    # file_duration_mismatch 36 -> 62 on b7be0395, D-D), and the unload pass,
+    # run before the last re-match, left recovery weeks heavier than their
+    # block (D-C).
+    # Until they agree: a re-match to the band may serve a file a little
+    # heavier than the one it replaces (match_zwo's 10 %), which the budget
+    # then answers by shortening again -- each round only shortens, so it
+    # settles; three rounds is a guard.
+    def _state():
+        return [sig(s) for w in ahead for s in w.sessions if s is not None]
+    for _round in range(3):
+        _was = _state()
+        _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
+                                       normal_week=normal_week, library=lib)
+        # An unload week lighter than its block (Issurin's 3:1), judged on
+        # the loads just set -- on every entry point: it was generate's
+        # alone, and a recalculated or extended block left its unload week
+        # the heaviest.
         _enforce_stepback_is_lightest(ahead)
-    _enforce_slot_file_coherence(ahead, lib, plan_start_date=anchor, seed_salt=seed_salt,
-                                 today_floor=today, micro_only=micro)
-    for w in ahead:
-        for s in w.sessions:
-            if _pending_ahead(s, today) and not _rider_owned(s):
-                _restamp(s, rows)
-    # A re-match may spend up to match_zwo's tolerance over the slot: the
-    # budget has the last word. It only shortens, in proportion, so the load
-    # stays the served file's; the descriptions follow.
-    _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
-                                   normal_week=normal_week, library=lib)
-    for w in ahead:
-        for s in w.sessions:
-            if _pending_ahead(s, today) and not _rider_owned(s):
-                _restamp(s, rows)
+        _enforce_slot_file_coherence(ahead, lib, plan_start_date=anchor,
+                                     seed_salt=seed_salt, today_floor=today,
+                                     micro_only=micro)
+        for w in ahead:
+            for s in w.sessions:
+                if _pending_ahead(s, today) and not _rider_owned(s):
+                    _restamp(s, rows)
+        if _state() == _was:
+            break
 
     # 6.3 -- last: nothing above may reshape a day behind the rider.
     _restore_record(weeks, old_weeks, today)

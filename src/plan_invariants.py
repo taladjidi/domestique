@@ -585,8 +585,12 @@ def check_stepback_lightest(weeks, today=None) -> list[Violation]:
             block = []
             continue
         full = (w.end - w.start).days >= 6
-        load = sum(float(s.tss_estimate or 0) for s in w.sessions
-                   if _ridden(s) and not _is_race(s))
+        # Training load, as stepback_looks_lighter counts it (_training): an
+        # FTP test is a measurement placed in the unload week on purpose, and
+        # since the test is its own file's length (contract 6.9) a week
+        # holding nothing but the test read heavier than a light build week
+        # (80 against 78, weekend-event8; the evaluation of b7be0395, D-C).
+        load = sum(float(s.tss_estimate or 0) for s in _training(w) if _ridden(s))
         if not full or load <= 0:
             continue
         if w.is_stepback:

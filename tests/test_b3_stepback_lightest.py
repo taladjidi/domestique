@@ -30,8 +30,12 @@ def _goal(weeks, hpw, rest_days, wkd, wknd):
 
 
 def _wk_tss(w):
+    # Training load, the one definition the pass and the auditor share: an FTP
+    # test is a measurement placed in the unload week on fresh legs, and the
+    # race is not a dose (the evaluation of b7be0395, D-C).
     return sum((s.tss_estimate or 0) for s in w.sessions
-               if s and s.session_type != "rest")
+               if s and s.session_type not in ("rest", "ftp_test")
+               and not getattr(s, "is_race", False))
 
 
 class TestStepbackIsLightest(unittest.TestCase):

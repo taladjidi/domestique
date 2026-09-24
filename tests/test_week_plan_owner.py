@@ -73,8 +73,11 @@ class TheAuditorFailsWhenItShould(unittest.TestCase):
         self._fires("empty_week", week([], target=300))
 
     def test_a_legal_week_is_reported_clean(self):
-        wk = week([sess(MON, dur=60, tss=80),
-                   sess(MON + dt.timedelta(days=3), dur=60, tss=80)], target=300)
+        # Legal includes a served file (contract 6.2): a session without one
+        # reaches the rider's head unit as a blank day.
+        f = "vo2max_5x3min-3min_115pct_60min.zwo"
+        wk = week([sess(MON, dur=60, tss=80, f=f),
+                   sess(MON + dt.timedelta(days=3), dur=60, tss=80, f=f)], target=300)
         self.assertEqual(pi.audit([wk], goal()), [])
 
 

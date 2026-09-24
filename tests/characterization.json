@@ -5260,6 +5260,19 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -7287,6 +7300,19 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -24073,6 +24099,19 @@
    "inv": [
     "hard_share:10",
     "hard_share:11",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -28787,7 +28826,9 @@
      ]
     ]
    ],
-   "inv": []
+   "inv": [
+    "missing_file:4"
+   ]
   },
   "event/wkend3h/regenerate@17": {
    "fp": [
@@ -29711,6 +29752,20 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -36473,7 +36528,8 @@
     ]
    ],
    "inv": [
-    "daily_duration_cap:4"
+    "daily_duration_cap:4",
+    "missing_file:4"
    ]
   },
   "event/wkend5h/regenerate@17": {
@@ -37398,6 +37454,20 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -39557,6 +39627,19 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -41584,6 +41667,19 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -54839,6 +54935,7 @@
    ],
    "inv": [
     "empty_week:1",
+    "missing_file:2",
     "under_delivery:1"
    ]
   },
@@ -58377,6 +58474,19 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -64019,6 +64129,20 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "weekly_volume:3"
    ]
   },
@@ -71708,6 +71832,20 @@
     ]
    ],
    "inv": [
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:3",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:4",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
+    "missing_file:5",
     "under_delivery:13",
     "weekly_volume:3"
    ]

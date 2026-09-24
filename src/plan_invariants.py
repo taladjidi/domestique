@@ -29,6 +29,7 @@ prescriptions.
 from __future__ import annotations
 
 import json
+import math
 import availability
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -304,12 +305,34 @@ def check_under_delivery(weeks, goal, rides=None, today=None) -> list[Violation]
     return out
 
 
-def check_rest_days_respected(weeks, goal) -> list[Violation]:
-    """A day the athlete said they cannot ride must carry no session."""
+def _override_h(day, overrides):
+    """The hours the rider set for this DATE in the availability calendar, or
+    None. A date the calendar names wins over the weekday rule both ways: 0 h
+    closes a training day, 3 h opens or lengthens one."""
+    if not overrides:
+        return None
+    v = overrides.get(day.isoformat())
+    try:
+        return None if v is None else max(0.0, float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def check_rest_days_respected(weeks, goal, overrides=None) -> list[Violation]:
+    """A day the athlete said they cannot ride must carry no session: a rest
+    day, a day outside their available days, or a date they zeroed in the
+    availability calendar."""
     out = []
     for w in weeks:
         for s in w.sessions:
-            if _pending(s) and not _is_race(s) and not _is_available(s.day, goal):
+            if not _pending(s) or _is_race(s):
+                continue
+            ov = _override_h(s.day, overrides)
+            if ov is not None and ov <= 0:
+                out.append(Violation(
+                    "rest_days", w.week_num,
+                    f"{s.day} has {s.session_type} but the rider set 0 h that date"))
+            elif ov is None and not _is_available(s.day, goal):
                 out.append(Violation(
                     "rest_days", w.week_num,
                     f"{s.day} ({s.day.strftime('%a')}) has {s.session_type} "
@@ -317,19 +340,23 @@ def check_rest_days_respected(weeks, goal) -> list[Violation]:
     return out
 
 
-def check_daily_duration_cap(weeks, goal) -> list[Violation]:
+def check_daily_duration_cap(weeks, goal, overrides=None) -> list[Violation]:
     """No session longer than the athlete said that day can hold.
 
     The cap is the goal's own rule -- per-day override, else the weekday or
     weekend default. Reading only the per-day dict made this blind to every
-    rider whose limits come from the defaults (dupes.md DUP-10).
+    rider whose limits come from the defaults (dupes.md DUP-10). A date the
+    rider set in the availability calendar caps that date instead: without it,
+    a 3 h Saturday the rider opened for a long ride was flagged against the
+    weekday's 2 h.
     """
     out = []
     for w in weeks:
         for s in w.sessions:
             if not _pending(s) or _is_race(s):
                 continue
-            cap_h = _day_cap_h(s.day, goal)
+            ov = _override_h(s.day, overrides)
+            cap_h = _day_cap_h(s.day, goal) if ov is None else ov
             if cap_h is not None and s.duration_min > cap_h * 60 + 1:
                 out.append(Violation(
                     "daily_duration_cap", w.week_num,
@@ -686,26 +713,170 @@ def check_no_empty_training_week(weeks, goal, rides=None, today=None) -> list[Vi
     return out
 
 
+def check_numbers(weeks) -> list[Violation]:
+    """Every session's load and length is a number, and not a negative one. A
+    NaN compares false with everything, so each budget rule above passed it."""
+    out = []
+    for w in weeks:
+        for s in w.sessions:
+            for name in ("tss_estimate", "duration_min"):
+                v = getattr(s, name, None)
+                try:
+                    bad = v is None or not math.isfinite(float(v)) or float(v) < 0
+                except (TypeError, ValueError):
+                    bad = True
+                if bad:
+                    out.append(Violation("bad_number", w.week_num,
+                                         f"{s.day} {s.session_type} {name}={v!r}"))
+    return out
+
+
+def race_dates(goal) -> set:
+    """The days the goal says the rider races: the A event of an event goal
+    (or of any goal with a distance) and every B/C event."""
+    out = set()
+    a = getattr(goal, "target_date", None)
+    if a and (getattr(goal, "goal_type", "") == "event"
+              or float(getattr(goal, "event_km", 0) or 0) > 0):
+        out.add(_day(a))
+    for ev in getattr(goal, "events", None) or []:
+        get = _field(ev)
+        d = get("date", None)
+        if isinstance(d, str):
+            try:
+                d = date.fromisoformat(d[:10])
+            except ValueError:
+                d = None
+        if d:
+            out.add(d)
+    return out
+
+
+def check_race_marked(weeks, goal) -> list[Violation]:
+    """A race the goal names, on a day the plan covers, is on that day."""
+    if not weeks:
+        return []
+    lo, hi = weeks[0].start, weeks[-1].end
+    marked = {s.day for w in weeks for s in w.sessions if _is_race(s)}
+    return [Violation("race_missing", next((w.week_num for w in weeks if w.start <= d <= w.end), 0),
+                      f"{d} is a race day and the plan does not show the race")
+            for d in sorted(race_dates(goal)) if lo <= d <= hi and d not in marked]
+
+
+def check_taper_not_heavier(weeks, today=None) -> list[Violation]:
+    """A taper week asks less than the last build week before it.
+
+    The taper cuts volume and keeps intensity (Mujika & Padilla 2003); a taper
+    heavier than the build it follows is the opposite. A short taper row is
+    scaled to seven days, the race itself not counted.
+    """
+    out, last = [], None
+    for w in weeks:
+        phase = str(getattr(w, "phase", "")).lower()
+        load = sum(float(s.tss_estimate or 0) for s in _training(w) if _ridden(s))
+        if phase == "taper":
+            days = (w.end - w.start).days + 1
+            if (last is not None and (today is None or w.end >= today) and days >= 3
+                    and load * 7 / days > last[1] + 1):
+                out.append(Violation(
+                    "taper_heavier", w.week_num,
+                    f"taper {load:.0f} TSS in {days} d ({load * 7 / days:.0f} a week) vs "
+                    f"{last[1]:.0f} in the last build week (wk{last[0]})"))
+        elif (_is_full_week(w) and not w.is_stepback and phase not in UNLOAD_PHASES
+              and not asks_nothing(w)):
+            last = (w.week_num, load)
+    return out
+
+
+def check_hard_slot_content(weeks) -> list[Violation]:
+    """A hard slot serves hard content: the mirror of easy_slot_content. A
+    VO2max day serving an endurance file is counted as a hard day by every
+    budget and spacing rule, and rides as an easy one."""
+    out = []
+    for w in weeks:
+        for s in w.sessions:
+            if not _pending(s) or _is_race(s) or s.session_type in ("race", "ftp_test"):
+                continue
+            if s.session_type in HARD_TYPES and content_class(s.zwo_file) in EASY_CONTENT:
+                out.append(Violation("hard_slot_content", w.week_num,
+                                     f"{s.day} {s.session_type} <- "
+                                     f"{content_class(s.zwo_file)} ({s.zwo_file})"))
+    return out
+
+
+def _served_exists(zwo_file) -> bool:
+    name = (zwo_file or "").split("/")[-1]
+    if not name:
+        return False
+    content_class(name)           # loads the table
+    return name in (_classes or {}) or (_CLASSIFICATION.parent / name).exists()
+
+
+def check_session_has_file(weeks, today=None) -> list[Violation]:
+    """A training session still to ride serves a workout file the library
+    holds. The calendar push skips a session without one, so the rider's head
+    unit shows the day blank."""
+    out = []
+    for w in weeks:
+        for s in w.sessions:
+            if not _pending(s) or _is_race(s) or not _ahead(s, today):
+                continue
+            if not _served_exists(s.zwo_file):
+                out.append(Violation("missing_file", w.week_num,
+                                     f"{s.day} {s.session_type} {s.duration_min}min "
+                                     f"serves {s.zwo_file or 'no file'}"))
+    return out
+
+
+def chronic_from_rides(rides, today) -> "float | None":
+    """The load the rider carries into ``today``, TSS a week, read off the
+    rides: the same 28-day EWMA as chronic_after. None when the rides span
+    under 56 days, which an EWMA seeded at zero needs to settle
+    (ride_storage.chronic_weekly_tss says the same)."""
+    per_day: dict = {}
+    for a in rides or []:
+        d = str(a.get("date") or a.get("start_date_local") or a.get("started_at") or "")[:10]
+        try:
+            per_day[date.fromisoformat(d)] = per_day.get(date.fromisoformat(d), 0.0) + float(
+                a.get("tss") or a.get("icu_training_load") or 0)
+        except (TypeError, ValueError):
+            continue
+    if not per_day or today is None or (today - min(per_day)).days < 56:
+        return None
+    day, carried = min(per_day), 0.0
+    while day < today:
+        carried = chronic_after(carried, per_day.get(day, 0.0) * 7, 1)
+        day += timedelta(days=1)
+    return carried
+
+
 ALL_CHECKS = (
-    ("hard_day_spacing", lambda ws, g, r, t: check_hard_day_spacing(ws)),
-    ("weekly_volume", lambda ws, g, r, t: check_weekly_volume(ws, r, t)),
-    ("under_delivery", lambda ws, g, r, t: check_under_delivery(ws, g, r, t)),
-    ("rest_days", lambda ws, g, r, t: check_rest_days_respected(ws, g)),
-    ("daily_duration_cap", lambda ws, g, r, t: check_daily_duration_cap(ws, g)),
-    ("slot_file_coherence", lambda ws, g, r, t: check_slot_file_coherence(ws)),
-    ("easy_slot_content", lambda ws, g, r, t: check_easy_slot_content(ws)),
-    ("hard_share", lambda ws, g, r, t: check_hard_share(ws, r, t)),
-    ("stepback_lightest", lambda ws, g, r, t: check_stepback_lightest(ws, t)),
-    ("stepback_looks_lighter", lambda ws, g, r, t: check_stepback_looks_lighter(ws, t)),
-    ("empty_week", lambda ws, g, r, t: check_no_empty_training_week(ws, g, r, t)),
+    ("hard_day_spacing", lambda ws, g, r, t, o: check_hard_day_spacing(ws)),
+    ("weekly_volume", lambda ws, g, r, t, o: check_weekly_volume(ws, r, t)),
+    ("under_delivery", lambda ws, g, r, t, o: check_under_delivery(ws, g, r, t)),
+    ("rest_days", lambda ws, g, r, t, o: check_rest_days_respected(ws, g, o)),
+    ("daily_duration_cap", lambda ws, g, r, t, o: check_daily_duration_cap(ws, g, o)),
+    ("slot_file_coherence", lambda ws, g, r, t, o: check_slot_file_coherence(ws)),
+    ("easy_slot_content", lambda ws, g, r, t, o: check_easy_slot_content(ws)),
+    ("hard_share", lambda ws, g, r, t, o: check_hard_share(ws, r, t)),
+    ("stepback_lightest", lambda ws, g, r, t, o: check_stepback_lightest(ws, t)),
+    ("stepback_looks_lighter", lambda ws, g, r, t, o: check_stepback_looks_lighter(ws, t)),
+    ("empty_week", lambda ws, g, r, t, o: check_no_empty_training_week(ws, g, r, t)),
+    ("bad_number", lambda ws, g, r, t, o: check_numbers(ws)),
+    ("race_missing", lambda ws, g, r, t, o: check_race_marked(ws, g)),
+    ("taper_heavier", lambda ws, g, r, t, o: check_taper_not_heavier(ws, t)),
+    ("hard_slot_content", lambda ws, g, r, t, o: check_hard_slot_content(ws)),
+    ("missing_file", lambda ws, g, r, t, o: check_session_has_file(ws, t)),
 )
 
 
-def audit(weeks, goal, rides=None, today=None, chronic=None) -> list[Violation]:
+def audit(weeks, goal, rides=None, today=None, chronic=None,
+          overrides=None) -> list[Violation]:
     """Every rule, over a finished plan. Empty list means the plan is legal.
 
     ``rides`` (the athlete's activities) turns on the ridden-aware budget;
-    ``today`` limits the budget rules to days still ahead.
+    ``today`` limits the budget rules to days still ahead. ``overrides`` is the
+    availability calendar, ISO date -> hours: a date it names is capped by it.
 
     ``chronic`` (the load the rider carries into the plan, TSS a week) turns
     on check_acwr, which cannot live in ALL_CHECKS because those take a plan
@@ -713,17 +884,23 @@ def audit(weeks, goal, rides=None, today=None, chronic=None) -> list[Violation]:
     the ramp is safe for THIS athlete rather than merely self-consistent: on
     generated plans it fires for detrained riders at 1.4-1.6x carried and
     stays quiet for fit ones, which is the population ACWR is about.
+
+    Without ``chronic``, the rides say it (chronic_from_rides) when they go
+    back far enough: the rule was written and never reached, because no
+    caller had the number to hand it. Reported, not enforced.
     """
     out = []
     for _name, fn in ALL_CHECKS:
-        out.extend(fn(weeks, goal, rides, today))
+        out.extend(fn(weeks, goal, rides, today, overrides))
+    if chronic is None:
+        chronic = chronic_from_rides(rides, today)
     if chronic is not None:
         out.extend(check_acwr(weeks, float(chronic), today))
     return out
 
 
-def summary(weeks, goal, rides=None, today=None, chronic=None) -> str:
-    v = audit(weeks, goal, rides, today, chronic)
+def summary(weeks, goal, rides=None, today=None, chronic=None, overrides=None) -> str:
+    v = audit(weeks, goal, rides, today, chronic, overrides)
     if not v:
         return "clean"
     by_rule: dict[str, int] = {}

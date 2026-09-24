@@ -13071,6 +13071,8 @@ def _apply_reforecast_to_dict(
             new_is_race = bool(getattr(src, "is_race", False))
             new_race = getattr(src, "race", None)
             new_is_opener = bool(getattr(src, "is_opener", False))
+            new_status = getattr(src, "status", "pending") or "pending"
+            new_moved_from = getattr(src, "moved_from", "") or ""
             changed = (
                 s_json.get("session_type") != new_session_type
                 or int(s_json.get("duration_min", 0) or 0) != new_duration_min
@@ -13081,6 +13083,8 @@ def _apply_reforecast_to_dict(
                 or bool(s_json.get("is_race", False)) != new_is_race
                 or (s_json.get("race") or None) != new_race
                 or bool(s_json.get("is_opener", False)) != new_is_opener
+                or (s_json.get("status") or "pending") != new_status
+                or (s_json.get("moved_from") or "") != new_moved_from
             )
             if not changed:
                 continue
@@ -13093,6 +13097,11 @@ def _apply_reforecast_to_dict(
             s_json["is_race"] = new_is_race
             s_json["race"] = new_race
             s_json["is_opener"] = new_is_opener
+            # A moved missed session restored on its own day (MF-1) changes
+            # status and provenance; nothing else in reforecast writes them.
+            s_json["status"] = new_status
+            s_json["moved_from"] = new_moved_from
+            s_json["auto_moved"] = bool(getattr(src, "auto_moved", False))
             # E7: round-tripped pins travel with the write so the dict never
             # loses them on a rewrite (they came IN via
             # _plan_dict_to_planned_weeks and are not mutated by reforecast).
@@ -14036,10 +14045,13 @@ def plan_calendar(plan_dict: dict, goal=None) -> "dict[str, float]":
 
 
 def with_calendar(goal, plan_dict: dict):
-    """``goal`` carrying its stored plan's calendar, for the final step. A
-    transient attribute, like _phase_start_override: the calendar is stored
-    under plan["availability"], not in the goal block."""
+    """``goal`` carrying what its stored plan holds outside the goal block and
+    the final step needs: the calendar (plan["availability"], the unavailable
+    periods) and the auto-reschedule's records (plan["auto_moves"], the SAME
+    list, so a record the final step settles leaves the plan). Transient
+    attributes, like _phase_start_override."""
     goal._calendar = plan_calendar(plan_dict, goal)
+    goal._auto_moves = plan_dict.setdefault("auto_moves", []) if isinstance(plan_dict, dict) else []
     return goal
 
 
@@ -14189,6 +14201,44 @@ def _restore_record(weeks: list, old_weeks: list, today: date) -> None:
         back = [x for d, ss in old.items() if w.start <= d <= w.end and d < today for x in ss]
         if back or len(kept) != len(w.sessions):
             w.sessions = sorted(kept + back, key=lambda s: getattr(s, "day", None) or today)
+
+
+def _restore_moved_misses(weeks: list, records: list, today: date) -> None:
+    """A missed session the auto-reschedule moved is never destroyed.
+
+    For every auto_moves record whose destination no longer holds the session
+    -- the budget rested it, the calendar closed its day, a rebuild
+    re-prescribed it -- the session goes back on its own day, missed, from the
+    record's snapshot, and the record is settled. Its own day is history, so
+    this is the record step's to do; the source must still hold the move's
+    stub, or something else has happened there and it is left alone.
+    ``records`` is the plan's own list (with_calendar), edited in place.
+    """
+    by_day = {}
+    for w in weeks:
+        for i, s in enumerate(w.sessions):
+            if s is not None and getattr(s, "day", None) is not None:
+                by_day[s.day.isoformat()] = (w, i, s)
+    for rec in list(records or []):
+        src, dst, snap = rec.get("from"), rec.get("to"), rec.get("session")
+        if not (src and dst and isinstance(snap, dict)) or src not in by_day:
+            continue
+        held = by_day.get(dst)
+        if held and getattr(held[2], "moved_from", "") == src \
+                and held[2].session_type != "rest":
+            continue                     # still where it was moved: nothing lost
+        w, i, stub = by_day[src]
+        if not str(getattr(stub, "status", "") or "").startswith("moved_from:"):
+            continue
+        back = session_from_dict({**snap, "day": src})
+        back.status = "missed"
+        back.moved_from = ""
+        back.auto_moved = False
+        w.sessions[i] = back
+        if held and getattr(held[2], "moved_from", "") == src:
+            held[2].moved_from = ""
+            held[2].auto_moved = False
+        records.remove(rec)
 
 
 def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
@@ -14375,8 +14425,11 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         if _state() == _was:
             break
 
-    # 6.3 -- last: nothing above may reshape a day behind the rider.
+    # 6.3 -- last: nothing above may reshape a day behind the rider. A
+    # missed session moved away and lost at its destination comes back on its
+    # own day (the second evaluation of afec7c6a, MF-1).
     _restore_record(weeks, old_weeks, today)
+    _restore_moved_misses(weeks, getattr(goal, "_auto_moves", None), today)
 
     return {s.day for w in weeks for s in w.sessions
             if s is not None and getattr(s, "day", None) is not None

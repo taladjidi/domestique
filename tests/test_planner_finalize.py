@@ -996,3 +996,69 @@ def test_dd_the_re_match_does_not_take_the_week_back_over_its_budget(monkeypatch
     weeks = tp.generate_plan(g(), seed_salt=t.toordinal(), current_ctl=40,
                              recent_weekly_tss=250, athlete={"ftp": 247, "weight_kg": 72})[1]
     assert not [str(v) for v in pi.audit(weeks, g(), today=t) if v.rule == "weekly_volume"]
+
+
+# MF-1 (second evaluation, afec7c6a): a missed session the auto-reschedule
+# moved is never destroyed by ANY later entry point -- the guarantee lives in
+# the final step's record step, reading the plan's auto_moves records.
+
+_TUE, _SAT = "2026-09-15", "2026-09-19"
+_LIGHT = [{"id": "r1", "date": "2026-09-14", "sport": "Ride", "tss": 60.0}]
+
+
+def _moved_plan():
+    """Sync 1 has moved Tuesday's missed z2 to a free Saturday."""
+    import app as app_module
+    plan, tue = _missed_week_plan()
+    for s in plan["weeks"][0]["sessions"]:
+        if s["day"] == "2026-09-14":
+            s["status"] = "done"
+    t = G0 + _dt.timedelta(days=3)
+    clock.freeze(t)
+    plan = app_module._apply_plan_update(plan, training={}, activities=_LIGHT, today=t)[0]
+    assert [s for w in plan["weeks"] for s in w["sessions"]
+            if s["day"] == _SAT and s.get("moved_from") == _TUE], "sync 1 did not move it"
+    return plan
+
+
+def _nowhere(plan):
+    ss = {s["day"]: s for w in plan["weeks"] for s in w["sessions"]}
+    tue = ss[_TUE]
+    held = [s for s in ss.values() if s.get("moved_from") == _TUE and s["session_type"] != "rest"]
+    return not (tue.get("status") == "missed" and tue["session_type"] != "rest") and not held
+
+
+def test_mf1_a_later_sync_that_rests_the_destination_restores_the_session():
+    import app as app_module
+    plan = _moved_plan()
+    t = G0 + _dt.timedelta(days=3)
+    clock.freeze(t)
+    big = _LIGHT + [{"id": "r2", "date": "2026-09-16", "sport": "Ride", "tss": 600.0}]
+    plan = app_module._apply_plan_update(plan, training={}, activities=big, today=t)[0]
+    assert not _nowhere(plan)
+    tue = next(s for w in plan["weeks"] for s in w["sessions"] if s["day"] == _TUE)
+    assert tue["status"] == "missed" and tue["session_type"] == "z2"
+
+
+def _through_app(tmp_path, monkeypatch, plan, url, body):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    import app as app_module
+    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    (tmp_path / "current_plan.json").write_text(json.dumps(plan))
+    clock.freeze(G0 + _dt.timedelta(days=3))
+    with patch("db.query_activities", return_value=_LIGHT):
+        r = TestClient(app_module.app).post(url, json=body)
+    assert r.status_code == 200, r.text
+    return json.loads((tmp_path / "current_plan.json").read_text())
+
+
+def test_mf1_zeroing_the_destination_restores_the_session(tmp_path, monkeypatch):
+    plan = _through_app(tmp_path, monkeypatch, _moved_plan(), "/api/plan/save-availability",
+                        {"availability": {_SAT: {"hours": 0, "type": "unavailable"}}})
+    assert not _nowhere(plan)
+
+
+def test_mf1_a_regenerate_after_a_move_restores_the_session(tmp_path, monkeypatch):
+    plan = _through_app(tmp_path, monkeypatch, _moved_plan(), "/api/plan/regenerate", {})
+    assert not _nowhere(plan)

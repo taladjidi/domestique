@@ -12342,49 +12342,7 @@ def _apply_refit_to_plan(plan: dict, today: date) -> "dict | None":
     return refit_info
 
 
-def _apply_plan_update(plan: dict, *, today: date, **kw) -> "tuple[dict, str, dict, str]":
-    """The plan-adaptation core (_adapt_plan below), and then one guarantee
-    over whichever tier ran: a missed session the auto-reschedule moved is
-    never destroyed. When the day it moved to no longer holds it -- the final
-    step rested it because the week's budget was spent, or a rebuild
-    re-prescribed the day -- it goes back to its own day, missed (the
-    evaluation of b7be0395, M2: Tuesday's z2 existed nowhere after two
-    syncs)."""
-    moves: list = []
-    out = _adapt_plan(plan, today=today, _moves=moves, **kw)
-    _keep_missed_sessions(out[0], moves)
-    return out
-
-
-def _keep_missed_sessions(plan: dict, moves: list) -> int:
-    """Put back, missed, every session of ``moves`` whose destination no
-    longer holds it. Returns how many."""
-    if not moves or not isinstance(plan, dict):
-        return 0
-    records = plan.get("auto_moves") or []
-    back = 0
-    for mv in moves:
-        src, dst = mv.get("from"), mv.get("to")
-        sess = {s.get("day"): (w, i, s) for w in plan.get("weeks", []) or []
-                for i, s in enumerate(w.get("sessions", []) or [])}
-        held = sess.get(dst)
-        if held and held[2].get("moved_from") == src and held[2].get("session_type") != "rest":
-            continue
-        rec = next((r for r in records if r.get("to") == dst and r.get("from") == src), None)
-        if rec is None or not rec.get("session") or src not in sess:
-            continue
-        w, i, _stub = sess[src]
-        w["sessions"][i] = json.loads(json.dumps(rec["session"]))
-        if held and held[2].get("moved_from") == src:
-            held[2]["moved_from"] = ""
-            held[2]["auto_moved"] = False
-        records.remove(rec)
-        back += 1
-    plan["auto_moves"] = records
-    return back
-
-
-def _adapt_plan(
+def _apply_plan_update(
     plan: dict,
     *,
     training: dict,
@@ -12393,7 +12351,6 @@ def _adapt_plan(
     allow_regen: bool = True,
     gap_debounce: bool = True,
     reforecast_min_interval_iso: "str | None" = None,
-    _moves: "list | None" = None,
 ) -> "tuple[dict, str, dict, str]":
     """v1.8.24 — THE single plan-adaptation core. Tier-dispatches:
 
@@ -12453,10 +12410,11 @@ def _adapt_plan(
     # session becomes pending, so the missed-hard refit tier won't also
     # redistribute it; misses with no free in-week slot stay missed and fall
     # through to the refit tier as before.
-    moves = _moves if _moves is not None else []
+    # A move the final step cannot keep (the budget rests the day, the
+    # calendar closes it, a rebuild re-prescribes it) is undone by the final
+    # step itself, from the auto_moves record (tp._restore_moved_misses).
     try:
-        moves.extend(_auto_apply_missed_moves(plan, today) or [])
-        reconciled += len(moves)
+        reconciled += len(_auto_apply_missed_moves(plan, today) or ())
     except Exception:  # noqa: BLE001 — best-effort; never block adapt
         _log.exception("auto-reschedule skipped")
 

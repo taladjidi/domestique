@@ -1266,22 +1266,35 @@ def test_l4_a_file_that_fits_is_served_first():
 
 
 def test_l4_a_slot_takes_its_files_length_when_the_day_and_week_allow():
-    """No file fits (a library of one): the slot takes the file's 59 minutes
-    rather than leaving 9 the week never counted."""
+    """No file fits (a library of one): a 70-min endurance slot serving a
+    90-min file takes the file's 90 minutes rather than leaving 20 the week
+    never counted."""
+    lib = _lib_of(Z2)                                   # z2_steady_68pct_90min
+    wk = _w([_s(1, "z2", 70, 50, Z2), _s(3, "z2", 60, 45, Z2)], target=900)
+    clock.freeze(_MON)
+    tp.finalize_weeks([wk], _goal(), library=lib)
+    assert wk.sessions[0].duration_min == 90
+
+
+def test_l4_a_hard_slot_never_grows_past_its_types_ceiling():
+    """The anaerobic ceiling is 50 min (FIX-2): a 59-min anaerobic file with
+    nothing that fits keeps its 50-min slot."""
     lib = _lib_of(_ANA59, Z2)
     wk = _w([_s(1, "vo2max", 59, 70, _ANA59), _s(3, "z2", 60, 45)], target=900)
     clock.freeze(_MON)
     tp.finalize_weeks([wk], _goal(), library=lib)
-    assert wk.sessions[0].duration_min == 59
+    assert wk.sessions[0].duration_min == 50
 
 
 def test_l4_the_slot_does_not_grow_past_the_day_or_the_week():
-    lib = _lib_of(_ANA59, Z2)
-    tight_day = _goal(daily_max_hours={d: (50 / 60 if d == 1 else 2.0) for d in range(6)})
-    wk = _w([_s(1, "vo2max", 59, 70, _ANA59)], target=900)
+    lib = _lib_of(Z2)
+    tight_day = _goal(daily_max_hours={d: (75 / 60 if d == 1 else 2.0) for d in range(6)})
+    wk = _w([_s(1, "z2", 70, 50, Z2)], target=900)
     clock.freeze(_MON)
     tp.finalize_weeks([wk], tight_day, library=lib)
-    assert wk.sessions[0].duration_min <= 50
-    wk = _w([_s(1, "vo2max", 50, 60, _ANA59), _s(3, "z2", 60, 40)], target=100)
+    assert wk.sessions[0].duration_min <= 75
+    wk = _w([_s(1, "z2", 70, 50, Z2), _s(3, "z2", 60, 45, Z2)], target=100)
     tp.finalize_weeks([wk], _goal(), library=lib)
-    assert wk.sessions[0].duration_min == 50
+    assert wk.sessions[0].duration_min < 90
+    assert sum(s.tss_estimate for s in wk.sessions) <= 100 + 1
+    assert sum(s.tss_estimate for s in wk.sessions) <= 100 + 1

@@ -14367,8 +14367,9 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         # the documented extend-on-trainer contract (R4a) and stays.
         for w in ahead:
             room = net(w)
+            # Up to the budget itself, not its trim tolerance: the tolerance
+            # is slack for a trim, not room to fill.
             room = float(w.tss_target or 0) if room is None else room
-            room *= _VOLUME_CEILING_TOLERANCE
             load = sum(float(x.tss_estimate or 0) for x in w.sessions
                        if x is not None and x.session_type != "rest" and x.day >= today
                        and not getattr(x, "is_race", False))
@@ -14392,9 +14393,16 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                         and slot - _slot_file_band_min(slot)
                         <= float(r.get("Duration(min)") or 0) <= slot + max(3, 0.05 * slot)]
                 if fits:
+                    # The one closest to the slot's length, then the lighter,
+                    # then by name: a choice that depends on nothing but the
+                    # slot, so a plan finalized again on another day keeps it.
                     _was = (s.zwo_file, s.zwo_name, s.duration_min, s.tss_estimate)
-                    _serve_file(s, fits, week_num=w.week_num, plan_start_date=anchor,
-                                seed_salt=seed_salt, micro_only=micro)
+                    best = min(fits, key=lambda r: (
+                        abs(float(r.get("Duration(min)") or 0) - slot),
+                        float(r.get("TSS") or 0) / max(1.0, float(r.get("Duration(min)") or 1)),
+                        r.get("File") or ""))
+                    s.zwo_file = best.get("File") or ""
+                    s.zwo_name = best.get("Name") or ""
                     _restamp(s, rows)
                     _new = rows.get((s.zwo_file or "").strip())
                     if (_new is not None
@@ -14408,6 +14416,12 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                 if str(getattr(w, "phase", "")).lower() == "taper" or _is_unload_week(w):
                     continue
                 cap, _ = _date_cap_min(goal, s.day, cal)
+                # ...and never past the type's ceiling (FIX-2: a hard
+                # session's length is capped whatever file it serves).
+                _ceil = (TYPE_CEILING.get(_content_class_for_zwo(s.zwo_file or ""))
+                         or TYPE_CEILING.get(s.session_type))
+                if _ceil is not None:
+                    cap = min(cap, _ceil)
                 per_min = float(s.tss_estimate or 0) / max(1, int(s.duration_min or 0))
                 extra = per_min * (fd - int(s.duration_min or 0))
                 if fd > cap or (w.tss_target and load + extra > room):

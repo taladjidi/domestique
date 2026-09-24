@@ -835,9 +835,9 @@ _RANK = {"recovery": 0, "endurance": 0, "endurance_intervals": 0,
          "sweet_spot": 2, "sweet_spot_ladder": 2,
          "threshold": 3, "threshold_ladder": 3, "over_under": 3,
          "vo2max": 4, "vo2_short": 4, "vo2_ladder": 4,
-         "anaerobic": 5, "neuromuscular": 5}
+         "anaerobic": 4, "neuromuscular": 4}
 _SLOT = {"recovery": 0, "z2": 0, "long_z2": 0, "tempo": 1, "sweetspot": 2,
-         "threshold": 3, "overunder": 3, "vo2max": 4, "sprint": 5}
+         "threshold": 3, "overunder": 3, "vo2max": 4, "sprint": 4}
 
 
 @pytest.mark.parametrize("slot", ["tempo", "sweetspot", "threshold", "z2"])

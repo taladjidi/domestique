@@ -14074,19 +14074,16 @@ def _library_rows(library) -> dict:
 
 
 # The intensity ladder a slot and a file are both placed on (D3/D4: what the
-# rider rides is the file's content, so it may not sit above the slot). The
-# classifier's content classes on one side, the planner's slot types on the
-# other; the FTP test and the race stand outside it.
-_CONTENT_RANK = {"recovery": 0, "endurance": 0, "endurance_intervals": 0,
-                 "tempo": 1, "tempo_intervals": 1, "tempo_ladder": 1,
-                 "sweet_spot": 2, "sweet_spot_ladder": 2,
-                 "threshold": 3, "threshold_ladder": 3, "over_under": 3,
-                 "double_threshold": 3,
-                 "vo2max": 4, "vo2_short": 4, "vo2_ladder": 4,
-                 "anaerobic": 5, "neuromuscular": 5}
+# rider rides is the file's content, so it may not sit above the slot). A
+# file's rung is the rung of the slot type its content maps to
+# (_CONTENT_CLASS_TO_SESSION_TYPE, the planner's own map -- an anaerobic file
+# IS a vo2max session, an over-under file an overunder one), so the variety
+# floors that place content by class keep what they placed. VO2max and
+# sprint share the top rung: both are maximal work, and neither is a
+# downshift of the other. The FTP test and the race stand outside the ladder.
 _SLOT_RANK = {"recovery": 0, "z2": 0, "long_z2": 0, "endurance": 0, "tempo": 1,
               "sweetspot": 2, "threshold": 3, "overunder": 3, "double_threshold": 3,
-              "vo2max": 4, "sprint": 5}
+              "vo2max": 4, "sprint": 4}
 
 
 def _above_slot(slot_type: str, row) -> bool:
@@ -14094,7 +14091,8 @@ def _above_slot(slot_type: str, row) -> bool:
     cap = _SLOT_RANK.get(slot_type)
     if cap is None or row is None:
         return False
-    return _CONTENT_RANK.get(_content_class_for_row(row), 0) > cap
+    served = _CONTENT_CLASS_TO_SESSION_TYPE.get(_content_class_for_row(row), "")
+    return _SLOT_RANK.get(served, 0) > cap
 
 
 def _within_slot(slot_type: str, library) -> list:

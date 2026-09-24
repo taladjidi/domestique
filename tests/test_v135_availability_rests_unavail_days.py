@@ -230,8 +230,10 @@ class TestCurrentWeekRestsUnavailableDays(CurrentWeekAvailabilityBase):
             if row is None:     # a day already behind today: a record, untouched
                 self.assertEqual(sess["tss_estimate"], tss)
             else:
-                self.assertEqual(sess["tss_estimate"],
-                                 round(float(row["TSS"]) * dur / float(row["Duration(min)"])))
+                load = float(row["TSS"]) * dur / float(row["Duration(min)"])
+                # ...within the tolerance the final step re-stamps at (6.8).
+                self.assertLessEqual(abs(sess["tss_estimate"] - load),
+                                     (tp._MATCH_BUDGET_TOLERANCE - 1) * load + 1)
 
 
 if __name__ == "__main__":

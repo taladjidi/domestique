@@ -1240,3 +1240,48 @@ def test_l3_regenerate_twice_gives_the_same_plan():
                                               s.tss_estimate, s.zwo_file) for s in w.sessions])
                      for w in ws]
     assert fp(once) == fp(twice)
+
+
+# L-4 (second evaluation): a served file fits its slot, or the slot takes the
+# file's length when the day and the week have room for it.
+
+def _lib_of(*files):
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    return [rows[f] for f in files]
+
+
+_ANA59 = "anaerobic_2x2min-2min_125pct_59min.zwo"
+
+
+def test_l4_a_file_that_fits_is_served_first():
+    """A slot the anaerobic ceiling cut to 50 gets an anaerobic file that
+    fits 50 minutes when the library has one."""
+    wk = _w([_s(1, "vo2max", 59, 70, _ANA59), _s(3, "z2", 60, 45)], target=900)
+    clock.freeze(_MON)
+    tp.finalize_weeks([wk], _goal())
+    s = wk.sessions[0]
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    assert s.duration_min == 50 and float(rows[s.zwo_file]["Duration(min)"]) <= 50, \
+        (s.duration_min, s.zwo_file)
+
+
+def test_l4_a_slot_takes_its_files_length_when_the_day_and_week_allow():
+    """No file fits (a library of one): the slot takes the file's 59 minutes
+    rather than leaving 9 the week never counted."""
+    lib = _lib_of(_ANA59, Z2)
+    wk = _w([_s(1, "vo2max", 59, 70, _ANA59), _s(3, "z2", 60, 45)], target=900)
+    clock.freeze(_MON)
+    tp.finalize_weeks([wk], _goal(), library=lib)
+    assert wk.sessions[0].duration_min == 59
+
+
+def test_l4_the_slot_does_not_grow_past_the_day_or_the_week():
+    lib = _lib_of(_ANA59, Z2)
+    tight_day = _goal(daily_max_hours={d: (50 / 60 if d == 1 else 2.0) for d in range(6)})
+    wk = _w([_s(1, "vo2max", 59, 70, _ANA59)], target=900)
+    clock.freeze(_MON)
+    tp.finalize_weeks([wk], tight_day, library=lib)
+    assert wk.sessions[0].duration_min <= 50
+    wk = _w([_s(1, "vo2max", 50, 60, _ANA59), _s(3, "z2", 60, 40)], target=100)
+    tp.finalize_weeks([wk], _goal(), library=lib)
+    assert wk.sessions[0].duration_min == 50

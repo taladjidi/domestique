@@ -14358,9 +14358,68 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     # heavier than the one it replaces (match_zwo's 10 %), which the budget
     # then answers by shortening again -- each round only shortens, so it
     # settles; three rounds is a guard.
+    def _fit_files():
+        # A served file fits its slot, or the slot takes the file's length when
+        # the day and the week have room for it (the second evaluation of
+        # afec7c6a, L-4): the rider's head unit plays the whole file, so a
+        # 59-minute anaerobic file on a slot the type ceiling cut to 50 was 9
+        # minutes the week never counted. A shorter easy file on a longer slot is
+        # the documented extend-on-trainer contract (R4a) and stays.
+        for w in ahead:
+            room = net(w)
+            room = float(w.tss_target or 0) if room is None else room
+            room *= _VOLUME_CEILING_TOLERANCE
+            load = sum(float(x.tss_estimate or 0) for x in w.sessions
+                       if x is not None and x.session_type != "rest" and x.day >= today
+                       and not getattr(x, "is_race", False))
+            for s in w.sessions:
+                if (not _pending_ahead(s, today) or _rider_owned(s)
+                        or s.session_type == "ftp_test" or getattr(s, "is_opener", False)):
+                    continue
+                row = rows.get((s.zwo_file or "").strip())
+                if row is None:
+                    continue
+                fd = int(round(float(row.get("Duration(min)") or 0)))
+                # A file within a few minutes of its slot fits: its warm-up
+                # rounding, not work the week did not count.
+                slot = int(s.duration_min or 0)
+                if fd <= slot + max(3, 0.05 * slot):
+                    continue
+                # First a file of the same content that fits the slot: a longer
+                # hard slot spends intensity the week's hard share did not plan.
+                cc = _content_class_for_row(row)
+                fits = [r for r in lib if _content_class_for_row(r) == cc
+                        and slot - _slot_file_band_min(slot)
+                        <= float(r.get("Duration(min)") or 0) <= slot + max(3, 0.05 * slot)]
+                if fits:
+                    _was = (s.zwo_file, s.zwo_name, s.duration_min, s.tss_estimate)
+                    _serve_file(s, fits, week_num=w.week_num, plan_start_date=anchor,
+                                seed_salt=seed_salt, micro_only=micro)
+                    _restamp(s, rows)
+                    _new = rows.get((s.zwo_file or "").strip())
+                    if (_new is not None
+                            and float(_new.get("Duration(min)") or 0) <= slot + max(3, 0.05 * slot)
+                            and float(s.tss_estimate or 0) <= float(_was[3] or 0) + 0.5):
+                        load += float(s.tss_estimate or 0) - float(_was[3] or 0)
+                        continue             # a file that fits, and no heavier
+                    s.zwo_file, s.zwo_name, s.duration_min, s.tss_estimate = _was
+                # Longer, then, only where the week may carry more: never in a
+                # taper or an unload week, whose load is set against their block.
+                if str(getattr(w, "phase", "")).lower() == "taper" or _is_unload_week(w):
+                    continue
+                cap, _ = _date_cap_min(goal, s.day, cal)
+                per_min = float(s.tss_estimate or 0) / max(1, int(s.duration_min or 0))
+                extra = per_min * (fd - int(s.duration_min or 0))
+                if fd > cap or (w.tss_target and load + extra > room):
+                    continue
+                s.duration_min = fd
+                _restamp(s, rows)
+                load += extra
+
+
     def _state():
         return [sig(s) for w in ahead for s in w.sessions if s is not None]
-    for _round in range(3):
+    for _round in range(4):
         _was = _state()
         _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
                                        normal_week=normal_week, library=lib)
@@ -14376,8 +14435,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
             for s in w.sessions:
                 if _pending_ahead(s, today) and not _rider_owned(s):
                     _restamp(s, rows)
+        _fit_files()
         if _state() == _was:
             break
+
 
     # 6.3 -- last: nothing above may reshape a day behind the rider. A
     # missed session moved away and lost at its destination comes back on its

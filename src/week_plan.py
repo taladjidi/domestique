@@ -347,13 +347,14 @@ class TrainingWeek:
 
         # 1. Days the athlete cannot ride carry nothing.
         if self.ctx.unavailable and self.ctx.unavailable(session.day):
-            return self._accept(self._as_rest(session, REST_UNAVAILABLE))
+            return self._accept(self._as_rest(session, REST_UNAVAILABLE, "unavailable"))
         wd = session.day.weekday()
         if not availability.trains_on(goal, wd):
-            return self._accept(self._as_rest(session, "Rest -- recovery takes priority"))
+            return self._accept(self._as_rest(session, "Rest -- recovery takes priority", ""))
 
         if session.session_type == "rest":
-            return self._accept(self._as_rest(session, session.description))
+            return self._accept(self._as_rest(session, session.description,
+                                              getattr(session, "rest_reason", "") or ""))
 
         # 2. Per-day duration cap, and the per-TYPE ceiling. Both are upper
         #    bounds on the same number and the tighter one wins: a 3-hour
@@ -432,11 +433,12 @@ class TrainingWeek:
             self._hard_tss += float(session.tss_estimate or 0.0)
         return session
 
-    def _as_rest(self, session, why):
+    def _as_rest(self, session, why, reason="budget"):
         session.session_type = "rest"
         session.duration_min = 0
         session.tss_estimate = 0
         session.description = why
+        session.rest_reason = reason
         # A rest slot must not keep the hard workout file it was carrying --
         # that mismatch is what _enforce_slot_file_coherence existed to sweep
         # up afterwards, and it is free to prevent here.

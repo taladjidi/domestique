@@ -822,6 +822,7 @@ def test_m2_a_day_the_budget_rested_is_not_a_free_slot():
     for s in plan["weeks"][0]["sessions"]:
         if s["day"] == "2026-09-19":
             s["description"] = tp.BUDGET_REST
+            s["rest_reason"] = "budget"
     clock.freeze(G0 + _dt.timedelta(days=3))
     assert not [x for x in app_module._compute_missed_suggestions(plan, G0 + _dt.timedelta(days=3))
                 if x.get("suggested_date") == "2026-09-19"]
@@ -1062,3 +1063,53 @@ def test_mf1_zeroing_the_destination_restores_the_session(tmp_path, monkeypatch)
 def test_mf1_a_regenerate_after_a_move_restores_the_session(tmp_path, monkeypatch):
     plan = _through_app(tmp_path, monkeypatch, _moved_plan(), "/api/plan/regenerate", {})
     assert not _nowhere(plan)
+
+
+# MF-2 (second evaluation): a rest a pass wrote for a reason is marked with
+# a reason code where it is written, and the auto-move reads the code.
+
+@pytest.mark.parametrize("writer", ["plan_week spent budget", "ceiling", "unload week"])
+def test_mf2_every_reasoned_rest_carries_its_reason(writer):
+    s = _s(3, "z2", 60, 45)
+    wk = _w([s], target=900)
+    if writer == "plan_week spent budget":
+        clock.freeze(_MON)
+        pw = tp.plan_week(1, _MON, tp.Phase(name="base", start=_MON, end=_MON + _dt.timedelta(days=6),
+                                             weeks=1, focus="", weekly_tss_target=100, z2_pct=80,
+                                             hit_per_week=1, session_types=["z2"]),
+                          _goal(), False, completed_tss=400, tss_target=100)
+        rests = [x for x in pw.sessions if x.session_type == "rest" and x.day.weekday() != 6]
+        assert rests and all(getattr(x, "rest_reason", "") == "budget" for x in rests), \
+            [(x.day, x.description, getattr(x, "rest_reason", None)) for x in rests]
+        return
+    if writer == "ceiling":
+        wk = _w([_s(0, "z2", 120, 90), _s(1, "z2", 120, 90), _s(2, "z2", 120, 90)], target=90)
+        tp._enforce_weekly_volume_ceiling([wk])
+        rests = [x for x in wk.sessions if x.session_type == "rest"]
+        assert rests and all(x.rest_reason == "budget" for x in rests)
+        return
+    if writer == "unload week":
+        b = [_w([_s(7 * i + d, "z2", 60, 45) for d in range(6)] + [_s(7 * i + 6, "rest", 0, 0, "")],
+                n=i + 1, first=7 * i, last=7 * i + 6) for i in range(3)]
+        sb = _w([_s(21 + d, "z2", 90, 70) for d in range(6)] + [_s(27, "rest", 0, 0, "")],
+                n=4, first=21, last=27, stepback=True, target=100)
+        clock.freeze(_MON)
+        tp._enforce_stepback_is_lightest(b + [sb])
+        rests = [x for x in sb.sessions if x.session_type == "rest" and x.day != _d(27)]
+        assert rests and all(x.rest_reason == "unload" for x in rests)
+
+
+@pytest.mark.parametrize("reason", ["budget", "unload", "race_week", "unavailable", "readiness"])
+def test_mf2_a_reasoned_rest_is_not_a_free_slot(reason):
+    """Whatever its text says -- the evaluator's test_B used plan_week's
+    dynamic "Rest — this week's TSS budget is already spent (300 of 400)."
+    and the week owner's "Rest -- no room left in the week"."""
+    import app as app_module
+    plan, tue = _missed_week_plan()
+    for s in plan["weeks"][0]["sessions"]:
+        if s["day"] in ("2026-09-19", "2026-09-20"):
+            s.update(session_type="rest", duration_min=0, tss_estimate=0, zwo_file="",
+                     description="Rest -- no room left in the week", rest_reason=reason)
+    t = G0 + _dt.timedelta(days=3)
+    assert not [x for x in app_module._compute_missed_suggestions(plan, t)
+                if x.get("suggested_date") in ("2026-09-19", "2026-09-20")]

@@ -13740,7 +13740,7 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
         if sess is None:
             return False
         stype = sess.get("session_type")
-        if stype == "rest" and (sess.get("description") or "") in tp.REASONED_REST:
+        if stype == "rest" and sess.get("rest_reason"):
             return False
         if stype != "rest":
             # The first-fit allowed only empty rest slots, so a rider whose

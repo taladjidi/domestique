@@ -1447,10 +1447,6 @@ RAMP_AGGRESSIVE   = 7
 # What a day the weekly budget rested says. The auto-move reads it: a day the
 # budget emptied is not a free slot for a missed session.
 BUDGET_REST = "Rest — weekly volume ceiling (recent load)"
-# Every rest a pass writes for a reason -- the budget, the unload week, the
-# race week, a date the rider is away -- as opposed to the rhythm's rest days.
-REASONED_REST = frozenset({BUDGET_REST, REST_UNAVAILABLE, "Rest — recovery week",
-                           "Rest — race week", "Rest day"})
 
 
 # Activities that are not rides: they never count as a ride's load. Moved here
@@ -2352,6 +2348,13 @@ class PlannedSession:
     # _demote_hit_window + _enforce_weekly_hit_cap and round-tripped through the
     # plan dict (E7) so the eve-guard / caps / reforecast never flatten it.
     is_opener: bool = False
+    # Why a rest slot is rest, set where the rest is written: "" for the
+    # week's own rest days, else "budget" (the week's load is spent), "unload"
+    # (the recovery week), "race_week", "unavailable" (the rider is away or
+    # the day has no hours), "readiness" (a forced rest). The auto-reschedule
+    # reads it: a reasoned rest is not a free slot (the second evaluation of
+    # afec7c6a, MF-2 -- matching description text missed half the writers).
+    rest_reason: str = ""
     # v3.11.5 — why a missed session's load was dropped / recycled, or what a
     # P2.1 (v3.0.0, G10) — execution score, written at completion-match time
     # by app._apply_rematch_preview_to_plan: {score, basis, components,
@@ -4360,6 +4363,7 @@ def plan_week(
                     "Rest — this week's TSS budget is already spent "
                     f"({tss_allocated:.0f} of {tss_target:.0f})."
                 ),
+                rest_reason="budget",
             ))
             continue
         remaining_days = sum(
@@ -6907,7 +6911,8 @@ def _solve_week_assignment(out: list, slots: list, budget: "IntensityBudget",
             _trial[off] = PlannedSession(
                 day=day, day_name=day_name, session_type="rest",
                 duration_min=0, tss_estimate=0,
-                description="Rest — the week's work is already accounted for")
+                description="Rest — the week's work is already accounted for",
+                rest_reason="budget")
         else:
             sess = _make_session_from_row(row, day, day_name, phase_name)
             # The same clamp the main loop applies after building a session:
@@ -7045,7 +7050,8 @@ def _repair_week(out: list, slots: list, budget: "IntensityBudget",
                 trial[off] = PlannedSession(
                     day=sess.day, day_name=sess.day_name, session_type="rest",
                     duration_min=0, tss_estimate=0,
-                    description="Rest — the week's work is already done")
+                    description="Rest — the week's work is already done",
+                    rest_reason="budget")
                 gain = base - _week_distance(_week_band_minutes(trial, row_for_file),
                                              budget)
                 if gain > _REPAIR_MIN_GAIN and (best is None or gain > best[0]):
@@ -10486,6 +10492,7 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.duration_min = 0
             slot.tss_estimate = 0
             slot.description = BUDGET_REST
+            slot.rest_reason = "budget"
             slot.zwo_file = ""
             slot.zwo_name = ""
 
@@ -10611,6 +10618,7 @@ def _enforce_stepback_is_lightest(weeks: list) -> None:
             slot.duration_min = 0
             slot.tss_estimate = 0
             slot.description = "Rest — recovery week"
+            slot.rest_reason = "unload"
             slot.zwo_file = ""
             slot.zwo_name = ""
 
@@ -11263,6 +11271,7 @@ def _apply_race_week_shape(weeks: list, goal, library=None) -> None:
             slot.duration_min = 0
             slot.tss_estimate = 0
             slot.description = "Rest — race week"
+            slot.rest_reason = "race_week"
             slot.zwo_file = ""
             slot.zwo_name = ""
 
@@ -12176,6 +12185,7 @@ def reforecast(
                     s.duration_min = 0
                     s.tss_estimate = 0
                     s.description = REST_UNAVAILABLE
+                    s.rest_reason = "unavailable"
                     s.zwo_file = ""
                     s.zwo_name = ""
                     if getattr(s, "status", "") == "missed":
@@ -13102,6 +13112,7 @@ def _apply_reforecast_to_dict(
             s_json["status"] = new_status
             s_json["moved_from"] = new_moved_from
             s_json["auto_moved"] = bool(getattr(src, "auto_moved", False))
+            s_json["rest_reason"] = getattr(src, "rest_reason", "") or ""
             # E7: round-tripped pins travel with the write so the dict never
             # loses them on a rewrite (they came IN via
             # _plan_dict_to_planned_weeks and are not mutated by reforecast).
@@ -14076,6 +14087,7 @@ def _rest_unavailable(s) -> None:
     s.duration_min = 0
     s.tss_estimate = 0
     s.description = REST_UNAVAILABLE
+    s.rest_reason = "unavailable"
     s.zwo_file = ""
     s.zwo_name = ""
     s.is_opener = False
@@ -16470,7 +16482,7 @@ def adjust_today_session(
             day=planned.day, day_name=planned.day_name,
             session_type="rest", duration_min=0, tss_estimate=0,
             description="Forced rest — HRV below SWC for 3+ days (Plews protocol).",
-            adapted=True,
+            adapted=True, rest_reason="readiness",
         ), "HRV below SWC 3+ days → forced rest"
 
     if hrv_streak_below_swc == 2:
@@ -16499,7 +16511,7 @@ def adjust_today_session(
             day=planned.day, day_name=planned.day_name,
             session_type="rest", duration_min=0, tss_estimate=0,
             description="Forced rest — readiness below 40.",
-            adapted=True,
+            adapted=True, rest_reason="readiness",
         ), f"Readiness {score:.0f} < 40 → forced rest"
 
     if score < 60 and planned.session_type in ("vo2max", "threshold", "overunder", "sweetspot", "tempo", "long_z2", "ftp_test"):

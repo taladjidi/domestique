@@ -188,12 +188,17 @@ def test_e2_matrix_clip_and_taper_invariants(matrix, runway_weeks, offset):
         f"taper wk1 {t1} > 0.65×{peak_ref} (runway {runway_weeks}w offset {offset})")
     assert race_training < t1
 
-    # 6. Openers at T-1, ≤50 min.
+    # 6. Openers at T-1, ≤50 min -- unless T-1 is the rider's rest day
+    # (Monday here), which holds nothing (contract 6.9, OWN-6).
     eve = [(f, du) for r in rows
            for d, f, du in zip(r["days"], r["is_opener"], r["dur"])
            if target - d == 1]
-    assert eve and eve[0][0], "T-1 opener missing"
-    assert eve[0][1] <= 50
+    assert eve
+    if (target - 1) % 7 == 1:          # ordinals: date.fromordinal(1) is a Monday
+        assert eve[0] == (False, 0), "an opener on the rider's rest day"
+    else:
+        assert eve[0][0], "T-1 opener missing"
+        assert eve[0][1] <= 50
 
 
 def _legacy_serial_build(runway_weeks, offset):

@@ -50,12 +50,15 @@ def _generate(carried, caplog):
 
 
 def test_a_detrained_rider_ramped_hard_is_reported(caplog):
-    """Carrying 180 TSS a week and handed a full plan: the ratio the rule
+    """Carrying 40 TSS a week and handed a full plan: the ratio the rule
     exists for. The number is the rider's own recent load, which is why the
-    check could not live in ALL_CHECKS -- those take a plan and no rider."""
-    said = _generate(180.0, caplog)
+    check could not live in ALL_CHECKS -- those take a plan and no rider.
+    (180 until the final step held every week to its budget: that rider's
+    weeks now ramp at the ramp's own 1.3x, and the report is rightly quiet;
+    a rider this detrained is still taken over by the sessions' floor.)"""
+    said = _generate(40.0, caplog)
     assert said, (
-        "generate_plan produced a plan for a rider carrying 180 TSS/week and "
+        "generate_plan produced a plan for a rider carrying 40 TSS/week and "
         "said nothing about the ramp; either the call was dropped or the rule "
         "stopped firing")
     assert "week=" in said[0]

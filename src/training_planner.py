@@ -37,12 +37,14 @@ import availability  # the one per-day training cap (see src/availability.py)
 import clock  # the one clock every module reads (see src/clock.py)
 import argparse
 import asyncio
+import copy
 import hashlib
 import inspect
 import json
 import logging
 import math
 import os
+import re
 import shutil
 import sys
 import threading
@@ -8971,16 +8973,13 @@ def generate_plan(
                     if 0 <= off < len(sampled) and sampled[off] is not None:
                         pw.sessions[off] = sampled[off]
 
-                # Apply unavailable-period overrides + final fallback match_zwo for
-                # any slot the sampler couldn't fill (rare — usually only ftp_test).
+                # Unavailable periods + final fallback match_zwo for any slot the
+                # sampler couldn't fill (rare — usually only ftp_test). Marked
+                # here as well as enforced by the final step: the stepback
+                # rhythm reads a holiday week off these rows as it builds.
                 for day_idx, s in enumerate(pw.sessions):
                     if _in_unavailable(s.day):
-                        s.session_type = "rest"
-                        s.duration_min = 0
-                        s.tss_estimate = 0
-                        s.description = REST_UNAVAILABLE
-                        s.zwo_file = ""
-                        s.zwo_name = ""
+                        _rest_unavailable(s)
                         continue
                     if s.session_type == "ftp_test":
                         continue
@@ -9085,12 +9084,7 @@ def generate_plan(
                     continue
                 hours = float(availability_overrides[d_iso])
                 if hours <= 0:
-                    s.session_type = "rest"
-                    s.duration_min = 0
-                    s.tss_estimate = 0
-                    s.description = REST_UNAVAILABLE
-                    s.zwo_file = ""
-                    s.zwo_name = ""
+                    continue        # a closed date: the final step's rule
                 else:
                     new_dur = max(0, int(round(s.duration_min * scale)))
                     s.duration_min = new_dur
@@ -9118,25 +9112,6 @@ def generate_plan(
                                 f"{s.session_type} ({new_dur}min) — sampled from library"
                             )
 
-    # v1.3.4 fix: final sweep — any non-rest session that still has
-    # zwo_file="" gets a match_zwo call. The FTP-test injector (and a few
-    # other paths) deliberately leave zwo_file="" for downstream resolution;
-    # without this sweep those land on the dashboard as yellow ⚠.
-    for pw in weeks:
-        for day_idx, s in enumerate(pw.sessions):
-            if s.session_type == "rest":
-                continue
-            if getattr(s, "zwo_file", "") or "":
-                continue
-            try:
-                match_zwo(s, library, week_num=pw.week_num,
-                          day_idx=day_idx, used_names=used_names_set,
-                          plan_start_date=plan_start_date,
-                          seed_salt=seed_salt, micro_only=_micro)
-            except Exception:  # noqa: BLE001
-                log.debug("generate_plan final sweep match_zwo failed",
-                          exc_info=True)
-
     # Audit: if match_zwo fell through to the empty-candidates path, surface it
     # once at the end rather than silently producing zwo_file="" sessions.
     if unmatched_count:
@@ -9148,9 +9123,9 @@ def generate_plan(
         )
 
     # v1.11.0 IMPL-EVENT (P1, the lever) — event long-ride progression. Applied
-    # HERE: after the sampler + all utilization/re-match passes, and right BEFORE
-    # the authoritative availability clamp below (which then validates it stays
-    # within max_hours_for_day). Grows the weekend long ride toward 0.8× event
+    # HERE: after the sampler + all utilization/re-match passes, and BEFORE the
+    # final step's per-day clamp (which then holds it within the day's
+    # hours). Grows the weekend long ride toward 0.8× event
     # duration (+25 min/wk from current longest), capped at 5h + weekend hours,
     # ×0.72 on stepback, STOPPING ≥3 weeks out so the taper owns the long ride.
     if event_targets is not None:
@@ -9169,33 +9144,6 @@ def generate_plan(
                 max_weekend_min=_mw_min,
                 is_stepback=getattr(_w, "is_stepback", False))
 
-    # v2.1.0 (E1) — ENFORCE the load-based weekly volume ceiling. Until now the
-    # plan's REAL weekly volume was one library workout per available day, each
-    # clamped only to that day's availability — so generous availability gave a
-    # ~24.5h week regardless of recent load. Each week's tss_target (the
-    # LoadRamp's budget) now carries the load-based ceiling, but nothing trimmed
-    # the summed week down to it. This pass does: it shrinks the EASIEST
-    # sessions first and converts the lowest-priority days to rest until the
-    # week's summed planned TSS sits at its tss_target, never touching HIT
-    # sessions and keeping ≥1 rest day + the polarized shape. Runs after the
-    # event long-ride growth (so the long ride is preserved last) and right
-    # before the authoritative per-day clamp.
-    _enforce_weekly_volume_ceiling(weeks)
-
-    # v2.1.0 (F4) — no hard session in the final days before the A event (event
-    # goals only). Demotes a taper-eve VO2max/threshold block to an easy opener.
-    if goal.goal_type in ("event", "ctl") and goal.target_date:
-        _enforce_event_taper_eve(weeks, goal.target_date)
-    # F3 — B/C mini-tapers apply on ANY goal that carries intermediate races, not
-    # just event/ctl: a rider on an FTP / VO2max / general block can still target
-    # a B/C race. Safe + a no-op without B/C events (the helper skips priority-A
-    # and, when there's no A target_date, simply has no macro-taper span to dodge).
-    _apply_secondary_event_tapers(weeks, goal)  # F7: B/C mini-tapers
-    # F2b (v2.5.0): openers + final-days composition, AFTER the caps/eve-guard
-    # (composes on top) and BEFORE the race-day marking (never touches it).
-    if goal.goal_type in ("event", "ctl") and goal.target_date:
-        _apply_race_week_shape(weeks, goal, library)
-    _mark_race_days(weeks, goal)  # issue #7: race day shows the race, not a session
     # Re-entry after a short break (SCIENCE.md): a 4-14 day gap reshapes the
     # first week — planned intensity forward, volume trimmed — instead of
     # opening on the lightest session in the library. No-op when the caller
@@ -9229,90 +9177,9 @@ def generate_plan(
                 _m = match_zwo(_cand, library, micro_only=_micro)
                 _w.sessions[_off] = _m if (_m and getattr(_m, "zwo_file", "")) else _cand
 
-    # v1.8.21 — AUTHORITATIVE per-day availability clamp. Session durations are
-    # set from matched ZWO files at FOUR sites (sampler + 3 utilization/
-    # re-match passes) plus match_zwo, several of which admit a file up to
-    # ~25min over the slot for pool breadth. The rider only has the day's
-    # available minutes, so the PLANNED duration must never exceed them. This
-    # single final pass caps every non-rest session to its effective cap
-    # (per-DATE availability override if the user set one, else the goal's
-    # per-weekday max), scaling TSS proportionally. Reported bug: a 90-min
-    # availability still produced 99–115min weekday sessions and 2.5h weekend
-    # sessions. The matched ZWO may be longer and is paced on the trainer
-    # (the modal's showGap banner explains the difference).
-    _avail = availability_overrides or {}
-    for w in weeks:
-        for s in w.sessions:
-            if s.session_type == "rest" or (s.duration_min or 0) <= 0:
-                continue
-            # FC3 (v2.5.0, D9/L3-9): the race entry is sized ONLY by
-            # _mark_race_days (self-clamping to the day cap, E9) — a second
-            # clamp here re-shrunk it against per-date overrides/TYPE_CEILING
-            # on some paths but not others, flapping the race card.
-            if _protect_race(s):
-                continue
-            d_iso = s.day.isoformat() if hasattr(s.day, "isoformat") else str(s.day)
-            if d_iso in _avail:
-                cap_min = int(float(_avail[d_iso]) * 60)
-            else:
-                wd = s.day.weekday() if hasattr(s.day, "weekday") else 0
-                cap_min = int(goal.max_hours_for_day(wd) * 60)
-            # FIX-2 (safety): final per-session-type duration ceiling. The
-            # inline sampler clamp (~line 4232) only covers sampler-picked
-            # slots — plan_week skeleton HITs, floor/Rønnestad swaps and the
-            # availability rescale above can all leave a hard session at the
-            # full day cap (the "VO2max every day at 120 min" bug). This last
-            # pass guarantees min(day_cap, per-type ceiling) for every session
-            # regardless of origin. Prefer the content_class ceiling (an
-            # anaerobic/vo2_short file maps to session_type='vo2max' but has a
-            # tighter cap); endurance types have no ceiling → day-cap only.
-            _cc = _content_class_for_zwo(getattr(s, "zwo_file", "") or "")
-            _ceil = TYPE_CEILING.get(_cc) or TYPE_CEILING.get(s.session_type)
-            _eff = cap_min if _ceil is None else (
-                _ceil if cap_min <= 0 else min(cap_min, _ceil))
-            # B4: on a step-back week the long ride must stay short (≤2.5h). The
-            # sampler/match can set a weekend endurance slot to the matched file's
-            # full length (the prescription↔file decoupling), so a deload picked up
-            # a 205-min "long ride". Endurance types have no TYPE_CEILING, so clamp
-            # them here (this is the authoritative duration pass).
-            if (getattr(w, "is_stepback", False)
-                    and (_eff <= 0 or _eff > STEPBACK_LONG_RIDE_CAP_MIN)):
-                _eff = STEPBACK_LONG_RIDE_CAP_MIN
-            if _eff > 0 and s.duration_min > _eff:
-                _scale = _eff / float(s.duration_min)
-                s.tss_estimate = round((s.tss_estimate or 0) * _scale)
-                s.duration_min = _eff
-
     # B5 — re-route any easy slot that the sampler/match left holding a too-hard
     # (interval-structured) file to a genuine easy file, and recompute its TSS.
-    # Runs after the per-day clamp so the re-match targets the final duration.
     _enforce_easy_slot_content(weeks, library, plan_start_date, seed_salt)
-
-    # 48 h between hard days, on the assembled plan -- and BEFORE the taper
-    # re-anchor below, not after it. The taper pass measures its 0.60x/0.40x
-    # against the FINAL build-week sums; easing a build week afterwards lowers
-    # those sums and leaves the taper rows sized against a reference that no
-    # longer exists, which showed up as taper wk1 at 242 TSS against a ceiling
-    # of 238. Easing only ever reduces load, so nothing after this can push a
-    # week back over its budget.
-    _spaced = _space_hard_days_across_plan(weeks, library,
-                                           plan_start_date=plan_start_date,
-                                           seed_salt=seed_salt)
-    if _spaced:
-        log.info("eased for 48h spacing: %s", "; ".join(_spaced))
-
-    # FC2a (v2.5.0) FINAL taper budget pass: the first ceiling call ran before
-    # the authoritative per-day clamp shrank the build weeks, so its taper
-    # reference was measured against pre-clamp sums. Re-anchor the taper rows
-    # on the FINAL build-week sums (taper wk1 ≤ 0.60×, race week ≤ 0.40× the
-    # actual pre-taper max). taper_only → strict no-op for non-event plans.
-    _enforce_weekly_volume_ceiling(weeks, taper_only=True)
-
-    # B3 — guarantee each step-back week is the lightest in its block. Runs LAST,
-    # after the per-day clamp above could have trimmed a build week below the
-    # deload (e.g. a pre-taper peak week), which would invert the 3-up-1-down
-    # rhythm. Only shrinks easy volume in the deload; never touches build weeks.
-    _enforce_stepback_is_lightest(weeks)
 
     # PART B (B-LOCKED-4): backdated entry — ELAPSED weeks stay as rows
     # (week_num/tss_target kept: the planned-CTL annotators + position math
@@ -9322,12 +9189,6 @@ def generate_plan(
     # freshly-missed → refit storm at entry. start_date None ⇒ no-op.
     _strip_elapsed_sessions(weeks, _entry_anchor(goal))
 
-    # R4/R5 (2026-07-07) — R4a: slot/file coherence invariant, ONCE, LAST
-    # (grill A2: after every clamp/shrink pass so rematch targets FINAL
-    # durations and a down-only residual can never re-breach a budget).
-    # 48 h between hard days, on the FINAL plan. Before the coherence pass so a
-    # session it eases gets a matching file rather than keeping the VO2 workout
-    # it no longer is.
     # The owner re-asserts every constraint over whatever the plan-level
     # policies above proposed. This is the point of the redesign: the phase
     # floors and the test injector may ask, and a week that cannot carry what
@@ -9335,9 +9196,17 @@ def generate_plan(
     for _tw in _owners:
         _tw.finish()
 
-    _enforce_slot_file_coherence(weeks, library,
-                                 plan_start_date=plan_start_date,
-                                 seed_salt=seed_salt, micro_only=_micro)
+    # The final step: races, availability, files, load, budgets, the record
+    # (contract 6.1-6.9). One implementation, every entry point's last act.
+    _cal = dict(availability_overrides or {})
+    for _lo, _hi in unavailable_periods or []:
+        _d = _lo
+        while _d <= _hi:
+            _cal[_d.isoformat()] = 0.0
+            _d += timedelta(days=1)
+    finalize_weeks(weeks, goal, library=library, calendar=_cal, rides=activities,
+                   normal_week=recent_weekly_tss, plan_start_date=plan_start_date,
+                   seed_salt=seed_salt, unload_lighter=True)
 
     _report_acwr(weeks, recent_weekly_tss)
     return phases, weeks
@@ -9401,8 +9270,10 @@ def _rested_test_day(week, around=()) -> "PlannedSession | None":
             or next((s for s in days if rested(s, False)), None))
 
 
-def _make_ftp_test(s) -> None:
-    """Turn ``s`` into the test; match_zwo serves a Coggan-20 or Ramp file."""
+def _make_ftp_test(s, library=None) -> None:
+    """Turn ``s`` into the test, serving its Coggan-20 or Ramp file now: a
+    test left fileless "for downstream resolution" depended on a sweep only
+    generate ran, and the week owner demoted a fileless test to z2."""
     old_type = s.session_type
     s.session_type = "ftp_test"
     s.zwo_file = ""
@@ -9416,6 +9287,10 @@ def _make_ftp_test(s) -> None:
         f"re-test cadence). Originally scheduled as {old_type}; the FTP-test "
         f"detector on the FIT-import path will suggest an FTP update."
     )
+    try:
+        match_zwo(s, library if library is not None else load_workout_library())
+    except Exception:  # noqa: BLE001 — the final step serves it later
+        log.debug("no FTP test file for %s", getattr(s, "day", "?"), exc_info=True)
 
 
 def _inject_mid_cycle_ftp_tests(weeks: list, phases: list) -> None:
@@ -10316,7 +10191,9 @@ _VOLUME_CEILING_TOLERANCE = 1.05
 
 
 def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
-                                   ridden=None, from_day: "date | None" = None) -> None:
+                                   ceiling_of=None, from_day: "date | None" = None,
+                                   normal_week: "float | None" = None,
+                                   library: "list | None" = None) -> None:
     """v2.1.0 (E1) — cap each week's summed planned TSS at its load-based ceiling.
 
     The ceiling is the week's own ``tss_target``, the LoadRamp's budget (Step
@@ -10345,6 +10222,17 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
     clamp, so the taper budget anchors on the FINAL build-week sums (the first
     call ran mid-pipeline, before the clamp shrank the builds). A strict no-op
     for plans without a taper (non-event parity).
+
+    The final step (finalize_weeks) is the one caller since cause 6 of the
+    2026-09-23 audit, and hands it three things the entry points never did:
+    ``ceiling_of`` -- a week's NET budget (D2: what is left of the calendar
+    week once the rides since Monday are off it), ``normal_week`` -- the
+    rider's normal week, the taper's reference when no full build week comes
+    before it (a micro-plan's taper ran uncapped: 486 TSS against a 228
+    target 9 days out), and ``library`` -- with it, a hard session that alone
+    takes a non-taper week over its budget is eased to endurance, since no
+    pass after the budget is set may add one that does (contract 6.7; D1: the
+    load budget before the session count and variety).
     """
     if not weeks:
         return
@@ -10368,6 +10256,7 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
         return day is None or day >= from_day
 
     _taper_rows = [w for w in weeks if getattr(w, "phase", "") == "taper"]
+    _last_build: "float | None" = None
     # identity-keyed (PlannedWeek is a dataclass — .index() would deep-compare)
     _taper_pos = {id(w): i for i, w in enumerate(_taper_rows)}
     _peak_ref: "float | None" = None
@@ -10384,34 +10273,42 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
                     and ((w.end - w.start).days + 1) >= 7
                     and w.start < wk.start
                 ]
-                _peak_ref = max(
-                    (sum((s.tss_estimate or 0) for s in b.sessions
-                         if s and s.session_type != "rest")
-                     for b in _full_builds[-3:]),
-                    default=0.0,
-                )
+                _loads = [sum((s.tss_estimate or 0) for s in b.sessions
+                              if s and s.session_type != "rest"
+                              and not getattr(s, "is_race", False))
+                          for b in _full_builds[-3:]]
+                # A micro-plan has no build week before its taper: the rider's
+                # normal week is the reference instead (contract 6.4).
+                _peak_ref = max(_loads, default=0.0) or float(normal_week or 0.0)
+                # ...and a taper never asks more than the last build week.
+                _last_build = _loads[-1] if _loads else None
             _t_idx = _taper_pos[id(wk)]
             _fi = len(TAPER_FRACS) - (len(_taper_rows) - _t_idx)
             ceiling = _peak_ref * TAPER_FRACS[max(0, _fi)]
+            # A short taper row (the race-week stub) gets its days' share.
+            _span = (wk.end - wk.start).days + 1
+            _share = _span / 7.0 if 0 < _span < 7 else 1.0
+            ceiling *= _share
+            if (wk.tss_target or 0) > 0:
+                # ...and never more than the row's own target.
+                ceiling = min(ceiling, float(wk.tss_target))
             if ceiling <= 0:
-                continue  # no pre-taper reference (micro-plan) — nothing to anchor
+                continue  # no reference at all -- nothing to anchor
         else:
             ceiling = getattr(wk, "tss_target", 0) or 0
-            if ceiling <= 0:
+            _net = ceiling_of(wk) if ceiling_of is not None else None
+            if _net is not None:
+                # A PARTLY ELAPSED week: what is left to prescribe is its net
+                # budget, and a spent week (0) keeps only one short spin.
+                ceiling = _net
+            elif ceiling <= 0:
                 continue
-            if ridden is not None:
-                # A PARTLY ELAPSED week: the rider has already spent part of
-                # the week's ask, so what is left to prescribe is the target
-                # MINUS WHAT THEY RODE -- not the whole target again. Without
-                # this a mid-week replan re-prescribed a full week's load onto
-                # the days that remained, on top of the load already in the
-                # rider's legs. Measured against rides, not against the
-                # sessions the old plan happened to carry: a day ridden harder
-                # or easier than prescribed counts as it was ridden.
-                ceiling = max(0.0, ceiling - float(ridden(wk) or 0.0))
-                if ceiling <= 0:
-                    continue        # the week's ask is already spent
         budget = ceiling * _VOLUME_CEILING_TOLERANCE
+        if _is_taper and _last_build is not None:
+            # ...and a taper never asks more than the last build week, the
+            # tolerance included.
+            budget = min(budget, _last_build * _share)
+            ceiling = min(ceiling, budget)
         _shrink_order = _VOLUME_SHRINK_ORDER_TAPER if _is_taper else _VOLUME_SHRINK_ORDER
 
         def _easy_slots(_wk=wk, _order=_shrink_order):
@@ -10460,10 +10357,18 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             overage = total - ceiling
             easy = _easy_slots()
             if not easy:
-                # Only HIT (+ rest) left — never trim key intensity. The per-day
-                # clamp still caps each session; the week stays HIT-heavy by
-                # design (a polarized week with little easy volume).
-                break
+                # Only HIT (+ rest) left. Given a library to serve the eased
+                # day, the latest hard session goes to endurance and the loop
+                # sheds it like any easy day -- in the taper only when the
+                # week would otherwise outweigh the last build (the taper
+                # keeps its intensity, never more load than the build);
+                # otherwise the week stays HIT-heavy by design.
+                _over_build = (_last_build is not None
+                               and total > _last_build * _share + 1)
+                if (library is None or (_is_taper and not _over_build)
+                        or not _ease_one_hard(wk, library, _in_scope)):
+                    break
+                continue
             # Keep at least one non-rest day overall.
             non_rest = sum(1 for s in wk.sessions
                            if s and s.session_type != "rest")
@@ -10494,6 +10399,26 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.description = "Rest — weekly volume ceiling (recent load)"
             slot.zwo_file = ""
             slot.zwo_name = ""
+
+
+def _ease_one_hard(wk, library: list, in_scope) -> bool:
+    """Turn the latest hard session of ``wk`` still ahead into an endurance
+    ride of the same length, serving an easy file. False when none can be."""
+    for s in sorted(wk.sessions, key=lambda x: getattr(x, "day", date.min), reverse=True):
+        if (s is None or s.session_type in ("rest", "ftp_test") or not in_scope(s)
+                or not _session_is_hit(s) or _race_shape_frozen(s)
+                or getattr(s, "is_opener", False)):
+            continue
+        dur = int(s.duration_min or 0) or 45
+        s.session_type = "z2"
+        s.duration_min = dur
+        s.tss_estimate = round(dur / 60 * TSS_PER_HOUR["z2"])
+        s.description = f"z2 ({dur}min) — eased: the week's load is already spent"
+        s.zwo_file = ""
+        s.zwo_name = ""
+        _serve_file(s, library)
+        return True
+    return False
 
 
 def _enforce_stepback_is_lightest(weeks: list) -> None:
@@ -12046,7 +11971,6 @@ def reforecast(
           }
     """
     today = clock.today()
-
     def _tsb_at(d: date) -> float | None:
         if tsb_series is not None:
             return tsb_series.get(d)
@@ -12603,29 +12527,16 @@ def reforecast(
         downshifts or tsb_restored or acwr_scaled_week is not None
         or g3_dropped_days or touched
     ) else "no_change"
-    # B2 (v2.1.0): keep hard sessions off the event eve on the reforecast path
-    # too (see regenerate_from_today). No-op for non-event goals.
-    # FC4a (v2.5.0, L3-3): the guard passes below mutate sessions OUTSIDE the
-    # touched-day bookkeeping above, and reforecast_dict propagates ONLY
-    # touched days back into the plan dict — so their demotions/markings were
-    # silently dropped on the dict path. Snapshot → diff → register.
-    def _guard_sig(s):
-        return (s.session_type, s.duration_min, s.tss_estimate,
-                getattr(s, "zwo_file", "") or "",
-                getattr(s, "description", "") or "",
-                bool(getattr(s, "is_race", False)),
-                bool(getattr(s, "is_opener", False)))
-    _pre_guard = {s.day.isoformat(): _guard_sig(s)
-                  for pw in plan_weeks for s in pw.sessions}
-    _enforce_event_taper_eve(plan_weeks, goal.target_date)
-    _apply_secondary_event_tapers(plan_weeks, goal)  # F7: B/C mini-tapers
-    _mark_race_days(plan_weeks, goal)  # issue #7: race day shows the race, not a session
-    for pw in plan_weeks:
-        for s in pw.sessions:
-            _iso = s.day.isoformat()
-            if _pre_guard.get(_iso) != _guard_sig(s) and _iso not in seen:
-                merged_touched.append(_iso)
-                seen.add(_iso)
+    # The final step (contract 6.1-6.9). Its passes mutate sessions OUTSIDE
+    # the touched-day bookkeeping above, and reforecast_dict propagates ONLY
+    # touched days (FC4a, v2.5.0) -- so every date it changed is registered.
+    for _d in sorted(finalize_weeks(plan_weeks, goal,
+                                    calendar=availability_overrides,
+                                    rides=recent_activities)):
+        _iso = _d.isoformat()
+        if _iso not in seen:
+            merged_touched.append(_iso)
+            seen.add(_iso)
     return plan_weeks, {
         "action": action,
         "downshifts": len(downshifts),
@@ -13172,6 +13083,9 @@ def reforecast_dict(
         reforecast_goal = goal_from_dict(goal_dict)
     except Exception:  # noqa: BLE001
         reforecast_goal = Goal(goal_type="general", hours_per_week=8.0)
+    # The stored calendar, for the final step: every sync honours it, not only
+    # the sync that saved it.
+    with_calendar(reforecast_goal, plan_dict)
 
     # v1.6.1 — wrap each major step so a failure carries which step in ctx.
     try:
@@ -13371,12 +13285,18 @@ def build_recovery_ramp(
         z2_only_weeks = 2
 
     recovery_weeks = []
-    start = clock.today()
+    today = clock.today()
+    # Monday to Sunday like every other week (contract 6.2): the first row is
+    # the stub from today to Sunday, with its days' share of the week, as
+    # generate's first row is. Rows laid from today spanned two calendar
+    # weeks, so the days already ridden in this one had no row to go back to.
+    monday = today - timedelta(days=today.weekday())
     rest_days = goal.rest_days if goal else [0]
     chronic_tss = maintenance_tss  # rolling chronic load tracker
 
     for i, pct in enumerate(ramp_pcts):
-        week_start = start + timedelta(weeks=i)
+        week_start = today if i == 0 else monday + timedelta(weeks=i)
+        week_end = monday + timedelta(weeks=i, days=6)
         week_tss = maintenance_tss * pct
 
         # ACWR guardrail: cap at 1.3× rolling chronic load (Gabbett 2016)
@@ -13389,7 +13309,7 @@ def build_recovery_ramp(
         phase_name = "recon" if is_z2_only else "recovery_ramp"
 
         sessions = []
-        for d in range(7):
+        for d in range((week_end - week_start).days + 1):
             day_date = week_start + timedelta(days=d)
             weekday = day_date.weekday()  # 0=Mon..6=Sun (from actual date)
 
@@ -13431,9 +13351,9 @@ def build_recovery_ramp(
         recovery_weeks.append(PlannedWeek(
             week_num=900 + i,  # temporary numbering, fixed during assembly
             start=week_start,
-            end=week_start + timedelta(days=6),
+            end=week_end,
             phase=phase_name,
-            tss_target=round(week_tss),
+            tss_target=round(week_tss * ((week_end - week_start).days + 1) / 7),
             is_stepback=False,
             sessions=sessions,
         ))
@@ -13566,8 +13486,9 @@ def regenerate_from_today(
     # Start CTL after recovery ramp
     post_recovery_ctl = current_ctl
     for rw in recovery_weeks:
-        daily_tss = rw.tss_target / 7
-        for _ in range(7):
+        _span = (rw.end - rw.start).days + 1
+        daily_tss = rw.tss_target / _span
+        for _ in range(_span):
             post_recovery_ctl += (daily_tss - post_recovery_ctl) / 42.0
 
     # v1.11.0 IMPL-EVENT — event demand → plan targets (None for non-event goals
@@ -13741,13 +13662,11 @@ def regenerate_from_today(
                                activities, cursor, cursor + timedelta(days=6)),
                            tss_target=_budget)
 
-            # Mark unavailable days as REST
+            # Unavailable days are rest as the weeks are built (the stepback
+            # rhythm reads them); the final step enforces them again.
             for s in pw.sessions:
                 if s.day in unavailable_dates:
-                    s.session_type = "rest"
-                    s.duration_min = 0
-                    s.tss_estimate = 0
-                    s.description = "Unavailable (planned leave/injury)"
+                    _rest_unavailable(s)
 
             # Preserve daily-adapt edits: swap in the previous (adapted) session
             # for any slot whose date was already daily-adapted. This must happen
@@ -13790,7 +13709,6 @@ def regenerate_from_today(
             # Replace pw.sessions with sampled, but PRESERVE
             #   - ftp_test slots (sampler doesn't pick them)
             #   - adapted / user_moved / non-pending sessions (§6.12 contract)
-            #   - unavailable days (already converted to rest above)
             for off, legacy_s in enumerate(pw.sessions):
                 if getattr(legacy_s, "adapted", False) or getattr(legacy_s, "user_moved", False):
                     continue
@@ -13836,8 +13754,8 @@ def regenerate_from_today(
     # long ride toward 0.8× event duration (+25 min/wk from current longest),
     # capped at weekend hours, ×0.72 on stepback, STOPPING ≥3 weeks out so the
     # taper owns the long ride. No-op for non-event regens (event_targets None).
-    # Applied AFTER all session-duration / re-match passes; regenerate_from_today
-    # has no authoritative availability clamp, so this runs just before assembly.
+    # Applied AFTER all session-duration / re-match passes, before the final
+    # step's per-day clamp.
     if event_targets is not None:
         _mw_min = availability.weekend_cap_minutes(goal)
         # v2.0.3 F7: generate_plan ramps _wi over the FULL plan; here new_weeks
@@ -13861,11 +13779,7 @@ def regenerate_from_today(
                 max_weekend_min=_mw_min,
                 is_stepback=getattr(_w, "is_stepback", False))
 
-    # L3-13 (v2.5.0): the regen path runs the SAME volume ceiling as
-    # generate_plan (it had neither clamp — the comeback ramp, the one place
-    # overload matters most, was the least-clamped output in the system).
     _future_weeks = recovery_weeks + new_weeks
-    _enforce_weekly_volume_ceiling(_future_weeks)
 
     # Renumber recovery weeks
     for i, rw in enumerate(recovery_weeks):
@@ -13889,64 +13803,9 @@ def regenerate_from_today(
         "phase_weeks_status": getattr(adjusted_goal, "_phase_weeks_status", None),
     }
 
-    # B2 (v2.1.0): re-assert the F4 event-eve taper on this adaptation path too —
-    # generate_plan applies it at first build, but regenerate/reforecast/refit
-    # did not, so a hard session could resurface within EVENT_EVE_EASY_DAYS of
-    # the event after a recalc. No-op for non-event goals (target_date None).
-    _enforce_event_taper_eve(all_weeks, goal.target_date)
-    _apply_secondary_event_tapers(all_weeks, goal)  # F7: B/C mini-tapers
-    # F2b (v2.5.0): a regen rebuilds the future weeks from scratch, so the
-    # race-week openers/composition must be re-applied here too (E8 survival).
-    if goal.goal_type in ("event", "ctl") and goal.target_date:
-        _apply_race_week_shape(all_weeks, goal, library)
-    _mark_race_days(all_weeks, goal)  # issue #7: race day shows the race, not a session
-
-    # L3-13 (v2.5.0): AUTHORITATIVE per-day availability clamp, mirroring
-    # generate_plan's final pass (per-weekday goal cap + per-type ceiling +
-    # stepback long-ride cap). Future weeks only; race entries are sized by
-    # _mark_race_days alone (FC3) and preserved rider state (§6.12) is never
-    # rescaled.
-    for _w in _future_weeks:
-        for _s in _w.sessions:
-            if _s.session_type == "rest" or (_s.duration_min or 0) <= 0:
-                continue
-            if _protect_race(_s):
-                continue
-            if (getattr(_s, "user_moved", False)
-                    or getattr(_s, "dismissed_at", "")
-                    or getattr(_s, "status", "pending") != "pending"):
-                continue
-            _wd = _s.day.weekday() if hasattr(_s.day, "weekday") else 0
-            _cap_min = int(adjusted_goal.max_hours_for_day(_wd) * 60)
-            _cc = _content_class_for_zwo(getattr(_s, "zwo_file", "") or "")
-            _ceil = TYPE_CEILING.get(_cc) or TYPE_CEILING.get(_s.session_type)
-            _eff = _cap_min if _ceil is None else (
-                _ceil if _cap_min <= 0 else min(_cap_min, _ceil))
-            if (getattr(_w, "is_stepback", False)
-                    and (_eff <= 0 or _eff > STEPBACK_LONG_RIDE_CAP_MIN)):
-                _eff = STEPBACK_LONG_RIDE_CAP_MIN
-            if _eff > 0 and _s.duration_min > _eff:
-                _scale = _eff / float(_s.duration_min)
-                _s.tss_estimate = round((_s.tss_estimate or 0) * _scale)
-                _s.duration_min = _eff
-
-    # FC2a parity: re-anchor the taper budget on the FINAL (post-clamp) build
-    # sums — a strict no-op when the rebuilt span holds no taper rows.
-    _enforce_weekly_volume_ceiling(_future_weeks, taper_only=True)
-
-    # 48 h between hard days. Measured before this was here: a 40-rider sweep
-    # found back-to-back hard days ONLY in the paths that skipped this pass --
-    # 5 violating pairs in regenerate, 0 in generate -- because generate was
-    # the one entry point whose hand-assembled pass list included it. Runs
-    # before the coherence pass so an eased session gets a matching file
-    # instead of keeping the VO2 workout it no longer is.
     for _tw in _owners_rg:
         _tw.finish()
 
-    _space_hard_days_across_plan(_future_weeks, library, seed_salt=seed_salt)
-
-    # R4/R5 (2026-07-07) — R4a: slot/file coherence, ONCE, LAST (grill A2).
-    # Future weeks only; same seed anchor as this path's fallback matches.
     # The rider's "microintervals only" preference, on this path too. It was
     # honoured in generate, recalculate and extend and NOT here, so a replan --
     # the thing a rider does most -- served long-rep VO2 sessions to someone
@@ -13955,26 +13814,13 @@ def regenerate_from_today(
     # pass over the built weeks rather than a flag on one call.
     _enforce_microintervals_only(_future_weeks, library, _micro_only_goal(goal),
                                  seed_salt=seed_salt)
-    _enforce_slot_file_coherence(
-        _future_weeks, library,
-        plan_start_date=(phase_start_date if new_phases else today),
-        seed_salt=seed_salt, micro_only=bool(getattr(goal, "vo2_microintervals_only", False)))
-
-    # LAST, after every pass above: the days already behind the rider come
-    # back. Nothing here may reshape them, which is why this runs at the end.
-    _keep_elapsed_days(all_weeks, old_plan_weeks, today)
-    # And then the week the rider is standing in gets re-sized against what
-    # they actually rode. Carrying the elapsed days back in widens the week to
-    # its full ask; without this the days that remain would be sized as if the
-    # whole ask were still to come, and the rider would be handed a full week's
-    # load on top of the three days already in their legs. The same shrink
-    # pass as everywhere else, told where the week starts being the future.
-    _cur = next((w for w in all_weeks if w.start <= today <= w.end), None)
-    if _cur is not None and _cur.start < today:
-        _enforce_weekly_volume_ceiling(
-            [_cur], ridden=lambda wk: _completed_tss_in(
-                activities, wk.start, today - timedelta(days=1)),
-            from_day=today)
+    # The final step (contract 6.1-6.9): the recovery ramp's weeks included,
+    # and the days already behind the rider put back LAST, as they were.
+    _cal = {d.isoformat(): 0.0 for d in unavailable_dates}
+    finalize_weeks(all_weeks, goal, old_weeks=old_plan_weeks, library=library,
+                   calendar=_cal, rides=activities, normal_week=recent_weekly_tss,
+                   plan_start_date=(phase_start_date if new_phases else today),
+                   seed_salt=seed_salt)
     return new_phases, all_weeks, regen_info
 
 
@@ -14031,6 +13877,352 @@ def _keep_elapsed_days(all_weeks: list, old_plan_weeks: list, today: date) -> No
     new_cur.start = old_cur.start
     new_cur.tss_target = round(float(new_cur.tss_target or 0)
                                + sum(float(s.tss_estimate or 0) for s in elapsed))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# THE FINAL STEP — notes/planner-finalize-contract.md (audit 2026-09-23, cause 6)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Every entry point assembled its own tail, so availability, file matching,
+# race shaping and the volume ceiling were applied by some builders and not
+# others: regenerate refilled the days a rider had zeroed, the recovery ramp
+# served no files, extend had no ceiling and never marked a race. The rules
+# live here once, and every entry point runs this as its last act on the
+# weeks. It does not re-plan: it enforces.
+
+# The availability calendar's explicit blocks (the owner's 3.3.3 rule): plain
+# "available"/"rest" rows are the wizard's defaults materialized per date.
+CALENDAR_BLOCKS = frozenset({"holiday", "injury", "illness", "unavailable"})
+
+
+def plan_calendar(plan_dict: dict, goal=None) -> "dict[str, float]":
+    """The rider's per-date ceilings in a stored plan, ISO date -> hours.
+
+    Every explicit block of the availability calendar, every date of an
+    unavailable period (0 h), and a plain entry only where it OPENS more time
+    than the goal's weekday rule gives -- a stale wizard default can never
+    close a day the rider trains on now.
+    """
+    out: "dict[str, float]" = {}
+    for iso, e in ((plan_dict or {}).get("availability") or {}).items():
+        if not isinstance(e, dict):
+            continue
+        try:
+            h = max(0.0, float(e.get("hours")))
+            wd = date.fromisoformat(str(iso)[:10]).weekday()
+        except (TypeError, ValueError):
+            continue
+        if e.get("type") in CALENDAR_BLOCKS:
+            out[str(iso)[:10]] = h
+        elif goal is not None and h * 60 > availability.trainable_minutes(goal, wd):
+            out[str(iso)[:10]] = h
+    for p in (plan_dict or {}).get("unavailable_periods") or []:
+        try:
+            d, end = date.fromisoformat(p["start"]), date.fromisoformat(p["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        while d <= end:
+            out[d.isoformat()] = 0.0
+            d += timedelta(days=1)
+    return out
+
+
+def with_calendar(goal, plan_dict: dict):
+    """``goal`` carrying its stored plan's calendar, for the final step. A
+    transient attribute, like _phase_start_override: the calendar is stored
+    under plan["availability"], not in the goal block."""
+    goal._calendar = plan_calendar(plan_dict, goal)
+    return goal
+
+
+def _pending_ahead(s, today) -> bool:
+    return (s is not None and getattr(s, "day", None) is not None and s.day >= today
+            and s.session_type != "rest" and not getattr(s, "is_race", False)
+            and getattr(s, "status", "pending") == "pending"
+            and not getattr(s, "dismissed_at", ""))
+
+
+def _rider_owned(s) -> bool:
+    """What the rider did to a session, which no pass rewrites (§6.12): moved
+    it, swapped its type, or had a ride matched to it."""
+    return bool(getattr(s, "user_moved", False) or getattr(s, "user_swapped", False)
+                or getattr(s, "completion_matches", None))
+
+
+def _rest_unavailable(s) -> None:
+    """The day the rider is away: a rest day, and the marker by which the
+    stepback rhythm and asks_nothing tell a holiday from a week ridden."""
+    s.session_type = "rest"
+    s.duration_min = 0
+    s.tss_estimate = 0
+    s.description = REST_UNAVAILABLE
+    s.zwo_file = ""
+    s.zwo_name = ""
+    s.is_opener = False
+
+
+def _library_rows(library) -> dict:
+    return {(r.get("File") or "").strip(): r for r in (library or []) if r.get("File")}
+
+
+def _serve_file(s, library, **kw) -> None:
+    """Give ``s`` a library file (contract 6.2). match_zwo keeps an easy slot
+    on easy content and spends at most the slot's budget. With no candidate
+    the session keeps what it had: a blank card is not better (v3.11.5)."""
+    old = (s.zwo_file, s.zwo_name)
+    dur = int(s.duration_min or 0)
+    s.zwo_file = ""
+    s.zwo_name = ""
+    try:
+        match_zwo(s, library, exact_duration=True,
+                  micro_only=bool(kw.pop("micro_only", False)), **kw)
+    except Exception:  # noqa: BLE001 — a day without a file beats a crash
+        log.debug("final step: no file for %s", getattr(s, "day", "?"), exc_info=True)
+    if not s.zwo_file:
+        s.zwo_file, s.zwo_name = old
+    # The slot keeps the length the plan gave it (a file may be longer; the
+    # coherence pass narrates or re-matches that). Serving a file never
+    # lengthens a day -- except a test, which is its file (6.9).
+    if dur > 0 and s.session_type != "ftp_test":
+        s.duration_min = dur
+
+
+def _served_load(s, row) -> "float | None":
+    """The load of what ``s`` serves: the file's intensity over the slot's
+    length -- the rider stops a longer file at the slot, and rides an easy
+    file on past its end (the R4a coherence contract)."""
+    try:
+        fd, ft = float(row.get("Duration(min)") or 0), float(row.get("TSS") or 0)
+    except (TypeError, ValueError):
+        return None
+    if fd <= 0 or ft <= 0:
+        return None
+    return ft * float(s.duration_min or 0) / fd
+
+
+_DESC_MIN = re.compile(r"(?<![\d\-–×x~])(\d+)min")
+
+
+def _restamp(s, rows: dict) -> None:
+    """Contract 6.8: the session's TSS is its served file's load, within the
+    tolerance match_zwo spends (_MATCH_BUDGET_TOLERANCE), and the minutes its
+    description states are its duration. An FTP test is the test file's own
+    length (6.9): never stretched to the day's hours, nor cut to them."""
+    row = rows.get((getattr(s, "zwo_file", "") or "").strip())
+    if row is not None:
+        if s.session_type == "ftp_test":
+            s.duration_min = int(round(float(row.get("Duration(min)") or s.duration_min)))
+        load = _served_load(s, row)
+        if load is not None and abs(float(s.tss_estimate or 0) - load) > (
+                (_MATCH_BUDGET_TOLERANCE - 1.0) * load + 0.5):
+            s.tss_estimate = round(load)
+    d = getattr(s, "description", "") or ""
+    m = _DESC_MIN.search(d)
+    if m and int(m.group(1)) != int(s.duration_min or 0):
+        s.description = d[:m.start(1)] + str(int(s.duration_min or 0)) + d[m.end(1):]
+
+
+def _date_cap_min(goal, day, calendar) -> "tuple[int, bool]":
+    """(minutes the rider has on ``day``, whether the calendar said so)."""
+    iso = day.isoformat()
+    if calendar and iso in calendar:
+        return int(round(float(calendar[iso]) * 60)), True
+    return availability.trainable_minutes(goal, day.weekday()), False
+
+
+def _restore_record(weeks: list, old_weeks: list, today: date) -> None:
+    """Contract 6.3: a day before today is a record. Whatever an entry point
+    built there, the old plan's sessions for that date come back, done,
+    dismissed, missed and pending alike."""
+    _keep_elapsed_days(weeks, old_weeks, today)
+    old = {}
+    for w in old_weeks or []:
+        for s in w.sessions or []:
+            if s is not None and getattr(s, "day", None) is not None and s.day < today:
+                old.setdefault(s.day, []).append(s)
+    if not old:
+        return
+    for w in weeks:
+        if w.start >= today:
+            continue
+        kept = [s for s in w.sessions if s is None or getattr(s, "day", None) is None
+                or s.day >= today or s.day not in old]
+        back = [x for d, ss in old.items() if w.start <= d <= w.end and d < today for x in ss]
+        if back or len(kept) != len(w.sessions):
+            w.sessions = sorted(kept + back, key=lambda s: getattr(s, "day", None) or today)
+
+
+def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
+                   library: "list | None" = None,
+                   calendar: "dict[str, float] | None" = None,
+                   rides: "list | None" = None,
+                   normal_week: "float | None" = None,
+                   plan_start_date: "date | None" = None,
+                   seed_salt: int = 0, unload_lighter: bool = False) -> "set[date]":
+    """The last act of every entry point on the weeks it returns.
+
+    Rules, in the order they must run (each assumes the ones above it):
+
+      6.6  races: the A event's eve guard and race-week shape (event/ctl
+           goals), each B/C race's mini-taper, every race day marked;
+      6.1  availability: a day the calendar zeroes, a day inside an
+           unavailable period, a rest day and a 0 h day hold nothing (6.9) --
+           the race-eve opener included; every other session fits its date's
+           minutes (the calendar's, else the weekday's), its type's ceiling,
+           and a stepback's long-ride cap; an FTP test is its file's length;
+      6.2  files: every training session serves a file in the library;
+      6.8  load: TSS is the served file's load, descriptions state the length;
+      6.4/6.5/6.7  budgets: each week ahead is held to its budget -- the
+           NET budget for the week under way (D2), the taper's share of the
+           rider's build (or normal) week -- easy volume first, then a hard
+           session the budget cannot carry;
+      6.3  the record: days before today are the old plan's, untouched.
+
+    Only sessions dated today or later, pending, not the race, are touched
+    before the record is restored. ``calendar`` (ISO date -> hours) adds to
+    goal._calendar (with_calendar). ``rides`` measure the week under way; with
+    none, its sessions before today that were not missed or dismissed stand
+    in. ``normal_week`` is the rider's normal week in TSS.
+
+    Returns the dates it changed, for writers that propagate by date
+    (reforecast_dict).
+    """
+    today = clock.today()
+    if not weeks:
+        return set()
+    lib = library if library is not None else load_workout_library()
+    rows = _library_rows(lib)
+    cal = {**(getattr(goal, "_calendar", None) or {}), **(calendar or {})}
+    micro = _micro_only_goal(goal)
+    anchor = plan_start_date or weeks[0].start
+    # The record (6.3): the caller's old plan, or the days behind today of
+    # the weeks as they came in -- no pass below gets to keep an edit there.
+    if old_weeks is None:
+        old_weeks = [replace(w, sessions=[copy.copy(x) for x in w.sessions])
+                     for w in weeks if w.start < today]
+
+    def sig(s):
+        return (s.session_type, s.duration_min, s.tss_estimate, s.zwo_file,
+                s.description, bool(getattr(s, "is_race", False)))
+    before = {s.day: sig(s) for w in weeks for s in w.sessions
+              if s is not None and getattr(s, "day", None) is not None}
+
+    # 6.6 -- races marked and tapered, whoever built the weeks.
+    target = getattr(goal, "target_date", None)
+    if goal.goal_type in ("event", "ctl") and target:
+        _enforce_event_taper_eve(weeks, target, lib)
+    _apply_secondary_event_tapers(weeks, goal, lib)
+    if goal.goal_type in ("event", "ctl") and target:
+        _apply_race_week_shape(weeks, goal, lib)
+    _mark_race_days(weeks, goal)
+
+    for w in weeks:
+        for off, s in enumerate(w.sessions):
+            if not _pending_ahead(s, today) or _rider_owned(s):
+                continue
+            cap, from_calendar = _date_cap_min(goal, s.day, cal)
+            # 6.1 / 6.9 -- a day with no time holds no session.
+            if cap <= 0:
+                _rest_unavailable(s)
+                if not from_calendar:
+                    s.description = "Rest day"
+                continue
+            # 6.2 -- a file the library holds. An empty library is a cache
+            # fault, not a verdict on the plan's files (the 3.3.1 collapse).
+            if rows and (getattr(s, "zwo_file", "") or "").strip() not in rows:
+                _serve_file(s, lib, week_num=w.week_num, day_idx=off,
+                            plan_start_date=anchor, seed_salt=seed_salt, micro_only=micro)
+            if s.session_type == "ftp_test":
+                continue
+            # 6.9 -- the date's minutes, the type's ceiling, a stepback's
+            # long-ride cap (the clamp every tail carried a copy of).
+            ceil_ = (TYPE_CEILING.get(_content_class_for_zwo(s.zwo_file or ""))
+                     or TYPE_CEILING.get(s.session_type))
+            eff = cap if ceil_ is None else min(cap, ceil_)
+            if getattr(w, "is_stepback", False) and eff > STEPBACK_LONG_RIDE_CAP_MIN:
+                eff = STEPBACK_LONG_RIDE_CAP_MIN
+            if (s.duration_min or 0) > eff > 0:
+                s.tss_estimate = round((s.tss_estimate or 0) * eff / float(s.duration_min))
+                s.duration_min = eff
+
+    ahead = [w for w in weeks if w.end >= today]
+    _enforce_slot_file_coherence(ahead, lib, plan_start_date=anchor, seed_salt=seed_salt,
+                                 today_floor=today, micro_only=micro)
+    for w in ahead:
+        for s in w.sessions:
+            if _pending_ahead(s, today) and not _rider_owned(s):
+                _restamp(s, rows)
+
+    # 48 h between hard days, on what the rider will ride: the rules above
+    # re-serve days, so it was each entry point's to run before its own last
+    # passes. Before the budgets, not after: the taper is sized against the
+    # final build weeks, and easing one afterwards left the taper heavier
+    # than the build it follows (taper wk1 242 TSS against a 238 ceiling).
+    _spaced = _space_hard_days_across_plan(ahead, lib, plan_start_date=anchor,
+                                           seed_salt=seed_salt)
+    if _spaced:
+        log.info("eased for 48h spacing: %s", "; ".join(_spaced))
+        for w in ahead:
+            for s in w.sessions:
+                if _pending_ahead(s, today) and not _rider_owned(s):
+                    _restamp(s, rows)
+
+    # 6.4 / 6.5 / 6.7 -- the week's budget. The record goes back first, so
+    # the week under way is its whole calendar week again (a rebuilt row
+    # starts today and carries only the remainder of the ask); it is held to
+    # what is left of it (D2):
+    #   min(target - ridden in this row, gross - ridden since Monday),
+    # gross being a stub row's target over its span.
+    _restore_record(weeks, old_weeks, today)
+    ahead = [w for w in weeks if w.end >= today]
+    monday = today - timedelta(days=today.weekday())
+
+    def ridden(lo):
+        if rides is not None:
+            return _completed_tss_in(rides, lo, today - timedelta(days=1))
+        return sum(float(s.tss_estimate or 0) for w in weeks for s in w.sessions
+                   if s is not None and lo <= s.day < today and s.session_type != "rest"
+                   and not getattr(s, "is_race", False)
+                   and getattr(s, "status", "pending") not in ("missed", "dismissed"))
+
+    def net(wk):
+        if not (wk.start <= today <= wk.end) or wk.start == today == monday:
+            return None
+        target = float(wk.tss_target or 0)
+        if target <= 0:
+            return None             # a row without a budget stays unbounded
+        span = (wk.end - wk.start).days + 1
+        gross = target * 7 / span if 0 < span < 7 else target
+        return max(0.0, min(target - ridden(wk.start), gross - ridden(monday)))
+
+    _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
+                                   normal_week=normal_week, library=lib)
+    # generate's own rhythm pass: an unload week lighter than its block
+    # (Issurin's 3:1), judged on the loads just set.
+    if unload_lighter:
+        _enforce_stepback_is_lightest(ahead)
+    _enforce_slot_file_coherence(ahead, lib, plan_start_date=anchor, seed_salt=seed_salt,
+                                 today_floor=today, micro_only=micro)
+    for w in ahead:
+        for s in w.sessions:
+            if _pending_ahead(s, today) and not _rider_owned(s):
+                _restamp(s, rows)
+    # A re-match may spend up to match_zwo's tolerance over the slot: the
+    # budget has the last word. It only shortens, in proportion, so the load
+    # stays the served file's; the descriptions follow.
+    _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
+                                   normal_week=normal_week, library=lib)
+    for w in ahead:
+        for s in w.sessions:
+            if _pending_ahead(s, today) and not _rider_owned(s):
+                _restamp(s, rows)
+
+    # 6.3 -- last: nothing above may reshape a day behind the rider.
+    _restore_record(weeks, old_weeks, today)
+
+    return {s.day for w in weeks for s in w.sessions
+            if s is not None and getattr(s, "day", None) is not None
+            and before.get(s.day) != sig(s)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -14536,85 +14728,15 @@ def recalculate_plan(
     # session the day before a test).
     _ensure_fresh_legs_before_ftp_tests(new_weeks)
 
-    # The week total, which generate and regenerate enforce and recalculate
-    # never did: its rebuilt weeks came out sized by the rider's free time,
-    # ~530 TSS in 15 of 17 weeks against a 325 TSS ACWR ceiling (dupes.md
-    # DUP-1). The same pass the other two run.
-    _enforce_weekly_volume_ceiling(new_weeks)
-
     all_weeks = past_weeks + new_weeks
 
-    # Race/taper parity with generate_plan / regenerate_from_today / refit —
-    # the weekly recalc rebuilds future weeks from scratch, so these passes
-    # must re-run here too. Without them a recalc dropped the race-eve guard
-    # (B2), the B/C mini-tapers + openers (F7/SM3) and every B/C race row
-    # (issue #7): pending race rows are NOT preserved by the §6.12 predicate —
-    # they are rebuilt from goal.events, which this path never consulted.
-    # The eve-guard keeps generate_plan's event/ctl gate: non-event recalcs
-    # carry a FABRICATED target_date (caller falls back to +12 weeks), and an
-    # ungated pass would demote hard sessions before that phantom date.
-    if goal.goal_type in ("event", "ctl") and goal.target_date:
-        _enforce_event_taper_eve(all_weeks, goal.target_date)
-    _apply_secondary_event_tapers(all_weeks, goal)  # F7: B/C mini-tapers
-    if goal.goal_type in ("event", "ctl") and goal.target_date:
-        _apply_race_week_shape(all_weeks, goal, library)
-    _mark_race_days(all_weeks, goal)  # issue #7: race day shows the race, not a session
-
-    # R4/R5 (2026-07-07) — A8: AUTHORITATIVE per-day availability clamp for
-    # the weekly recalc's rebuilt weeks, mirroring generate_plan's final pass
-    # and regenerate_from_today's L3-13 (per-weekday goal cap + per-type
-    # ceiling + stepback long-ride cap). The grill found recalc was the ONE
-    # plan-emitting tail with no final clamp — the sampler's inline sweeps are
-    # day-cap-only and the floor/long-ride/race passes above can leave a
-    # session over its cap (floor swaps are bounded replaced-slot+5, so the
-    # 3.2.3 "one final safety clamp behind them all" release claim did not
-    # hold here). Per-DATE overrides are not visible on this path (not a
-    # recalculate_plan parameter — same documented limitation as the sampler
-    # sweeps); the per-weekday goal caps are authoritative. §6.12 guards:
-    # never rescale a race entry or a preserved (user-moved / non-pending /
-    # dismissed) session.
-    for _w in new_weeks:
-        for _s in _w.sessions:
-            if _s.session_type == "rest" or (_s.duration_min or 0) <= 0:
-                continue
-            if _protect_race(_s):
-                continue
-            if (getattr(_s, "user_moved", False)
-                    or getattr(_s, "dismissed_at", "")
-                    or getattr(_s, "status", "pending") != "pending"):
-                continue
-            _wd = _s.day.weekday() if hasattr(_s.day, "weekday") else 0
-            _cap_min = int(adjusted_goal.max_hours_for_day(_wd) * 60)
-            _cc = _content_class_for_zwo(getattr(_s, "zwo_file", "") or "")
-            _ceil = TYPE_CEILING.get(_cc) or TYPE_CEILING.get(_s.session_type)
-            _eff = _cap_min if _ceil is None else (
-                _ceil if _cap_min <= 0 else min(_cap_min, _ceil))
-            if (getattr(_w, "is_stepback", False)
-                    and (_eff <= 0 or _eff > STEPBACK_LONG_RIDE_CAP_MIN)):
-                _eff = STEPBACK_LONG_RIDE_CAP_MIN
-            if _eff > 0 and _s.duration_min > _eff:
-                _scale = _eff / float(_s.duration_min)
-                _s.tss_estimate = round((_s.tss_estimate or 0) * _scale)
-                _s.duration_min = _eff
-
-    # FC2a parity: the taper budget anchors on the final, clamped build weeks.
-    _enforce_weekly_volume_ceiling(new_weeks, taper_only=True)
-
-    # R4/R5 (2026-07-07) — R4a: slot/file coherence, ONCE, LAST (grill A2 —
-    # 48 h between hard days. Measured before this was here: a 40-rider sweep
-    # found back-to-back hard days ONLY in the paths that skipped this pass --
-    # 5 violating pairs in regenerate, 0 in generate -- because generate was
-    # the one entry point whose hand-assembled pass list included it. Runs
-    # before the coherence pass so an eased session gets a matching file
-    # instead of keeping the VO2 workout it no longer is.
-    _space_hard_days_across_plan(new_weeks, library)
-
-    # AFTER the A8 clamp above, which shrinks slots in place and thereby
-    # CREATES exactly the file>slot decouplings this pass repairs by rematch).
-    _enforce_slot_file_coherence(
-        new_weeks, library,
-        plan_start_date=(new_phases[0].start if new_phases else regen_start),
-        seed_salt=seed_salt, micro_only=bool(getattr(goal, "vo2_microintervals_only", False)))
+    # The final step (contract 6.1-6.9). Recalculate had its own copies of the
+    # race passes, the per-day clamp and the ceiling, and no calendar: a day
+    # the rider had zeroed came back filled on the weekly auto-recalc.
+    finalize_weeks(all_weeks, goal, old_weeks=current_plan_weeks, library=library,
+                   rides=recent_activities, normal_week=recent_weekly_tss,
+                   plan_start_date=(new_phases[0].start if new_phases else regen_start),
+                   seed_salt=seed_salt)
 
     recalc_info = {
         "action": "recalculated",
@@ -14927,38 +15049,14 @@ def extend_continuous_plan(
     # prefers prev-day-easy for that boundary).
     _ensure_fresh_legs_before_ftp_tests(new_weeks)
 
-    # Authoritative per-day availability clamp (recalc A8 parity).
-    for _w in new_weeks:
-        for _s in _w.sessions:
-            if _s.session_type == "rest" or (_s.duration_min or 0) <= 0:
-                continue
-            _wd = _s.day.weekday() if hasattr(_s.day, "weekday") else 0
-            _cap_min = int(goal.max_hours_for_day(_wd) * 60)
-            _cc = _content_class_for_zwo(getattr(_s, "zwo_file", "") or "")
-            _ceil = TYPE_CEILING.get(_cc) or TYPE_CEILING.get(_s.session_type)
-            _eff = _cap_min if _ceil is None else (
-                _ceil if _cap_min <= 0 else min(_cap_min, _ceil))
-            if (getattr(_w, "is_stepback", False)
-                    and (_eff <= 0 or _eff > STEPBACK_LONG_RIDE_CAP_MIN)):
-                _eff = STEPBACK_LONG_RIDE_CAP_MIN
-            if _eff > 0 and _s.duration_min > _eff:
-                _scale = _eff / float(_s.duration_min)
-                _s.tss_estimate = round((_s.tss_estimate or 0) * _scale)
-                _s.duration_min = _eff
-
-    # 48 h between hard days. Measured before this was here: a 40-rider sweep
-    # found back-to-back hard days ONLY in the paths that skipped this pass --
-    # 5 violating pairs in regenerate, 0 in generate -- because generate was
-    # the one entry point whose hand-assembled pass list included it. Runs
-    # before the coherence pass so an eased session gets a matching file
-    # instead of keeping the VO2 workout it no longer is.
-    _space_hard_days_across_plan(new_weeks, library)
-
-    # Slot/file coherence, ONCE, LAST (R4a parity — after the clamp).
-    _enforce_slot_file_coherence(
-        new_weeks, library, plan_start_date=append_start, seed_salt=seed_salt, micro_only=bool(getattr(goal, "vo2_microintervals_only", False)))
-
     all_weeks = list(current_plan_weeks) + new_weeks
+
+    # The final step (contract 6.1-6.9). Extend had no weekly ceiling (appended
+    # weeks up to 1.24x their target) and no race pass (a B race beyond the
+    # horizon was never marked once the plan reached it).
+    finalize_weeks(all_weeks, goal, old_weeks=current_plan_weeks, library=library,
+                   rides=recent_activities, normal_week=recent_weekly_tss,
+                   plan_start_date=append_start, seed_salt=seed_salt)
 
     info = {
         "action": "extended",
@@ -15395,32 +15493,16 @@ def refit_remaining_week(
         "refit_days": refit_days,
         "missed_dates": missed_dates,
     }
-    # B2 (v2.1.0): the missed-hard refit can land a hard session in the current
-    # week; keep it off the event eve (see regenerate_from_today). No-op for
-    # non-event goals.
-    _enforce_event_taper_eve(current_plan_weeks, goal.target_date)
-    _apply_secondary_event_tapers(current_plan_weeks, goal)  # F7: B/C mini-tapers
-    _mark_race_days(current_plan_weeks, goal)  # issue #7: race day shows the race, not a session
 
-    # R4/R5 (2026-07-07) — R4a: slot/file coherence, ONCE, LAST (grill A2).
-    # Refit only rewrites the CURRENT week; today_floor mirrors the
-    # 48 h between hard days. Measured before this was here: a 40-rider sweep
-    # found back-to-back hard days ONLY in the paths that skipped this pass --
-    # 5 violating pairs in regenerate, 0 in generate -- because generate was
-    # the one entry point whose hand-assembled pass list included it. Runs
-    # before the coherence pass so an eased session gets a matching file
-    # instead of keeping the VO2 workout it no longer is.
-    # Only this week: refit owns one week, and reaching into its
-    # neighbours would edit sessions the athlete may already have ridden.
-    _space_hard_days_across_plan([week], library, seed_salt=seed_salt)
-
-    # _refit_session_frozen day<today rule so a past (missed-but-unmarked)
-    # session is never rematched into a different historical record.
-    _enforce_slot_file_coherence(
-        [week], library,
+    # The final step (contract 6.1-6.9), on the whole plan like every entry
+    # point -- it touches only what is still ahead and pending; the days it
+    # changes are the refit's to write back as well.
+    _final = finalize_weeks(
+        current_plan_weeks, goal, library=library,
         plan_start_date=(current_plan_weeks[0].start if current_plan_weeks
                          else week.start),
-        seed_salt=seed_salt, today_floor=today, micro_only=bool(getattr(goal, "vo2_microintervals_only", False)))
+        seed_salt=seed_salt)
+    refit_info["refit_days"] = sorted(set(refit_days) | {d.isoformat() for d in _final})
     return current_plan_weeks, refit_info
 
 

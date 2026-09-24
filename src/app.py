@@ -11898,8 +11898,12 @@ async def api_mark_unavailable(request: Request):
         unavailable = plan.get("unavailable_periods", [])
         unavailable.append(period)
         plan["unavailable_periods"] = unavailable
+        # The final step clears the period now (contract 6.1); it used to wait
+        # for the next regenerate.
+        plan, _changed, _ri = tp.reforecast_dict(plan, tsb_series={})
 
-        out["r"] = {"ok": True, "period": period, "plan_json": plan}
+        out["r"] = {"ok": True, "period": period, "plan_json": plan,
+                    "sessions_modified": _changed}
         return plan
 
     try:
@@ -11982,13 +11986,10 @@ async def api_save_availability(request: Request):
                 old_h = _hours_of(prior_availability.get(day_iso))
                 if old_h is None or abs(new_h - old_h) > 1e-6:
                     availability_overrides[day_iso] = new_h
-            if not availability_overrides:
-                # No user edits → nothing to reflow. Persist the new
-                # availability dict (might carry type metadata changes
-                # like holiday-without-hours-change) and return.
-                out["r"] = {"ok": True, "sessions_modified": 0}
-                return plan
-
+            # No user edits still reflows: reforecast_dict's final step holds
+            # the plan to the whole stored calendar, so re-saving the same
+            # calendar repairs a plan that violates it (contract 6.1; it
+            # used to answer "0 changes").
             # Build a flat-projected tsb_series from the cached training
             # snapshot so per-day _tsb_at lookups inside reforecast hit
             # the dict (no fall-through to live ICU). ALWAYS a dict — when
@@ -12070,7 +12071,9 @@ def _regenerate_plan_dict(
     # threshold/custom plan to whatever the sticky process-global model was
     # and lost the B/C race rows + mini-tapers.
     g = plan.get("goal", {})
-    goal = _goal_from_plan_dict(g)
+    # With the stored calendar: the final step closes the dates it zeroes
+    # (regenerate refilled them, contract 6.1).
+    goal = tp.with_calendar(_goal_from_plan_dict(g), plan)
     if goal.target_date is None:
         # Non-event goals: keep the legacy regen horizon (12 weeks out).
         goal.target_date = clock.today() + timedelta(weeks=12)
@@ -12287,7 +12290,7 @@ def _apply_refit_to_plan(plan: dict, today: date) -> "dict | None":
     weeks_json = plan.get("weeks", [])
     if not weeks_json:
         return None
-    goal = _goal_from_plan_dict(plan.get("goal", {}) or {})
+    goal = tp.with_calendar(_goal_from_plan_dict(plan.get("goal", {}) or {}), plan)
     dto_weeks: list = []
     for w in weeks_json:
         try:
@@ -12317,17 +12320,15 @@ def _apply_refit_to_plan(plan: dict, today: date) -> "dict | None":
     if refit_info.get("action") != "refitted" or not refit_info.get("refit_days"):
         return None
 
-    # Write the changed remaining-day sessions back into the plan dict (match by
-    # date within the current week). Only refit_days were mutated.
+    # Write the changed sessions back into the plan dict, matched by date. Only
+    # refit_days were mutated: the current week's, and whatever the final step
+    # changed ahead of it.
     changed = set(refit_info["refit_days"])
-    by_date = {s.day.isoformat(): s for s in cur.sessions}
+    by_date = {s.day.isoformat(): s for w in dto_weeks for s in w.sessions}
     for wj in weeks_json:
-        if wj.get("week_num") != cur.week_num:
-            continue
         for i, sj in enumerate(wj.get("sessions", [])):
-            if sj.get("day") in changed:
+            if sj.get("day") in changed and sj["day"] in by_date:
                 wj["sessions"][i] = _planned_session_to_json(by_date[sj["day"]])
-        break
     return refit_info
 
 
@@ -16859,7 +16860,9 @@ def api_plan_auto_recalc():
         # goal.events here feeds its adjusted_goal, but the taper gap is a
         # separate engine issue.
         g = plan.get("goal", {})
-        goal = _goal_from_plan_dict(g)
+        # With the stored calendar, for the final step (contract 6.1): the
+        # weekly recalc refilled the dates a rider had zeroed.
+        goal = tp.with_calendar(_goal_from_plan_dict(g), plan)
         if goal.target_date is None and goal.goal_type != "continuous":
             # Non-event goals (FTP, general): use target_date or default 12
             # weeks out. 3.4.0 W2: NOT for continuous — the rolling goal has

@@ -50,7 +50,7 @@ def _mk_plan_dict(monday: date, weeks_count: int = 2) -> dict:
                 "duration_min": 60 if off in (1, 3, 5) else 0,
                 "tss_estimate": 45 if off in (1, 3, 5) else 0,
                 "description": "Z2 endurance" if off in (1, 3, 5) else "Rest",
-                "zwo_file": "real_z2.zwo" if off in (1, 3, 5) else "",
+                "zwo_file": "z2_steady_70pct_60min_v2.zwo" if off in (1, 3, 5) else "",
                 "zwo_name": "Z2 60min" if off in (1, 3, 5) else "",
                 "status": "pending",
             })
@@ -185,7 +185,7 @@ def test_drift_class_a_zwo_file_round_trip():
     for w in plan["weeks"]:
         for s in w["sessions"]:
             if s["session_type"] == "z2" and s["day"] != wed:
-                assert s.get("zwo_file") == "real_z2.zwo", (
-                    f"zwo_file clobbered on {s['day']} (expected real_z2.zwo, "
+                assert s.get("zwo_file") == "z2_steady_70pct_60min_v2.zwo", (
+                    f"zwo_file clobbered on {s['day']} (expected z2_steady_70pct_60min_v2.zwo, "
                     f"got {s.get('zwo_file')!r}) — drift class A regression"
                 )

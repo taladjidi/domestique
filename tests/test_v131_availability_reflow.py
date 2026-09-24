@@ -169,6 +169,7 @@ class TestAvailabilityReflow(AvailabilityReflowBase):
                 self._sun.isoformat(): {"hours": 0, "type": "holiday"},
             }
         }
+        before = {s["day"]: s for w in self._read_plan()["weeks"] for s in w["sessions"]}
         r = self.client.post(
             "/api/plan/save-availability",
             json=body,
@@ -178,7 +179,14 @@ class TestAvailabilityReflow(AvailabilityReflowBase):
         self.assertTrue(data.get("ok"))
         # Sat changed (long_z2 → rest); Sun's description flips to
         # "Rest (unavailable)" so it also counts as modified post-v1.3.5.
-        self.assertEqual(data.get("sessions_modified"), 2)
+        # The count is every day the save changed: since the final step
+        # (contract 6.2) that includes the days whose made-up
+        # "<type>_test.zwo" it replaced with a library file.
+        after = {s["day"]: s for w in self._read_plan()["weeks"] for s in w["sessions"]}
+        changed = {d for d, s in after.items() if s != before.get(d)}
+        self.assertIn(self._sat.isoformat(), changed)
+        self.assertIn(self._sun.isoformat(), changed)
+        self.assertEqual(data.get("sessions_modified"), len(changed))
 
     def test_idempotent_second_save_returns_zero_modified(self):
         body = {

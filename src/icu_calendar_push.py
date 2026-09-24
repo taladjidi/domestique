@@ -305,13 +305,19 @@ def _desired_events(pm, plan: dict, today: date, horizon_days: int,
             if isinstance(d, str) and d:
                 by_day.setdefault(d, []).append(s)
 
+    # A date the calendar closes holds nothing (contract 6.1): every plan
+    # writer runs the final step, and this keeps a plan stored before it from
+    # pushing one anyway. Not desired -> the sweep removes a stale event.
+    import training_planner as _tp
+    closed = {d for d, h in _tp.plan_calendar(plan).items() if h <= 0}
+
     events, skipped, broken_ids = [], [], set()
     for day_iso in sorted(by_day):
         try:
             day = date.fromisoformat(day_iso)
         except ValueError:
             continue
-        if day < today or day > horizon_end:   # G-H: window starts TODAY
+        if day < today or day > horizon_end or day_iso in closed:   # G-H: window starts TODAY
             continue
         for n, s in enumerate(by_day[day_iso]):
             if (s.get("session_type") or "") == "rest":

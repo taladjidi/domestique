@@ -133,33 +133,30 @@ def test_the_sweet_spot_guards_the_cuts_too():
     assert ramp.budget("build1", is_stepback=True) <= cap + 1, cap
 
 
-_STEP6 = "passes move weeks after the ramp has counted them (Step 6)"
-
-
 @pytest.mark.parametrize("ctl, chronic", [
     (36, 250),
-    pytest.param(43, 300, marks=pytest.mark.xfail(strict=True, reason=_STEP6)),
-    (55, 385),
-    pytest.param(70, 490, marks=pytest.mark.xfail(strict=True, reason=_STEP6)),
-    # the owner, carrying more than CTL x 7: week 6 reads 1.45x (Step 6).
-    pytest.param(33, 256, marks=pytest.mark.xfail(strict=True, reason=_STEP6)),
+    (43, 300), (55, 385), (70, 490),
+    # the owner, carrying more than CTL x 7: week 6 read 1.45x, and 1.38x
+    # once the final step held every week to its budget -- still over, since
+    # the weeks before it under-deliver their ask and the carried load lags
+    # (ACWR is audited, not enforced: M7 is out of this round's scope).
+    pytest.param(33, 256, marks=pytest.mark.xfail(
+        strict=True, reason="the carried load lags under-delivered weeks (M7)")),
 ])
 def test_the_acwr_holds(ctl, chronic):
     """No week over 1.3x the load the rider carries into it (a 28-day EWMA),
     the top of Gabbett's (2016) sweet spot, in any phase, from riders at 250
     TSS a week up. The ramp budgets every week within it; passes then cut
-    weeks it has counted (the per-day clamp after the week-total pass), so
-    the 300- and 490-TSS riders' plans read 1.39x and 1.37x, and the 150-TSS
-    rider's crosses too. The EWMA weighs the latest week 0.39 where the
-    rolling mean weighed it 0.25, so a cut shows more. They stay under the
-    danger line (below)."""
+    weeks it had counted (the per-day clamp after the week-total pass), so
+    the 300- and 490-TSS riders' plans read 1.39x and 1.37x until the final
+    step (finalize_weeks) became every entry point's last act and held each
+    week to its budget after every other pass (contract 6.5/6.7)."""
     bad = pi.check_acwr(_plan(ctl, chronic), chronic)
     assert not bad, (ctl, [str(v) for v in bad])
 
 
 @pytest.mark.parametrize("ctl, chronic", [
-    pytest.param(28, 150, marks=pytest.mark.xfail(strict=True, reason=_STEP6)),
-    (36, 250), (43, 300), (55, 385), (70, 490), (33, 256)])
+    (28, 150), (36, 250), (43, 300), (55, 385), (70, 490), (33, 256)])
 def test_no_rider_crosses_the_danger_line(ctl, chronic):
     """Gabbett's danger zone starts at 1.5x. The build was budgeted at it, and
     the 150- and 250-TSS riders crossed it (the part 3 review, H2). What the

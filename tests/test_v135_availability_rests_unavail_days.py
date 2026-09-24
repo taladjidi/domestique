@@ -224,7 +224,14 @@ class TestCurrentWeekRestsUnavailableDays(CurrentWeekAvailabilityBase):
             self.assertEqual(sess["session_type"], s_type,
                              f"{d} session_type must not change when only weekend marked unavailable")
             self.assertEqual(sess["duration_min"], dur)
-            self.assertEqual(sess["tss_estimate"], tss)
+            # The TSS is the served file's (contract 6.8): the fixture's
+            # made-up "<type>_test.zwo" files are replaced by library ones.
+            row = {r["File"]: r for r in tp.load_workout_library()}.get(sess["zwo_file"])
+            if row is None:     # a day already behind today: a record, untouched
+                self.assertEqual(sess["tss_estimate"], tss)
+            else:
+                self.assertEqual(sess["tss_estimate"],
+                                 round(float(row["TSS"]) * dur / float(row["Duration(min)"])))
 
 
 if __name__ == "__main__":

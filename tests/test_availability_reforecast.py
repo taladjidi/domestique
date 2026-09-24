@@ -41,6 +41,12 @@ def _mk_session(day: date, *, session_type: str = "z2",
     )
 
 
+def _served(s) -> int:
+    """The served file's load over the slot (the final step's rule, 6.8)."""
+    row = {r["File"]: r for r in tp.load_workout_library()}[s.zwo_file]
+    return round(tp._served_load(s, row))
+
+
 def _mk_week(start: date, sessions: list[tp.PlannedSession]) -> tp.PlannedWeek:
     return tp.PlannedWeek(
         week_num=1,
@@ -71,10 +77,9 @@ class TestAvailabilityHalfHoursHalvesDuration(unittest.TestCase):
             availability_overrides=overrides,
         )
         self.assertEqual(weeks[0].sessions[0].duration_min, 30)
-        # tss_estimate = round(30/60 * 45) = round(22.5) → banker's rounding → 22
-        # (TSS_PER_HOUR["z2"] = 45). Either 22 or 23 is acceptable depending on
-        # Python's round-half-to-even; assert the float value is correct.
-        self.assertEqual(weeks[0].sessions[0].tss_estimate, round(30 / 60 * 45))
+        # The TSS is the served file's load over the 30 minutes (contract
+        # 6.8), no longer 30/60 of the z2 rate the slot was sized with.
+        self.assertEqual(weeks[0].sessions[0].tss_estimate, _served(weeks[0].sessions[0]))
         # Day must appear in touched_days so app.py persists it.
         self.assertIn(mon.isoformat(), info["touched_days"])
         self.assertEqual(info["action"], "reforecasted")
@@ -118,10 +123,11 @@ class TestAvailabilityDayNotInOverridesKeptUntouched(unittest.TestCase):
             goal, weeks, tsb_series=tsb_series,
             availability_overrides=overrides,
         )
-        # Tue session pristine.
+        # Tue session's length and type untouched; its TSS is what it serves
+        # (contract 6.8), the fileless slot having been given a file (6.2).
         self.assertEqual(weeks[0].sessions[1].duration_min, 90)
         self.assertEqual(weeks[0].sessions[1].session_type, "threshold")
-        self.assertEqual(weeks[0].sessions[1].tss_estimate, 135.0)
+        self.assertEqual(weeks[0].sessions[1].tss_estimate, _served(weeks[0].sessions[1]))
         # Mon scale 1.0 → 60 unchanged.
         self.assertEqual(weeks[0].sessions[0].duration_min, 60)
 

@@ -284,8 +284,13 @@ class TestRoundTripRestThenRestore(_AvailRestoreBase):
         self.assertEqual(sat1["session_type"], "z2",
                          "round-trip restore: Sat must un-rest")
         # Sat began as 90 TSS of the 260 planned; zeroed, the week holds 100
-        # TSS more than the 170 left, 133 min at 45 TSS/h, not 240.
-        self.assertEqual(sat1["duration_min"], 133)
+        # TSS more than the 170 left: 133 min at the z2 rate of 45 TSS/h, and
+        # less once the TSS is the served file's own load (contract 6.8) --
+        # whatever keeps the week inside its budget, never the 240 offered.
+        self.assertLess(sat1["duration_min"], 240)
+        wk = next(w for w in plan1["weeks"] if w["start"] <= self._sat.isoformat() <= w["end"])
+        self.assertLessEqual(sum(x["tss_estimate"] for x in wk["sessions"]),
+                             wk["tss_target"] * 1.05 + 1)
 
 
 class TestPartialRestore(_AvailRestoreBase):

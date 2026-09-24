@@ -233,8 +233,10 @@ def test_the_acwr_check_reaches_a_caller_that_knows_the_rider():
             return weeks
 
         # A detrained rider is who the ratio is about: measured 1.40-1.58x
-        # against a 1.3x sweet spot on these seeds.
-        detrained = tp._report_acwr(plan_for(150.0), 150.0)
+        # against a 1.3x sweet spot on these seeds at 150 TSS a week, until the
+        # final step held each week to its budget; at 40 the sessions' floor
+        # still takes a week over.
+        detrained = tp._report_acwr(plan_for(40.0), 40.0)
         assert detrained, "the check went quiet on the rider it exists for"
         assert all(v.rule == "acwr" for v in detrained)
 
@@ -242,16 +244,16 @@ def test_the_acwr_check_reaches_a_caller_that_knows_the_rider():
         assert tp._report_acwr(plan_for(600.0), 600.0) == []
 
         # No rider, no rule: the number is the whole input.
-        assert tp._report_acwr(plan_for(150.0), None) == []
-        assert tp._report_acwr(plan_for(150.0), 0) == []
+        assert tp._report_acwr(plan_for(40.0), None) == []
+        assert tp._report_acwr(plan_for(40.0), 0) == []
 
         # And audit() runs it only when handed a rider.
-        weeks = plan_for(150.0)
+        weeks = plan_for(40.0)
         goal = tp.Goal(goal_type="continuous", rest_days=[6],
                        available_days=[0, 1, 2, 3, 4, 5],
                        daily_max_hours={d: 2.0 for d in range(6)})
         assert not [v for v in pi.audit(weeks, goal) if v.rule == "acwr"]
-        assert [v for v in pi.audit(weeks, goal, chronic=150.0) if v.rule == "acwr"]
+        assert [v for v in pi.audit(weeks, goal, chronic=40.0) if v.rule == "acwr"]
     finally:
         clock.unfreeze()
 

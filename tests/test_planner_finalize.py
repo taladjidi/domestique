@@ -206,3 +206,448 @@ def test_daily_cap_honours_per_date_overrides():
     # A date zeroed in the calendar holds nothing.
     assert "rest_days" in _rules([wk], overrides={**three_h, _d(6).isoformat(): 3.0,
                                                   _d(3).isoformat(): 0.0})
+
+
+# ── 6.1-6.9 The final step, on every entry point ─────────────────────────
+#
+# One rider per shape, the owner's own week (Friday off, 2 h weekdays, 3 h
+# Saturday, 2.5 h Sunday). Every entry point is driven from the plan generate
+# built on Monday 2026-09-14, on the Thursday of its third week.
+
+import copy  # noqa: E402
+
+import clock  # noqa: E402
+import pytest  # noqa: E402
+
+G0 = _dt.date(2026, 9, 14)                      # Monday
+T3 = G0 + _dt.timedelta(days=17)                # Thursday of week 3
+DAILY = {0: 2.0, 1: 2.0, 2: 2.0, 3: 2.0, 5: 3.0, 6: 2.5}
+ATH = {"ftp": 247, "weight_kg": 72}
+
+
+def owner(kind="event", **kw):
+    g = tp.Goal(goal_type=kind, rest_days=[4], available_days=[0, 1, 2, 3, 5, 6],
+                daily_max_hours=dict(DAILY), max_weekday_hours=2.0, max_weekend_hours=3.0,
+                hours_per_week=12.5,
+                target_date=(_dt.date(2026, 12, 13) if kind == "event" else None),
+                event_km=(160 if kind == "event" else 0),
+                event_climb_m=(2000 if kind == "event" else 0))
+    for k, v in kw.items():
+        setattr(g, k, v)
+    return g
+
+
+def gen(goal, today=G0, **kw):
+    clock.freeze(today)
+    return tp.generate_plan(goal, current_ctl=55, recent_weekly_tss=380, athlete=ATH, **kw)[1]
+
+
+def ride_days(first, last, tss=60.0):
+    out, d = [], first
+    while d <= last:
+        if d.weekday() != 4:
+            out.append({"date": d.isoformat(), "tss": tss})
+        d += _dt.timedelta(days=1)
+    return out
+
+
+@pytest.fixture(autouse=True)
+def _clock():
+    yield
+    clock.unfreeze()
+
+
+def entry_points(kind, base, t, goal_fn, rides=None):
+    """Every planner entry point, driven from ``base`` on day ``t``. Yields
+    (name, weeks). The goal each gets comes from goal_fn (fresh each time)."""
+    rides = ride_days(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1)) \
+        if rides is None else rides
+
+    def regen():
+        g = goal_fn()
+        g.plan_weeks = 0
+        return tp.regenerate_from_today(g, copy.deepcopy(base), 55, activities=rides,
+                                        athlete=ATH, recent_weekly_tss=380)[1]
+
+    def recalc():
+        g = goal_fn()
+        g.plan_weeks = 0
+        return tp.recalculate_plan(g, copy.deepcopy(base), 70, recent_activities=rides,
+                                   athlete=ATH, recent_weekly_tss=380)[1]
+
+    def refit():
+        wk = copy.deepcopy(base)
+        cur = next(w for w in wk if w.start <= t <= w.end)
+        past = [s for s in cur.sessions if s.day < t and s.session_type != "rest"]
+        if past and not any(s.status == "missed" and tp._session_is_hit(s) for s in past):
+            past[-1].session_type, past[-1].status = "vo2max", "missed"
+        return tp.refit_remaining_week(goal_fn(), wk, t)[0]
+
+    def refc():
+        series = {t + _dt.timedelta(days=i): -35.0 for i in range(-14, 140)}
+        return tp.reforecast(goal_fn(), copy.deepcopy(base), tsb_series=series,
+                             recent_activities=rides)[0]
+
+    drivers = [("regenerate", regen), ("recalculate", recalc), ("refit", refit),
+               ("reforecast", refc)]
+    if kind == "continuous":
+        drivers.append(("extend", lambda: tp.extend_continuous_plan(
+            goal_fn(), copy.deepcopy(base), 55, recent_activities=rides, athlete=ATH,
+            recent_weekly_tss=380)[1]))
+    for name, fn in drivers:
+        clock.freeze(t)
+        yield name, fn()
+
+
+def pending_ahead(weeks, t):
+    return [s for w in weeks for s in w.sessions
+            if s.day >= t and s.session_type != "rest" and not s.is_race
+            and s.status == "pending"]
+
+
+# 6.1 -------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_6_1_a_zeroed_date_holds_nothing_after_any_entry_point(kind):
+    base = gen(owner(kind))
+    zero = [s.day for s in pending_ahead(base, T3 + _dt.timedelta(days=1))][:3]
+    cal = {d.isoformat(): 0.0 for d in zero}
+
+    def goal_fn():
+        g = owner(kind)
+        g._calendar = dict(cal)
+        return g
+    seen = []
+    for name, weeks in entry_points(kind, base, T3, goal_fn):
+        seen.append(name)
+        on_zero = [(name, s.day, s.session_type) for s in pending_ahead(weeks, T3)
+                   if s.day in zero]
+        assert not on_zero, on_zero
+    assert len(seen) >= 4
+
+
+def test_6_1_generate_honours_an_unavailable_period():
+    lo, hi = G0 + _dt.timedelta(days=8), G0 + _dt.timedelta(days=10)
+    weeks = gen(owner(), unavailable_periods=[(lo, hi)])
+    assert not [s for s in pending_ahead(weeks, G0) if lo <= s.day <= hi]
+
+
+# 6.2 -------------------------------------------------------------------
+
+def _in_library():
+    return {r["File"] for r in tp.load_workout_library()}
+
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_6_2_every_session_serves_a_library_file(kind):
+    lib = _in_library()
+    base = gen(owner(kind))
+    assert all(s.zwo_file in lib for s in pending_ahead(base, G0))
+    for name, weeks in entry_points(kind, base, T3, lambda: owner(kind)):
+        bad = [(name, s.day, s.session_type, s.zwo_file) for s in pending_ahead(weeks, T3)
+               if s.zwo_file not in lib]
+        assert not bad, bad
+
+
+def test_6_2_the_recovery_ramp_serves_files_on_monday_weeks():
+    """No rides for three weeks: regenerate builds the recovery ramp. On
+    02a0f514 its sessions had no file (815 in the reviewer's sweep) and its
+    rows ran Thursday to Wednesday."""
+    lib = _in_library()
+    base = gen(owner())
+    clock.freeze(T3)
+    _, weeks, info = tp.regenerate_from_today(owner(plan_weeks=0), copy.deepcopy(base), 40,
+                                              activities=[], athlete=ATH,
+                                              recent_weekly_tss=380)
+    assert info["recovery_ramp_weeks"] > 0
+    assert not [s for s in pending_ahead(weeks, T3) if s.zwo_file not in lib]
+    ramp = [w for w in weeks if w.phase in ("recon", "recovery_ramp")]
+    assert ramp and all(w.end.weekday() == 6 and w.start.weekday() == 0 for w in ramp), \
+        [(w.start, w.end) for w in ramp]
+
+
+# 6.3 -------------------------------------------------------------------
+
+def _stamp(weeks, t):
+    """Mark the current week's days before t: done, dismissed, missed, and the
+    rest left pending."""
+    cur = next(w for w in weeks if w.start <= t <= w.end)
+    past = [s for s in cur.sessions if s.day < t]
+    for s, st in zip(past, ("done", "dismissed", "missed")):
+        s.status = st
+        if st == "missed":
+            s.session_type = "vo2max"       # what triggers refit
+    return {s.day: (s.session_type, s.duration_min, s.tss_estimate, s.zwo_file, s.status)
+            for w in weeks for s in w.sessions if s.day < t}
+
+
+@pytest.mark.parametrize("rides", ["ridden", "absent"])
+def test_6_3_days_before_today_are_a_record(rides):
+    """'absent' has no rides: regenerate takes the recovery-ramp path, which
+    on 02a0f514 dropped Monday-Wednesday, done and dismissed alike."""
+    base = gen(owner())
+    rec = _stamp(base, T3)
+    rs = None if rides == "ridden" else []
+    for name, weeks in entry_points("event", base, T3, owner, rides=rs):
+        got = {s.day: (s.session_type, s.duration_min, s.tss_estimate, s.zwo_file, s.status)
+               for w in weeks for s in w.sessions if s.day < T3}
+        assert got == rec, (name, {d: (rec.get(d), got.get(d)) for d in set(rec) | set(got)
+                                   if rec.get(d) != got.get(d)})
+
+
+# 6.4 -------------------------------------------------------------------
+
+@pytest.mark.parametrize("days_out", [7, 9, 12, 16])
+def test_6_4_a_micro_plan_taper_is_capped(days_out):
+    """A race nine days out on 02a0f514: a 486 TSS taper against a 228 target,
+    because no full build week came before it to anchor the cap."""
+    g = owner(target_date=G0 + _dt.timedelta(days=days_out),
+              plan_weeks=max(4, -(-days_out // 7)))
+    weeks = gen(g)
+    builds = [w for w in weeks if w.phase != "taper" and not w.is_stepback
+              and (w.end - w.start).days >= 6]
+    for w in weeks:
+        if w.phase != "taper":
+            continue
+        span = (w.end - w.start).days + 1
+        load = sum(s.tss_estimate for s in w.sessions if s.session_type != "rest" and not s.is_race)
+        assert load <= 380 * tp.TAPER_FRACS[0] * span / 7 * 1.05 + 1, (w.start, load)
+        if builds:
+            last = sum(s.tss_estimate for s in builds[-1].sessions
+                       if s.session_type != "rest" and not s.is_race)
+            assert load * 7 / span <= last * 1.05 + 1
+
+
+# 6.5 -------------------------------------------------------------------
+
+def _monfri():
+    return tp.Goal(goal_type="continuous", rest_days=[5, 6], available_days=[0, 1, 2, 3, 4],
+                   daily_max_hours={d: 1.0 for d in range(5)}, hours_per_week=5)
+
+
+@pytest.mark.parametrize("rider", ["owner", "monfri-1h"])
+def test_6_5_extend_holds_appended_weeks_to_their_target(rider):
+    """The weekly auto-recalc of a continuous plan (recalculate_plan ->
+    extend). On 02a0f514 the reviewer's extend_q found 11 of 104 appended
+    weeks over target x 1.05, up to 1.26x."""
+    goal_fn, ctl, rwt = ((lambda: owner("continuous")), 55, 380) if rider == "owner" \
+        else (_monfri, 30, 200)
+    over = []
+    for b in (0, 2, 4, 6):
+        b0 = G0 + _dt.timedelta(days=b)
+        clock.freeze(b0)
+        base = tp.generate_plan(goal_fn(), seed_salt=b, current_ctl=ctl,
+                                recent_weekly_tss=rwt, athlete=ATH)[1]
+        old = {w.start for w in base}
+        for off in (7, 10, 14, 21):
+            t = b0 + _dt.timedelta(days=off)
+            clock.freeze(t)
+            rs = [r for r in ride_days(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1))
+                  if _dt.date.fromisoformat(r["date"]).weekday() in goal_fn().available_days]
+            _, weeks, _ = tp.recalculate_plan(goal_fn(), copy.deepcopy(base), ctl,
+                                              recent_activities=rs, athlete=ATH,
+                                              recent_weekly_tss=rwt)
+            for w in weeks:
+                if w.start in old or (w.end - w.start).days < 6:
+                    continue
+                load = sum(s.tss_estimate for s in w.sessions if s.session_type != "rest")
+                if load > w.tss_target * 1.05 + 1:
+                    over.append((str(t), w.week_num, load, w.tss_target))
+    assert not over, over
+
+
+# 6.6 -------------------------------------------------------------------
+
+def test_6_6_a_b_race_beyond_the_horizon_is_marked_once_extend_reaches_it():
+    race = G0 + _dt.timedelta(days=41)                  # a Sunday, week 6
+    goal_fn = lambda: owner("continuous", events=[tp.TargetEvent(  # noqa: E731
+        date=race, priority="B", name="club", event_km=90, event_climb_m=900)])
+    weeks = gen(goal_fn())
+    assert weeks[-1].end < race
+    for off in (8, 15):
+        t = G0 + _dt.timedelta(days=off)
+        clock.freeze(t)
+        weeks = tp.extend_continuous_plan(goal_fn(), weeks, 55, athlete=ATH,
+                                          recent_weekly_tss=380)[1]
+    days = {s.day: s for w in weeks for s in w.sessions}
+    assert race in days and days[race].is_race
+    assert days[race - _dt.timedelta(days=1)].is_opener \
+        or days[race - _dt.timedelta(days=1)].session_type == "rest"
+    for d in (race - _dt.timedelta(days=2), race - _dt.timedelta(days=3)):
+        assert not tp._session_is_hit(days[d]), (d, days[d].session_type)
+
+
+# 6.7 -------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_6_7_a_heavy_monday_to_wednesday_counts_against_the_week(kind):
+    """450 TSS ridden Monday-Wednesday, then generate / regenerate on
+    Thursday: on 02a0f514 the calendar week came to 583 against 494 (a floor
+    added a VO2max day after the budget was set)."""
+    t = G0 + _dt.timedelta(days=3)
+    rides = [{"date": (G0 + _dt.timedelta(days=i)).isoformat(), "tss": 150.0} for i in range(3)]
+    clock.freeze(t)
+    ph, weeks = tp.generate_plan(owner(kind), current_ctl=55, recent_weekly_tss=380,
+                                 athlete=ATH, activities=rides)
+    w1 = weeks[0]
+    gross = w1.tss_target * 7 / ((w1.end - w1.start).days + 1)
+    ahead = sum(s.tss_estimate for s in w1.sessions if s.session_type != "rest" and not s.is_race)
+    assert 450 + ahead <= gross * 1.05 + 1, (ahead, gross)
+    base = gen(owner(kind))
+    clock.freeze(t)
+    _, weeks, _ = tp.regenerate_from_today(owner(kind, plan_weeks=0), copy.deepcopy(base), 55,
+                                           activities=rides, athlete=ATH, recent_weekly_tss=380)
+    cur = next(w for w in weeks if w.start <= t <= w.end)
+    ahead = sum(s.tss_estimate for s in cur.sessions
+                if s.day >= t and s.session_type != "rest" and not s.is_race)
+    assert 450 + ahead <= float(cur.tss_target) * 1.05 + 1, (ahead, cur.tss_target)
+
+
+# 6.8 -------------------------------------------------------------------
+
+def _load_matches(weeks, t):
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    bad = []
+    for s in pending_ahead(weeks, t):
+        r = rows[s.zwo_file]
+        load = float(r["TSS"]) * s.duration_min / float(r["Duration(min)"])
+        if abs(s.tss_estimate - load) > (tp._MATCH_BUDGET_TOLERANCE - 1) * load + 1:
+            bad.append((s.day, s.session_type, s.duration_min, s.tss_estimate, round(load), s.zwo_file))
+        m = tp._DESC_MIN.search(s.description or "")
+        if m and int(m.group(1)) != s.duration_min:
+            bad.append((s.day, "description", s.description, s.duration_min))
+    return bad
+
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_6_8_tss_and_minutes_are_the_served_files(kind):
+    """The Rønnestad floor swapped files and kept the old TSS (261 mismatches
+    in the reviewer's sweep); descriptions kept a length the clamp had cut."""
+    base = gen(owner(kind))
+    assert not _load_matches(base, G0)
+    for name, weeks in entry_points(kind, base, T3, lambda: owner(kind)):
+        bad = _load_matches(weeks, T3)
+        assert not bad, (name, bad[:5])
+
+
+# 6.9 -------------------------------------------------------------------
+
+def test_6_9_the_race_eve_opener_never_lands_on_a_rest_day():
+    """Race on Saturday, Friday declared rest (OWN-6)."""
+    race = _dt.date(2026, 12, 12)
+    weeks = gen(owner(target_date=race))
+    eve = next(s for w in weeks for s in w.sessions if s.day == race - _dt.timedelta(days=1))
+    assert eve.session_type == "rest" and not eve.is_opener
+
+
+def test_6_9_an_ftp_test_is_its_file_length():
+    rows = {r["File"]: r for r in tp.load_workout_library()}
+    tests = [s for w in gen(owner("continuous", daily_max_hours={d: 3.0 for d in DAILY}))
+             for s in w.sessions if s.session_type == "ftp_test"]
+    tests += [s for w in gen(owner("ftp", target_date=G0 + _dt.timedelta(weeks=10)))
+              for s in w.sessions if s.session_type == "ftp_test"]
+    assert tests
+    for s in tests:
+        assert s.duration_min == round(float(rows[s.zwo_file]["Duration(min)"])), \
+            (s.day, s.duration_min, s.zwo_file)
+
+
+def test_6_9_a_zero_hour_day_that_is_not_a_rest_day_holds_nothing():
+    g = owner(daily_max_hours={**DAILY, 2: 0.0})        # Wednesday 0 h, not a rest day
+    weeks = gen(g)
+    assert not [s for s in pending_ahead(weeks, G0) if s.day.weekday() == 2]
+    for name, w2 in entry_points("event", weeks, T3,
+                                 lambda: owner(daily_max_hours={**DAILY, 2: 0.0})):
+        assert not [s for s in pending_ahead(w2, T3) if s.day.weekday() == 2], name
+
+
+# 6.1 through the app: re-saving the same calendar repairs a plan that
+# violates it, and mark-unavailable clears its period at once.
+
+def _app_plan(tmp_path, monkeypatch, today):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    import app as app_module
+    clock.freeze(today)
+    weeks = gen(owner(), today=today)
+    clock.freeze(today)
+    plan = {"goal": tp.goal_to_dict(owner()), "phases": [],
+            "weeks": [tp.week_to_dict(w) for w in weeks]}
+    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    (tmp_path / "current_plan.json").write_text(json.dumps(plan))
+    p = patch("db.query_activities", return_value=[])
+    p.start()
+    return TestClient(app_module.app), plan, p
+
+
+def _sessions_on(tmp_path, days):
+    plan = json.loads((tmp_path / "current_plan.json").read_text())
+    return [(s["day"], s["session_type"]) for w in plan["weeks"] for s in w["sessions"]
+            if s["day"] in days and s["session_type"] != "rest"]
+
+
+def test_6_1_re_saving_the_same_calendar_repairs_the_plan(tmp_path, monkeypatch):
+    client, plan, p = _app_plan(tmp_path, monkeypatch, G0)
+    try:
+        days = [s["day"] for w in plan["weeks"][1:3] for s in w["sessions"]
+                if s["session_type"] != "rest"][:3]
+        avail = {d: {"hours": 0, "type": "holiday"} for d in days}
+        # The calendar is already saved, and the plan still trains on it: what
+        # a plan written by 02a0f514's regenerate looks like.
+        plan["availability"] = avail
+        (tmp_path / "current_plan.json").write_text(json.dumps(plan))
+        assert _sessions_on(tmp_path, days)
+        r = client.post("/api/plan/save-availability", json={"availability": avail})
+        assert r.status_code == 200, r.text
+        assert _sessions_on(tmp_path, days) == []
+    finally:
+        p.stop()
+
+
+def test_6_1_mark_unavailable_clears_its_period(tmp_path, monkeypatch):
+    client, plan, p = _app_plan(tmp_path, monkeypatch, G0)
+    try:
+        lo, hi = G0 + _dt.timedelta(days=8), G0 + _dt.timedelta(days=12)
+        days = [(lo + _dt.timedelta(days=i)).isoformat() for i in range(5)]
+        assert _sessions_on(tmp_path, days)
+        r = client.post("/api/plan/mark-unavailable",
+                        json={"start": lo.isoformat(), "end": hi.isoformat()})
+        assert r.status_code == 200, r.text
+        assert _sessions_on(tmp_path, days) == []
+    finally:
+        p.stop()
+
+
+def test_6_1_a_closed_date_never_reaches_the_calendar_push():
+    """A plan stored before the final step existed can still carry a session
+    on a date the calendar closes; the push leaves it out, and a stale event
+    for that slot is swept (neither pushed nor protected)."""
+    from unittest.mock import MagicMock
+    import icu_calendar_push as icp
+    pm = MagicMock()
+    pm.prefs, pm._athlete = {}, {"target_mode": "power"}
+    pm.lthr_is_set, pm.max_hr, pm.lthr = True, 190, 170
+    today = _dt.date.today()
+    closed, open_ = [(today + _dt.timedelta(days=i)).isoformat() for i in (2, 3)]
+    plan = {"weeks": [{"sessions": [
+        {"day": closed, "session_type": "z2", "zwo_file": "", "duration_min": 60,
+         "tss_estimate": 45},
+        {"day": open_, "session_type": "threshold", "zwo_file": "", "duration_min": 60,
+         "tss_estimate": 90}]}],
+        "availability": {closed: {"hours": 0, "type": "holiday"}}}
+    events, skipped, broken = icp._desired_events(pm, plan, today, 14, "pidX")
+    assert [s["day"] for s in skipped] == [open_]      # the open day is still wanted
+    assert f"domestique:pidX:{closed}:0" not in broken
+
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_the_final_step_is_a_fixpoint(kind):
+    """Every sync runs it (reforecast_dict): a second run on its own output
+    changes nothing, or each sync would churn the rider's calendar."""
+    for name, weeks in entry_points(kind, gen(owner(kind)), T3, lambda: owner(kind)):
+        clock.freeze(T3)
+        again = tp.finalize_weeks(weeks, owner(kind),
+                                  rides=ride_days(T3 - _dt.timedelta(days=14),
+                                                  T3 - _dt.timedelta(days=1)),
+                                  normal_week=380)
+        assert again == set(), (name, sorted(again)[:5])

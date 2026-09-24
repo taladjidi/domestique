@@ -155,9 +155,11 @@ def test_autofill_default_days_do_not_count_as_user_edits(tmp_path, monkeypatch)
 
 
 def test_no_user_edits_returns_zero_and_no_writeback_changes(tmp_path, monkeypatch):
-    """If incoming availability matches stored prior in every entry,
-    the endpoint short-circuits to a 0-change response without invoking
-    reforecast at all."""
+    """If incoming availability matches stored prior in every entry, nothing
+    the calendar says changes a session. Contract 6.1 (2026-09-24): the save
+    still runs the final step -- re-saving the same calendar repairs a plan
+    that violates it -- so the first save serves this fixture's made-up
+    files ("wed.zwo") real ones; a second identical save changes nothing."""
     plan_dir = _isolate_plan_dir(tmp_path, monkeypatch)
     json_path, wed, thu = _seed_plan(plan_dir)
 
@@ -177,8 +179,15 @@ def test_no_user_edits_returns_zero_and_no_writeback_changes(tmp_path, monkeypat
         }},
     )
     assert r.status_code == 200
+    r = client.post(
+        "/api/plan/save-availability",
+        json={"availability": {
+            wed: {"hours": 1.5, "type": "available"},
+            thu: {"hours": 2.0, "type": "available"},
+        }},
+    )
     assert r.json().get("sessions_modified") == 0
 
-    # Sessions on disk are unchanged.
+    # Session lengths on disk are unchanged.
     assert _load_session(json_path, wed)["duration_min"] == 110
     assert _load_session(json_path, thu)["duration_min"] == 120

@@ -87,3 +87,38 @@ one of the assertions below. Full gate: no new failure vs the same-day
 
 H5, M5, M7 enforcement, today-session gates (prescription changes, above);
 overhaul Step 6 itself.
+
+## Decisions taken while landing it (2026-09-24)
+
+Recorded so they are not relitigated without new evidence.
+
+- **An unload week's load is training load, without the FTP test and the
+  race** (c9e5acff). One definition for the planner's unload pass
+  (`_enforce_stepback_is_lightest`), the auditor (`check_stepback_lightest`)
+  and `stepback_looks_lighter` (PR #23), which already read it that way
+  (`plan_invariants._training`). *Why:* the test is a measurement placed in
+  the unload week on fresh legs (Allen & Coggan); since 6.9 it is its file's
+  length, so a week holding nothing but the test read heavier than a light
+  build week (weekend-event8: 80 against 78).
+- **Ridden load has one owner**, `plan_invariants.rides_once` /
+  `activities_once` (d07336dc). The budget, the auditor, the chronic load and
+  the week view read rides once, cycling only; fitness and fatigue
+  (local CTL/ATL, the readiness ACWR, daily adapt) read every sport once. Of
+  two recordings of one effort the power meter's wins, then the one a session
+  was matched to, then the shorter.
+- **A reasoned rest carries `rest_reason`**, set where the rest is written
+  (83efd441); nothing reads rest descriptions to decide anything.
+- **A moved missed session is restored in the final step's record step**
+  (04a8eb72), from the plan's `auto_moves` record, on every entry point.
+
+## What the golden and the sweeps show that is not a finding
+
+`under_delivery` rises: generate 80 -> ~107 (28 days x 13 riders), entries
+455 -> 552 (the second evaluation's sweep). Cause, measured: 6.8. With the
+final step's re-stamp disabled the generate sweep reads 83, base's figure;
+the builders size a slot at the type's TSS per hour (z2 45/h, recovery 30/h)
+and the files they serve are lighter (a 50-min "recovery" file carried 53.6
+TSS; its served load is 22). The week's budget is unchanged, what the rider
+is told the week holds is now what it holds, and the final step enforces --
+it does not add sessions back. Sizing slots from the files they will serve is
+a planning change (the builders'), not this round's.

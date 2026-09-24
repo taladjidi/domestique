@@ -13472,6 +13472,8 @@ def regenerate_from_today(
                 if preserve:
                     adapted_current_week[s.day] = s
 
+    _as_served(adapted_current_week)
+
     # 2. Detect absence
     gaps = detect_plan_gaps(old_plan_weeks, activities or [], current_ctl)
     absence_days = gaps["absence_days"]
@@ -14139,6 +14141,22 @@ def _restore_record(weeks: list, old_weeks: list, today: date) -> None:
             w.sessions = sorted(kept + back, key=lambda s: getattr(s, "day", None) or today)
 
 
+def _as_served(kept: dict) -> dict:
+    """The sessions an entry point keeps from the old plan, with the load
+    they serve (6.8's rule, the one the final step applies) BEFORE the load
+    ramp reads them. A stored session kept its old TSS until the final step
+    re-stamped it, after the ramp had followed the old number: a second
+    regenerate then read the re-stamped week and moved the weeks after it
+    (the second evaluation of afec7c6a, L-3: 10-05's target 233 -> 224)."""
+    rows = _library_rows(load_workout_library())
+    for x in kept.values():
+        if (x is not None and x.session_type != "rest" and not getattr(x, "is_race", False)
+                and getattr(x, "status", "pending") == "pending"
+                and not getattr(x, "dismissed_at", "") and not _rider_owned(x)):
+            _restamp(x, rows)
+    return kept
+
+
 def _restore_moved_misses(weeks: list, records: list, today: date) -> None:
     """A missed session the auto-reschedule moved is never destroyed.
 
@@ -14541,6 +14559,7 @@ def recalculate_plan(
             )
             if preserve:
                 preserved_by_day[s.day] = s
+    _as_served(preserved_by_day)
 
     # New phases must start AFTER the current week ends (not mid-week),
     # otherwise we double-cover the current week.

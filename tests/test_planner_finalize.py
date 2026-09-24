@@ -1211,3 +1211,32 @@ def test_l1_every_ridden_load_reader_counts_rides_once():
     lo, hi = t - _dt.timedelta(days=7), t - _dt.timedelta(days=1)
     as_dates = lambda rs: [{**r, "date": r["started_at"][:10]} for r in rs]  # noqa: E731
     assert pi._ride_tss(as_dates(noisy), lo, hi) == pi._ride_tss(as_dates(clean), lo, hi)
+
+
+# L-3 (second evaluation): regenerate is idempotent. A session regenerate
+# keeps (adapted, user-moved, ...) came in with its stored TSS; the final step
+# re-stamped it to its served load (6.8) AFTER the load ramp had read it, so
+# the second regenerate read a different week and moved the weeks after it.
+
+def test_l3_regenerate_twice_gives_the_same_plan():
+    base = gen(owner("continuous"))
+    t = G0 + _dt.timedelta(days=3)
+    wk2 = next(w for w in base if w.start > t)
+    for s in wk2.sessions:
+        if s.session_type != "rest" and s.zwo_file:
+            s.adapted = True
+            s.tss_estimate = round(float(s.tss_estimate) * 0.7)   # a stored, stale load
+
+    def regen(weeks):
+        clock.freeze(t)
+        g = owner("continuous", plan_weeks=0)
+        g.target_date = t + _dt.timedelta(weeks=12)
+        return tp.regenerate_from_today(
+            g, copy.deepcopy(weeks), 55, athlete=ATH, recent_weekly_tss=380,
+            activities=ride_days(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1)))[1]
+    once = regen(base)
+    twice = regen(once)
+    fp = lambda ws: [(w.start, w.tss_target, [(s.day, s.session_type, s.duration_min,  # noqa: E731
+                                              s.tss_estimate, s.zwo_file) for s in w.sessions])
+                     for w in ws]
+    assert fp(once) == fp(twice)

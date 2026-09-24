@@ -140,16 +140,164 @@ def _day_cap_h(day, goal):
     return availability.day_cap_hours(goal, day.weekday())
 
 
+# ── Ridden load: each ride once, and only rides ──────────────────────────
+#
+# The one owner of "what did the rider ride", read by the planner's net
+# budget (training_planner._completed_tss_in), the auditor (_ride_tss,
+# chronic_from_rides), the chronic load the ramp is sized from
+# (ride_storage.chronic_weekly_tss) and the fitness EWMAs (activities_once).
+# A leaf here because ride_storage and the planner both import this module.
+
+# Activities that are not rides: they never count as a ride's load.
+_NON_CYCLING_HINTS = ("run", "swim", "walk", "hike", "row", "climb", "ski",
+                      "skat", "yoga", "weight", "strength", "workout", "elliptical",
+                      "kayak", "canoe", "surf", "golf", "tennis", "soccer", "football")
+
+
+def is_cycling_sport(sport) -> bool:
+    """True if an activity should reconcile against a planned (cycling) session.
+
+    Cycling sport_type values (Strava/ICU): Ride, VirtualRide, GravelRide,
+    MountainBikeRide, EBikeRide, Handcycle, Velomobile, … — anything with
+    ride/bike/cycl. Empty/unknown sport is treated as cycling (local FIT rides
+    often carry no sport tag, and Domestique is a cycling app). A clearly
+    non-cycling activity (RockClimbing, Run, Swim, …) returns False so it is
+    NOT matched to a cycling session — it never pollutes the plan.
+    """
+    s = (sport or "").strip().lower()
+    if not s:
+        return True
+    if any(k in s for k in ("ride", "bike", "cycl", "velomobile", "handcycle")):
+        return True
+    return not any(k in s for k in _NON_CYCLING_HINTS)
+
+
+def _raw(a) -> dict:
+    raw = a.get("raw_json")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = None
+    return raw if isinstance(raw, dict) else {}
+
+
+def _activity_window(a):
+    """(start, end) of an activity as aware datetimes, or (start, None) when
+    it carries no length, or None without a start. Whichever shape carries
+    it: a db row (raw_json start_date_local / start_date, duration_sec), an
+    ICU record (start_date_local, elapsed_time), a ride_storage ride
+    (started_at, duration_s). A naive time is the machine's local time -- the
+    rider's, since the app runs on their machine; a UTC time says so."""
+    from datetime import datetime
+    raw = _raw(a)
+    start = None
+    for v in (raw.get("start_date"), a.get("start_date"),
+              a.get("start_date_local"), raw.get("start_date_local"), a.get("started_at")):
+        if not v:
+            continue
+        try:
+            t = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        start = t if t.tzinfo is not None else t.astimezone()
+        break
+    if start is None:
+        return None
+    secs = 0.0
+    for v in (a.get("elapsed_time"), raw.get("elapsed_time"), a.get("duration_s"),
+              a.get("duration_sec"), a.get("moving_time"), raw.get("moving_time")):
+        try:
+            secs = float(v or 0)
+        except (TypeError, ValueError):
+            continue
+        if secs > 0:
+            break
+    return start, (start + timedelta(seconds=secs) if secs > 0 else None)
+
+
+def _has_power(a) -> bool:
+    """Measured by a power meter: the field real rows carry. The db rows'
+    avg_power column is NULL on every production row (the second evaluation
+    of afec7c6a); intervals.icu keeps the power-based load in raw power_load
+    and the watts in icu_average_watts, a stored ICU ride in avg_power_w."""
+    raw = _raw(a)
+    summary = a.get("summary") if isinstance(a.get("summary"), dict) else {}
+    return any(v not in (None, 0, "", False) for v in (
+        a.get("avg_power"), a.get("avg_power_w"), a.get("icu_average_watts"),
+        raw.get("power_load"), raw.get("icu_average_watts"), summary.get("avg_power")))
+
+
+def _same_recording(wa, wb) -> bool:
+    """Two recordings of one ride: they overlap by more than half of the
+    shorter one; without a length, they start within ten minutes."""
+    (a0, a1), (b0, b1) = wa, wb
+    if a1 is None or b1 is None:
+        return abs((a0 - b0).total_seconds()) <= 600
+    shorter = min((a1 - a0).total_seconds(), (b1 - b0).total_seconds())
+    overlap = (min(a1, b1) - max(a0, b0)).total_seconds()
+    return shorter > 0 and overlap > 0.5 * shorter
+
+
+def _ids(a) -> set:
+    return {str(x) for x in (a.get("id"), a.get("activity_id"), a.get("external_id"),
+                             a.get("ride_id")) if x}
+
+
+def activities_once(activities, matched_ids=()) -> list:
+    """Each effort once, of any sport: the load a fitness model reads.
+
+    Of two recordings of one effort (_same_recording) one is kept, in this
+    order: the one a power meter measured, the one a planned session was
+    matched to, the shorter (the recording that holds the effort, not the
+    band left running around it). Power first: the match says which session
+    a ride completed, not how much work it was, and an HR-estimated load is
+    the estimate of what the meter measured -- the owner's Wednesday is the
+    Bryton's 18, not the band's 13, even though the plan matched the band. Judged pair by pair, not by chains: a long band
+    recording bridging two real rides is a duplicate of each, and both rides
+    count (the evaluator's chain: 120, not 90). Without a start time an
+    activity is kept as it is.
+    """
+    matched = {str(x) for x in matched_ids or ()}
+    acts = [a for a in activities or () if isinstance(a, dict)]
+    timed = [(a, _activity_window(a)) for a in acts]
+    out = [a for a, w in timed if w is None]
+    order = sorted(((a, w) for a, w in timed if w is not None), key=lambda aw: (
+        not _has_power(aw[0]), not (_ids(aw[0]) & matched),
+        ((aw[1][1] - aw[1][0]).total_seconds() if aw[1][1] else 0.0)))
+    kept: list = []
+    for a, w in order:
+        if not any(_same_recording(w, kw) for _, kw in kept):
+            kept.append((a, w))
+    return out + [a for a, _ in kept]
+
+
+def rides_once(activities, matched_ids=()) -> list:
+    """The rides among ``activities``, each counted once (activities_once).
+
+    Not every activity is a ride: the owner's Garmin band logs his rides a
+    second time as an HR-load "Workout" (252 TSS against the Bryton's 205),
+    so a sum over every activity read a 223-TSS week as 488 and rested the
+    rest of it (the evaluation of b7be0395, M1).
+    """
+    return activities_once(
+        [a for a in activities or () if isinstance(a, dict)
+         and is_cycling_sport(a.get("sport") or a.get("type") or "")], matched_ids)
+
+
+def _load_of(a) -> float:
+    summary = a.get("summary") if isinstance(a.get("summary"), dict) else {}
+    try:
+        return float(a.get("tss") or a.get("icu_training_load") or summary.get("tss") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _ride_tss(rides, lo, hi) -> float:
-    total = 0.0
-    for a in rides or []:
-        d = str(a.get("date") or a.get("start_date_local") or "")[:10]
-        if d and lo.isoformat() <= d <= hi.isoformat():
-            try:
-                total += float(a.get("tss") or a.get("icu_training_load") or 0)
-            except (TypeError, ValueError):
-                pass
-    return total
+    inside = [a for a in rides or () if isinstance(a, dict) and lo.isoformat()
+              <= str(a.get("date") or a.get("start_date_local") or a.get("started_at") or "")[:10]
+              <= hi.isoformat()]
+    return sum(_load_of(a) for a in rides_once(inside))
 
 
 def budget(week, rides=None, today=None) -> float:
@@ -838,11 +986,10 @@ def chronic_from_rides(rides, today) -> "float | None":
     under 56 days, which an EWMA seeded at zero needs to settle
     (ride_storage.chronic_weekly_tss says the same)."""
     per_day: dict = {}
-    for a in rides or []:
+    for a in rides_once(rides):
         d = str(a.get("date") or a.get("start_date_local") or a.get("started_at") or "")[:10]
         try:
-            per_day[date.fromisoformat(d)] = per_day.get(date.fromisoformat(d), 0.0) + float(
-                a.get("tss") or a.get("icu_training_load") or 0)
+            per_day[date.fromisoformat(d)] = per_day.get(date.fromisoformat(d), 0.0) + _load_of(a)
         except (TypeError, ValueError):
             continue
     if not per_day or today is None or (today - min(per_day)).days < 56:

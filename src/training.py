@@ -763,7 +763,9 @@ def compute_monotony_strain(wellness: list[dict]) -> tuple[float | None, float |
     try:
         import db
         activities = db.query_activities(days=7)
-        for a in activities:
+        # Every sport's load (fatigue is fatigue), each effort once.
+        from plan_invariants import activities_once
+        for a in activities_once(activities):
             d = a.get("date", "")
             if d in daily_loads:
                 daily_loads[d] += (a.get("tss") or 0)

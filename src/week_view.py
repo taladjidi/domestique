@@ -77,7 +77,10 @@ def week_done(rides, start: date, end: date, days=None) -> float:
     lo, hi = start.isoformat(), end.isoformat()
     only = set(days) if days is not None else None
     total = 0.0
-    for ride in rides or []:
+    # Each ride once, and only rides: the week's "done" is the same number the
+    # planner's net budget reads (plan_invariants.rides_once).
+    from plan_invariants import rides_once
+    for ride in rides_once(rides):
         day = str(ride.get("date") or ride.get("started_at") or "")[:10]
         if not day or not (lo <= day <= hi):
             continue

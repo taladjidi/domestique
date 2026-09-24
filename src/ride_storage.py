@@ -1867,7 +1867,9 @@ def compute_local_ctl(
         today = clock.today()
     cutoff_iso = (today - _dt.timedelta(days=days)).isoformat()
     per_day: dict[str, float] = {}
-    for r in rides:
+    # Fitness reads every sport's load, but each effort once.
+    from plan_invariants import activities_once
+    for r in activities_once(rides):
         started = (r.get("started_at") or "")[:10]
         if not started or started < cutoff_iso:
             continue
@@ -1950,7 +1952,8 @@ def recent_mean_weekly_tss(
     cutoff = today - _dt.timedelta(weeks=max(1, weeks))
     cutoff_iso = cutoff.isoformat()
     per_week: dict[tuple[int, int], float] = {}
-    for r in rides:
+    from plan_invariants import rides_once       # each ride once, only rides
+    for r in rides_once(rides):
         started = (r.get("started_at") or "")[:10]
         if not started or started < cutoff_iso:
             continue
@@ -2016,7 +2019,11 @@ def chronic_weekly_tss(
     if not rides:
         return None
     per_day: dict[_dt.date, float] = {}
-    for r in rides:
+    # Each ride once, and only rides (plan_invariants.rides_once): the owner's
+    # walks and the band's second recording of every ride were read as load
+    # the rider carries (the second evaluation of afec7c6a, L-1).
+    from plan_invariants import rides_once
+    for r in rides_once(rides):
         # Both shapes, as compute_local_atl reads them: list_rides() nests the
         # load under summary, load_all_rides() carries it at the top level.
         tss = r.get("tss")
@@ -2150,7 +2157,10 @@ def compute_local_atl(
     cutoff = today - _dt.timedelta(days=90)
     cutoff_iso = cutoff.isoformat()
     per_day: dict[str, float] = {}
-    for r in rides:
+    # Fitness reads every sport's load, as intervals.icu's CTL does -- but each
+    # effort once (plan_invariants.activities_once).
+    from plan_invariants import activities_once
+    for r in activities_once(rides):
         # Accept both list_rides() shape (started_at + summary.tss) and
         # load_all_rides() shape (started_at + tss).
         started = (r.get("started_at") or "")[:10]

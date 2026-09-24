@@ -741,8 +741,13 @@ def test_m1_the_ridden_load_counts_each_ride_once():
     walk = _act("i188418356", (G0 + _dt.timedelta(days=5)).isoformat(), "10:00", 3600,
                 "Walk", 6, power=False)
     assert tp._completed_tss_in(acts + [walk], G0, G0 + _dt.timedelta(days=6)) == 223.0
-    # Of two recordings of one ride, the one a session was matched to counts.
+    # Of two recordings of one ride, the power meter's counts, even when the
+    # session was matched to the band's (the plan's match on 09-23)...
     assert tp._completed_tss_in(acts, G0, G0 + _dt.timedelta(days=6),
+                                matched_ids={"i189708913"}) == 223.0
+    # ...and between two without power, the matched one.
+    nop = [dict(a, avg_power=None) for a in acts]
+    assert tp._completed_tss_in(nop, G0, G0 + _dt.timedelta(days=6),
                                 matched_ids={"i189708913"}) == 218.0
 
 
@@ -1113,3 +1118,96 @@ def test_mf2_a_reasoned_rest_is_not_a_free_slot(reason):
     t = G0 + _dt.timedelta(days=3)
     assert not [x for x in app_module._compute_missed_suggestions(plan, t)
                 if x.get("suggested_date") in ("2026-09-19", "2026-09-20")]
+
+
+# L-1 / L-2 (second evaluation): one owner for ridden load, and it survives
+# the shapes real archives hold.
+
+def _R(i, start, secs, t, sport="Ride", **kw):
+    d = {"id": i, "date": start[:10], "sport": sport, "tss": float(t),
+         "raw_json": json.dumps({"start_date_local": start, "elapsed_time": secs})}
+    d.update(kw)
+    return d
+
+
+def _band(i, start, secs, t, sport="VirtualRide"):
+    """The Garmin band's recording: HR load, no power (the owner's rows)."""
+    return {"id": i, "date": start[:10], "sport": sport, "tss": float(t), "avg_power": None,
+            "raw_json": json.dumps({"start_date_local": start, "elapsed_time": secs,
+                                    "power_load": None, "hr_load": t})}
+
+
+def _bryton(i, start, secs, t):
+    """A Bryton upload as the owner's rows carry it: avg_power NULL on the
+    row, the power in raw_json (power_load)."""
+    return {"id": i, "date": start[:10], "sport": "Ride", "tss": float(t), "avg_power": None,
+            "raw_json": json.dumps({"start_date_local": start, "elapsed_time": secs,
+                                    "power_load": t})}
+
+
+@pytest.mark.parametrize("name, acts, want", [
+    ("morning and evening both count", [_R("a", "2026-09-21T07:00:00", 3600, 40),
+                                        _R("b", "2026-09-21T18:00:00", 3600, 60)], 100),
+    ("a duplicate without elapsed time", [
+        {"id": "a", "date": "2026-09-21", "sport": "Ride", "tss": 50.0,
+         "raw_json": json.dumps({"start_date_local": "2026-09-21T10:00:00"})},
+        {"id": "b", "date": "2026-09-21", "sport": "VirtualRide", "tss": 45.0,
+         "raw_json": json.dumps({"start_date_local": "2026-09-21T10:00:30"})}], (45, 50)),
+    ("a local-time row and a UTC started_at row of one ride", [
+        _R("a", "2026-09-21T12:00:00", 3600, 60),
+        {"id": "b", "date": "2026-09-21", "sport": "Ride", "tss": 58.0,
+         "started_at": "2026-09-21T10:00:30Z", "duration_sec": 3550}], (58, 60)),
+    ("a band recording bridging two real rides", [
+        _R("a", "2026-09-21T08:00:00", 7200, 60), _band("b", "2026-09-21T09:55:00", 30600, 90),
+        _R("c", "2026-09-21T17:00:00", 7200, 60)], 120),
+    ("power read where real rows carry it (the owner's Wednesday)", [
+        _bryton("i189542797", "2026-09-23T11:30:19", 5931, 18),
+        _band("i189708913", "2026-09-23T11:30:50", 6572, 13)], 18),
+    ("the power meter's recording wins even when the band's is shorter", [
+        _bryton("p", "2026-09-23T11:30:00", 7000, 18),
+        _band("h", "2026-09-23T11:31:00", 6000, 13)], 18),
+    ("back to back rides both count", [_R("a", "2026-09-21T10:00:00", 3600, 50),
+                                       _R("b", "2026-09-21T11:00:00", 3600, 50)], 100),
+    ("a long stop, then a second ride", [_R("a", "2026-09-21T09:00:00", 4 * 3600, 50),
+                                         _R("b", "2026-09-21T12:30:00", 3600, 50)], 100),
+    ("a run is not a ride", [_R("a", "2026-09-21T10:00:00", 3600, 50, "Run")], 0),
+])
+def test_l2_rides_once_edge_cases(name, acts, want, monkeypatch):
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    import time
+    time.tzset()
+    try:
+        got = tp._completed_tss_in(acts, _dt.date(2026, 9, 21), _dt.date(2026, 9, 23))
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+    assert got in (want if isinstance(want, tuple) else (want,)), (name, got)
+
+
+def test_l1_every_ridden_load_reader_counts_rides_once():
+    """The owner's chronic load read their walk and the band's VirtualRide
+    duplicate: ride_storage.chronic_weekly_tss and the auditor's
+    plan_invariants._ride_tss summed every activity."""
+    import ride_storage
+    t = _dt.date(2026, 11, 30)
+    clean, noisy = [], []
+    d = t - _dt.timedelta(days=70)
+    k = 0
+    while d < t:
+        k += 1
+        ride = {"ride_id": f"icu_r{k}", "external_id": f"r{k}", "sport": "Ride",
+                "started_at": f"{d.isoformat()}T12:00:00", "duration_s": 7200,
+                "avg_power_w": 180, "tss": 80.0}
+        clean.append(ride)
+        noisy += [ride,
+                  {"ride_id": f"icu_b{k}", "external_id": f"b{k}", "sport": "VirtualRide",
+                   "started_at": f"{d.isoformat()}T12:01:00", "duration_s": 7300,
+                   "avg_power_w": None, "tss": 70.0},
+                  {"ride_id": f"icu_w{k}", "external_id": f"w{k}", "sport": "Walk",
+                   "started_at": f"{d.isoformat()}T18:00:00", "duration_s": 3600, "tss": 6.0}]
+        d += _dt.timedelta(days=2)
+    assert ride_storage.chronic_weekly_tss(noisy, today=t) == \
+        ride_storage.chronic_weekly_tss(clean, today=t)
+    lo, hi = t - _dt.timedelta(days=7), t - _dt.timedelta(days=1)
+    as_dates = lambda rs: [{**r, "date": r["started_at"][:10]} for r in rs]  # noqa: E731
+    assert pi._ride_tss(as_dates(noisy), lo, hi) == pi._ride_tss(as_dates(clean), lo, hi)

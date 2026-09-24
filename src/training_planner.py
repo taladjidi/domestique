@@ -1444,6 +1444,15 @@ RAMP_CONSERVATIVE = 3
 RAMP_MODERATE     = 5
 RAMP_AGGRESSIVE   = 7
 
+# What a day the weekly budget rested says. The auto-move reads it: a day the
+# budget emptied is not a free slot for a missed session.
+BUDGET_REST = "Rest — weekly volume ceiling (recent load)"
+# Every rest a pass writes for a reason -- the budget, the unload week, the
+# race week, a date the rider is away -- as opposed to the rhythm's rest days.
+REASONED_REST = frozenset({BUDGET_REST, REST_UNAVAILABLE, "Rest — recovery week",
+                           "Rest — race week", "Rest day"})
+
+
 # Activities that are not rides: they never count as a ride's load. Moved here
 # from app (_is_cycling_sport) so the planner's ridden load and the app's gap
 # maths read one rule.
@@ -10476,7 +10485,7 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.session_type = "rest"
             slot.duration_min = 0
             slot.tss_estimate = 0
-            slot.description = "Rest — weekly volume ceiling (recent load)"
+            slot.description = BUDGET_REST
             slot.zwo_file = ""
             slot.zwo_name = ""
 

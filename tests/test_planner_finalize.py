@@ -764,3 +764,64 @@ def test_m1_a_duplicate_recording_does_not_rest_the_rest_of_the_week(kind):
     got = ahead(dup)
     assert got == ahead(clean)
     assert [x for x in got if x[1] != "rest"], got
+
+
+# M2 (evaluation of b7be0395): a missed session is never destroyed.
+
+def _missed_week_plan(kind="event"):
+    """The stored plan on Thursday of week 1: Tuesday's session missed, and
+    Saturday a rest day on a day the rider trains (a free slot)."""
+    base = gen(owner(kind))
+    plan = {"goal": tp.goal_to_dict(owner(kind)), "weeks": [tp.week_to_dict(w) for w in base]}
+    tue, sat = "2026-09-15", "2026-09-19"
+    for s in plan["weeks"][0]["sessions"]:
+        if s["day"] == tue:
+            s.update(session_type="z2", duration_min=60, tss_estimate=45, status="missed",
+                     zwo_file="z2_steady_70pct_60min_v2.zwo")
+        if s["day"] == sat:
+            s.update(session_type="rest", duration_min=0, tss_estimate=0, zwo_file="",
+                     description="Rest — recovery takes priority")
+    return plan, tue
+
+
+def _owed(plan, tue):
+    """Where Tuesday's session is now: missed on its own day, or pending on
+    the day it moved to."""
+    ss = [s for w in plan["weeks"] for s in w["sessions"]]
+    return ([s["day"] for s in ss if s["day"] == tue and s.get("status") == "missed"]
+            + [s["day"] for s in ss if s.get("moved_from") == tue
+               and s["session_type"] != "rest" and s.get("status") == "pending"])
+
+
+def test_m2_a_missed_session_the_budget_will_not_carry_stays_missed():
+    """600 TSS ridden Monday spends the week: on b7be0395 the auto-move put
+    Tuesday's z2 on Saturday, the final step rested Saturday, and Tuesday was
+    left a rest 'moved_from' -- the session existed nowhere."""
+    import app as app_module
+    plan, tue = _missed_week_plan()
+    t = G0 + _dt.timedelta(days=3)
+    clock.freeze(t)
+    rides = [{"id": "r1", "date": G0.isoformat(), "sport": "Ride", "tss": 600.0}]
+    for _ in range(2):                              # two syncs
+        plan, _action, _info, _msg = app_module._apply_plan_update(
+            plan, training={}, activities=rides, today=t)
+        assert _owed(plan, tue), "the missed session is gone"
+        # And no session anywhere: a day left "moved_from:X" is only a stub
+        # when X holds the session, pending, moved from that day.
+        ss = {s["day"]: s for w in plan["weeks"] for s in w["sessions"]}
+        for d, s in ss.items():
+            st = str(s.get("status") or "")
+            if st.startswith("moved_from:"):
+                dst = ss.get(st.split(":", 1)[1], {})
+                assert dst.get("moved_from") == d and dst.get("session_type") != "rest", (d, dst)
+
+
+def test_m2_a_day_the_budget_rested_is_not_a_free_slot():
+    import app as app_module
+    plan, tue = _missed_week_plan()
+    for s in plan["weeks"][0]["sessions"]:
+        if s["day"] == "2026-09-19":
+            s["description"] = tp.BUDGET_REST
+    clock.freeze(G0 + _dt.timedelta(days=3))
+    assert not [x for x in app_module._compute_missed_suggestions(plan, G0 + _dt.timedelta(days=3))
+                if x.get("suggested_date") == "2026-09-19"]

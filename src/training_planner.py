@@ -1444,20 +1444,102 @@ RAMP_CONSERVATIVE = 3
 RAMP_MODERATE     = 5
 RAMP_AGGRESSIVE   = 7
 
-# TSS per hour by session type (for budget calculations)
-def _completed_tss_in(activities: list | None, start: date, end: date) -> float:
-    """Load already ridden inside [start, end] inclusive.
+# Activities that are not rides: they never count as a ride's load. Moved here
+# from app (_is_cycling_sport) so the planner's ridden load and the app's gap
+# maths read one rule.
+_NON_CYCLING_HINTS = ("run", "swim", "walk", "hike", "row", "climb", "ski",
+                      "skat", "yoga", "weight", "strength", "workout", "elliptical",
+                      "kayak", "canoe", "surf", "golf", "tennis", "soccer", "football")
+
+
+def is_cycling_sport(sport) -> bool:
+    """True if an activity should reconcile against a planned (cycling) session.
+
+    Cycling sport_type values (Strava/ICU): Ride, VirtualRide, GravelRide,
+    MountainBikeRide, EBikeRide, Handcycle, Velomobile, … — anything with
+    ride/bike/cycl. Empty/unknown sport is treated as cycling (local FIT rides
+    often carry no sport tag, and Domestique is a cycling app). A clearly
+    non-cycling activity (RockClimbing, Run, Swim, …) returns False so it is
+    NOT matched to a cycling session — it never pollutes the plan.
+    """
+    s = (sport or "").strip().lower()
+    if not s:
+        return True
+    if any(k in s for k in ("ride", "bike", "cycl", "velomobile", "handcycle")):
+        return True
+    return not any(k in s for k in _NON_CYCLING_HINTS)
+
+
+def _activity_window(a) -> "tuple[datetime, datetime] | None":
+    """(start, end) of an activity, from whichever shape carries it: a db row
+    (raw_json + duration_sec), an ICU record, a ride_storage ride."""
+    raw = a.get("raw_json")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = None
+    raw = raw if isinstance(raw, dict) else {}
+    start = (a.get("start_date_local") or raw.get("start_date_local")
+             or a.get("started_at") or "")
+    try:
+        t0 = datetime.fromisoformat(str(start)[:19])
+    except ValueError:
+        return None
+    secs = (a.get("elapsed_time") or raw.get("elapsed_time") or a.get("duration_sec")
+            or a.get("moving_time") or raw.get("moving_time") or 0)
+    try:
+        secs = float(secs)
+    except (TypeError, ValueError):
+        return None
+    return (t0, t0 + timedelta(seconds=secs)) if secs > 0 else None
+
+
+def rides_once(activities, matched_ids=()) -> list:
+    """The rides among ``activities``, each counted once.
+
+    Not every activity is a ride: the owner's Garmin band logs his rides a
+    second time as an HR-load "Workout" (252 TSS against the Bryton's 205), so
+    a sum over every activity read a 223-TSS week as 488 and rested the rest
+    of it (the evaluation of b7be0395, M1). And one ride can be recorded
+    twice -- the Bryton's "Lunch Ride" (18) and the band's "Cycling" (13) of
+    the same window. Of rides whose times overlap one is kept: the one a
+    planned session was matched to, else the one with power, else the
+    longest. A ride without a start time is kept as it is.
+    """
+    matched = {str(x) for x in matched_ids or ()}
+    rides = [a for a in activities or [] if isinstance(a, dict)
+             and is_cycling_sport(a.get("sport") or a.get("type") or "")]
+    timed = [(a, _activity_window(a)) for a in rides]
+    out = [a for a, w in timed if w is None]
+    groups: list = []
+    for a, w in sorted(((a, w) for a, w in timed if w is not None), key=lambda x: x[1][0]):
+        if groups and w[0] < groups[-1][1]:
+            groups[-1][0].append((a, w))
+            groups[-1][1] = max(groups[-1][1], w[1])
+        else:
+            groups.append([[(a, w)], w[1]])
+    for members, _end in groups:
+        out.append(max(members, key=lambda m: (
+            str(m[0].get("id") or m[0].get("activity_id") or "") in matched,
+            bool(m[0].get("avg_power") or m[0].get("icu_average_watts")),
+            (m[1][1] - m[1][0]).total_seconds()))[0])
+    return out
+
+
+def _completed_tss_in(activities: list | None, start: date, end: date,
+                      matched_ids=()) -> float:
+    """Load already ridden inside [start, end] inclusive: each ride once, and
+    only rides (rides_once).
 
     Naturally zero for a future week, so callers can pass it unconditionally
     rather than special-casing the current one.
     """
     total = 0.0
-    for a in activities or []:
-        if not isinstance(a, dict):
-            continue
-        d = str(a.get("date") or a.get("start_date_local") or "")[:10]
-        if not d or not (start.isoformat() <= d <= end.isoformat()):
-            continue
+    lo, hi = start.isoformat(), end.isoformat()
+    inside = [a for a in activities or [] if isinstance(a, dict)
+              and lo <= str(a.get("date") or a.get("start_date_local") or "")[:10] <= hi]
+    for a in rides_once(inside, matched_ids):
         try:
             total += float(a.get("tss") or a.get("icu_training_load") or 0)
         except (TypeError, ValueError):
@@ -1484,13 +1566,11 @@ def _completed_zones_in(activities: list | None, start: date,
     """
     import json as _json
     acc = {f"z{i}": 0.0 for i in range(1, 8)}
-    for a in activities or []:
-        if not isinstance(a, dict):
-            continue
-        d = str(a.get("date") or a.get("start_date_local")
-                or a.get("started_at") or "")[:10]
-        if not d or not (start.isoformat() <= d <= end.isoformat()):
-            continue
+    lo, hi = start.isoformat(), end.isoformat()
+    inside = [a for a in activities or [] if isinstance(a, dict)
+              and lo <= str(a.get("date") or a.get("start_date_local")
+                            or a.get("started_at") or "")[:10] <= hi]
+    for a in rides_once(inside):
         tiz = a.get("time_in_zone")
         if not tiz:
             raw = a.get("raw_json")
@@ -14186,9 +14266,13 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     ahead = [w for w in weeks if w.end >= today]
     monday = today - timedelta(days=today.weekday())
 
+    matched = {str(m.get("activity_id")) for w in weeks for s in w.sessions
+               if s is not None for m in (getattr(s, "completion_matches", None) or [])
+               if isinstance(m, dict) and m.get("activity_id")}
+
     def ridden(lo):
         if rides is not None:
-            return _completed_tss_in(rides, lo, today - timedelta(days=1))
+            return _completed_tss_in(rides, lo, today - timedelta(days=1), matched)
         return sum(float(s.tss_estimate or 0) for w in weeks for s in w.sessions
                    if s is not None and lo <= s.day < today and s.session_type != "rest"
                    and not getattr(s, "is_race", False)

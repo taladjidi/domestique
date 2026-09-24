@@ -710,3 +710,57 @@ def test_6_1_a_no_change_recalculate_still_runs_the_final_step(kind):
     _, weeks, info = tp.recalculate_plan(g, copy.deepcopy(base), 55, athlete=ATH,
                                          recent_weekly_tss=380)
     assert not [s for s in pending_ahead(weeks, t) if s.day in zero], info["action"]
+
+
+# M1 (evaluation of b7be0395, the owner's data): the week's ridden load counts
+# each ride once, and only rides.
+
+def _act(aid, day, hhmm, secs, sport, tss, power=True):
+    start = f"{day}T{hhmm}:00"
+    return {"id": aid, "date": day, "sport": sport, "tss": float(tss), "duration_sec": secs,
+            "avg_power": 180.0 if power else None,
+            "raw_json": json.dumps({"start_date_local": start, "elapsed_time": secs,
+                                    "moving_time": secs, "type": sport})}
+
+
+def _owner_week_activities(monday):
+    """The owner's week of 2026-09-21: Monday's Bryton ride (205) and the
+    Garmin band's HR-load 'Workout' of the same window (252); Wednesday's
+    Bryton ride (18) and the band's 'VirtualRide' of the same ride (13)."""
+    mon, wed = monday.isoformat(), (monday + _dt.timedelta(days=2)).isoformat()
+    return [_act("i188888193", mon, "12:39", 13437, "Ride", 205),
+            _act("i189048003", mon, "12:27", 15449, "Workout", 252, power=False),
+            _act("i189542797", wed, "11:30", 5062, "Ride", 18),
+            _act("i189708913", wed, "11:30", 6572, "VirtualRide", 13, power=False)]
+
+
+def test_m1_the_ridden_load_counts_each_ride_once():
+    acts = _owner_week_activities(G0)
+    assert tp._completed_tss_in(acts, G0, G0 + _dt.timedelta(days=6)) == 223.0
+    # A walk or a run on its own is not a ride either (the owner's 09-19 walk).
+    walk = _act("i188418356", (G0 + _dt.timedelta(days=5)).isoformat(), "10:00", 3600,
+                "Walk", 6, power=False)
+    assert tp._completed_tss_in(acts + [walk], G0, G0 + _dt.timedelta(days=6)) == 223.0
+    # Of two recordings of one ride, the one a session was matched to counts.
+    assert tp._completed_tss_in(acts, G0, G0 + _dt.timedelta(days=6),
+                                matched_ids={"i189708913"}) == 218.0
+
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_m1_a_duplicate_recording_does_not_rest_the_rest_of_the_week(kind):
+    """On b7be0395 the owner's first sync counted 488 against a 479 target and
+    rested Thursday and Friday; the calendar push then deleted both."""
+    base = gen(owner(kind))
+    t = G0 + _dt.timedelta(days=3)
+    dup = _owner_week_activities(G0)
+    clean = [a for a in dup if a["id"] in ("i188888193", "i189542797")]
+
+    def ahead(acts):
+        plan = {"goal": tp.goal_to_dict(owner(kind)), "weeks": [tp.week_to_dict(w) for w in base]}
+        clock.freeze(t)
+        tp.reforecast_dict(plan, tsb_series={}, recent_activities=acts)
+        return [(s["day"], s["session_type"], s["duration_min"]) for w in plan["weeks"]
+                for s in w["sessions"] if t.isoformat() <= s["day"] <= "2026-09-20"]
+    got = ahead(dup)
+    assert got == ahead(clean)
+    assert [x for x in got if x[1] != "rest"], got

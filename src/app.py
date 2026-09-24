@@ -13312,27 +13312,9 @@ def _load_current_week_dto(plan: dict, today: date):
     return None, -1
 
 
-_NON_CYCLING_HINTS = ("run", "swim", "walk", "hike", "row", "climb", "ski",
-                      "skat", "yoga", "weight", "strength", "workout", "elliptical",
-                      "kayak", "canoe", "surf", "golf", "tennis", "soccer", "football")
-
-
-def _is_cycling_sport(sport) -> bool:
-    """True if an activity should reconcile against a planned (cycling) session.
-
-    Cycling sport_type values (Strava/ICU): Ride, VirtualRide, GravelRide,
-    MountainBikeRide, EBikeRide, Handcycle, Velomobile, … — anything with
-    ride/bike/cycl. Empty/unknown sport is treated as cycling (local FIT rides
-    often carry no sport tag, and Domestique is a cycling app). A clearly
-    non-cycling activity (RockClimbing, Run, Swim, …) returns False so it is
-    NOT matched to a cycling session — it never pollutes the plan.
-    """
-    s = (sport or "").strip().lower()
-    if not s:
-        return True
-    if any(k in s for k in ("ride", "bike", "cycl", "velomobile", "handcycle")):
-        return True
-    return not any(k in s for k in _NON_CYCLING_HINTS)
+# One rule, in the planner, so its ridden load and the gap maths agree.
+_NON_CYCLING_HINTS = tp._NON_CYCLING_HINTS
+_is_cycling_sport = tp.is_cycling_sport
 
 
 def _collect_week_activities(current_week, today: date, include_today: bool = False):

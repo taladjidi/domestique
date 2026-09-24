@@ -4159,11 +4159,10 @@ async def api_readiness_apply_tier_down(request: Request):
                         continue
                     for i in range(7):
                         tsb_series[ws + timedelta(days=i)] = current_tsb
-            avail = {
-                day_iso2: float(entry["hours"])
-                for day_iso2, entry in plan.get("availability", {}).items()
-                if isinstance(entry, dict) and "hours" in entry
-            }
+            # The one reading of the calendar (tp.plan_calendar): the rider's
+            # dates, not the wizard's defaults -- scaling a day up to its free
+            # hours is a prescription (D5), and it churned every sync.
+            avail = tp.plan_calendar(plan, tp.goal_from_dict(plan.get("goal") or {}))
             plan, _modified, _ri = tp.reforecast_dict(
                 plan,
                 today_iso=clock.today().isoformat(),
@@ -4464,11 +4463,10 @@ async def api_plan_auto_adjust(request: Request):
                             continue
                         for i in range(7):
                             tsb_series[ws + timedelta(days=i)] = current_tsb
-                avail = {
-                    day_iso2: float(entry["hours"])
-                    for day_iso2, entry in working.get("availability", {}).items()
-                    if isinstance(entry, dict) and "hours" in entry
-                }
+                # The one reading of the calendar (tp.plan_calendar): the rider's
+                # dates, not the wizard's defaults -- scaling a day up to its free
+                # hours is a prescription (D5), and it churned every sync.
+                avail = tp.plan_calendar(working, tp.goal_from_dict(working.get("goal") or {}))
                 working, _modified, _ri = tp.reforecast_dict(
                     working,
                     today_iso=today_iso,
@@ -11414,9 +11412,20 @@ async def api_plan_generate(request: Request):
                 except (KeyError, ValueError, TypeError, AttributeError):
                     availability_overrides = {}
                     old_availability_full = {}
+            # The rider's unavailable periods outlive a new plan (contract 6.1):
+            # generate dropped them and refilled the days they close.
+            old_periods = [p for p in ((_existing_plan or {}).get("unavailable_periods") or [])
+                           if isinstance(p, dict)] if isinstance(_existing_plan, dict) else []
+            periods = []
+            for _p in old_periods:
+                try:
+                    periods.append((date.fromisoformat(_p["start"]), date.fromisoformat(_p["end"])))
+                except (KeyError, TypeError, ValueError):
+                    continue
 
             phases, weeks = tp.generate_plan(
                 goal,
+                unavailable_periods=periods or None,
                 availability_overrides=availability_overrides or None,
                 athlete=athlete,
                 current_ctl=current_ctl,
@@ -11463,6 +11472,8 @@ async def api_plan_generate(request: Request):
                 # Training-Plan-tab drift chip (live CTL vs plan assumption).
                 "ctl_snapshot": tp.plan_ctl_snapshot(current_ctl, recent_weekly_tss),
             }
+            if old_periods:
+                plan_dict["unavailable_periods"] = old_periods
 
             # v1.8.21 — rebuild the per-day availability calendar from the NEWLY
             # chosen weekly hours so it reflects them across the whole plan span.
@@ -11788,11 +11799,10 @@ async def api_plan_reforecast():
         # hour overrides actually rescale daily duration / TSS. Sparse:
         # only days the user touched are in the dict; absent days keep
         # current planned duration.
-        availability_overrides = {
-            day_iso: float(entry["hours"])
-            for day_iso, entry in plan.get("availability", {}).items()
-            if isinstance(entry, dict) and "hours" in entry
-        }
+        # The one reading of the calendar (tp.plan_calendar): the rider's
+        # dates, not the wizard's defaults -- scaling a day up to its free
+        # hours is a prescription (D5), and it churned every sync.
+        availability_overrides = tp.plan_calendar(plan, tp.goal_from_dict(plan.get("goal") or {}))
 
         # v1.5.0 — single-layer reforecast. Replaces the inline PlannedWeek
         # build + tp.reforecast() call + the v1.4.0 propagation helper.
@@ -12566,11 +12576,10 @@ def _apply_plan_update(
                 continue
             for i in range(7):
                 tsb_series[ws + timedelta(days=i)] = current_tsb
-    availability_overrides = {
-        day_iso: float(entry["hours"])
-        for day_iso, entry in plan.get("availability", {}).items()
-        if isinstance(entry, dict) and "hours" in entry
-    }
+    # The one reading of the calendar (tp.plan_calendar): the rider's
+    # dates, not the wizard's defaults -- scaling a day up to its free
+    # hours is a prescription (D5), and it churned every sync.
+    availability_overrides = tp.plan_calendar(plan, tp.goal_from_dict(plan.get("goal") or {}))
     plan, modified, reforecast_info = tp.reforecast_dict(
         plan,
         today_iso=today.isoformat(),
@@ -16283,11 +16292,10 @@ def _accept_redraw_apply(plan: dict, day_iso: str, candidate: dict) -> dict:
                     continue
                 for i in range(7):
                     tsb_series[ws + timedelta(days=i)] = current_tsb
-        availability_overrides = {
-            day_iso2: float(entry["hours"])
-            for day_iso2, entry in plan.get("availability", {}).items()
-            if isinstance(entry, dict) and "hours" in entry
-        }
+        # The one reading of the calendar (tp.plan_calendar): the rider's
+        # dates, not the wizard's defaults -- scaling a day up to its free
+        # hours is a prescription (D5), and it churned every sync.
+        availability_overrides = tp.plan_calendar(plan, tp.goal_from_dict(plan.get("goal") or {}))
         # v1.8.1 SPEED-B: fast path for accept-redraw. A single-session
         # swap does not move the prior week's actual/planned ratio (G4
         # ACWR) nor the rolling polarization split (G3); skipping those
@@ -16524,11 +16532,10 @@ def _swap_session_type_apply(plan: dict, day_iso: str, new_type: str, new_dur: i
                     continue
                 for i in range(7):
                     tsb_series[ws + timedelta(days=i)] = current_tsb
-        availability_overrides = {
-            d2: float(entry["hours"])
-            for d2, entry in plan.get("availability", {}).items()
-            if isinstance(entry, dict) and "hours" in entry
-        }
+        # The one reading of the calendar (tp.plan_calendar): the rider's
+        # dates, not the wizard's defaults -- scaling a day up to its free
+        # hours is a prescription (D5), and it churned every sync.
+        availability_overrides = tp.plan_calendar(plan, tp.goal_from_dict(plan.get("goal") or {}))
         plan, sessions_modified, _ri = tp.reforecast_dict(
             plan, today_iso=clock.today().isoformat(),
             tsb_series=tsb_series, recent_activities=activities,

@@ -13899,9 +13899,18 @@ def plan_calendar(plan_dict: dict, goal=None) -> "dict[str, float]":
     """The rider's per-date ceilings in a stored plan, ISO date -> hours.
 
     Every explicit block of the availability calendar, every date of an
-    unavailable period (0 h), and a plain entry only where it OPENS more time
-    than the goal's weekday rule gives -- a stale wizard default can never
-    close a day the rider trains on now.
+    unavailable period (0 h), and a plain entry wherever it differs from the
+    goal's weekday rule: the calendar's REST button stores {hours: 0, type:
+    "rest"} and a shortened day {hours: 0.75, type: "available"}, and both are
+    the rider's word for that date. Entries equal to the rule are the
+    wizard's defaults and change nothing. The ONE reading of the calendar:
+    the sync path fed the dense calendar to the final step while regenerate
+    read blocks only, and a REST day flipped between rest and threshold on
+    every regenerate/sync pair (the 2026-09-24 review, V1).
+
+    ponytail: generate rebuilds the plain entries from the goal's hours, so a
+    difference is a rider's edit; a goal edited without a generate would read
+    its old defaults as edits (no endpoint does that today).
     """
     out: "dict[str, float]" = {}
     for iso, e in ((plan_dict or {}).get("availability") or {}).items():
@@ -13914,7 +13923,7 @@ def plan_calendar(plan_dict: dict, goal=None) -> "dict[str, float]":
             continue
         if e.get("type") in CALENDAR_BLOCKS:
             out[str(iso)[:10]] = h
-        elif goal is not None and h * 60 > availability.trainable_minutes(goal, wd):
+        elif goal is not None and round(h * 60) != availability.trainable_minutes(goal, wd):
             out[str(iso)[:10]] = h
     for p in (plan_dict or {}).get("unavailable_periods") or []:
         try:
@@ -14410,9 +14419,13 @@ def recalculate_plan(
     needs_adjustment = abs(deviation_pct) > 8  # >8% relative deviation
 
     if not needs_adjustment and future_weeks:
-        # Minor deviation — just annotate, don't regenerate
+        # Minor deviation — just annotate, don't regenerate. The final step
+        # still holds the plan to its rules (a no_change return used to skip
+        # it, and a zeroed day stayed filled: the 2026-09-24 review, V2).
+        _held = finalize_weeks(current_plan_weeks, goal, rides=recent_activities,
+                               normal_week=recent_weekly_tss)
         return ([], current_plan_weeks, {
-            "action": "no_change",
+            "action": "finalized" if _held else "no_change",
             "event_readiness": event_readiness,
             "deviation_pct": round(deviation_pct, 1),
             "eftp_drift": _check_eftp_drift(current_eftp),
@@ -14793,8 +14806,12 @@ def extend_continuous_plan(
     event_readiness = compute_event_readiness(goal, current_ctl)  # no_event
 
     def _no_change(reason: str, detail: str = "") -> tuple:
+        # The final step still runs (the 2026-09-24 review, V2): nothing to
+        # append is not nothing to enforce.
+        _held = finalize_weeks(current_plan_weeks, goal, rides=recent_activities,
+                               normal_week=recent_weekly_tss) if current_plan_weeks else set()
         info = {
-            "action": "no_change",
+            "action": "finalized" if _held else "no_change",
             "reason": reason,
             "event_readiness": event_readiness,
             "deviation_pct": 0.0,

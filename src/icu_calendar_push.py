@@ -309,7 +309,8 @@ def _desired_events(pm, plan: dict, today: date, horizon_days: int,
     # writer runs the final step, and this keeps a plan stored before it from
     # pushing one anyway. Not desired -> the sweep removes a stale event.
     import training_planner as _tp
-    closed = {d for d, h in _tp.plan_calendar(plan).items() if h <= 0}
+    closed = {d for d, h in _tp.plan_calendar(
+        plan, _tp.goal_from_dict(plan.get("goal") or {})).items() if h <= 0}
 
     events, skipped, broken_ids = [], [], set()
     for day_iso in sorted(by_day):

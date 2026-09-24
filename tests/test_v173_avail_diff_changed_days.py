@@ -188,6 +188,7 @@ def test_no_user_edits_returns_zero_and_no_writeback_changes(tmp_path, monkeypat
     )
     assert r.json().get("sessions_modified") == 0
 
-    # Session lengths on disk are unchanged.
-    assert _load_session(json_path, wed)["duration_min"] == 110
+    # The calendar is a ceiling on its dates (contract 6.1; D5): Wednesday's
+    # 1.5 h caps the 110 min session at 90, Thursday's 2 h leaves 120 alone.
+    assert _load_session(json_path, wed)["duration_min"] == 90
     assert _load_session(json_path, thu)["duration_min"] == 120

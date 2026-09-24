@@ -651,3 +651,62 @@ def test_the_final_step_is_a_fixpoint(kind):
                                                   T3 - _dt.timedelta(days=1)),
                                   normal_week=380)
         assert again == set(), (name, sorted(again)[:5])
+
+
+# 6.1, the review of 2026-09-24: one reading of the calendar on every path.
+
+def test_6_1_the_rest_button_holds_through_regenerate_and_sync(tmp_path, monkeypatch):
+    """The calendar's REST button stores {hours: 0, type: "rest"}. Regenerate
+    read blocks only and refilled the day, the sync's reforecast read the
+    whole calendar and rested it again: rest / threshold 59 / rest ... (V1)."""
+    client, plan, p = _app_plan(tmp_path, monkeypatch, G0)
+    try:
+        days = [s["day"] for w in plan["weeks"][1:3] for s in w["sessions"]
+                if s["session_type"] != "rest"][:2]
+        avail = {d: {"hours": 0, "type": "rest"} for d in days}
+        assert client.post("/api/plan/save-availability",
+                           json={"availability": avail}).status_code == 200
+        assert _sessions_on(tmp_path, days) == []
+        for _ in range(2):
+            assert client.post("/api/plan/regenerate", json={}).status_code == 200
+            assert _sessions_on(tmp_path, days) == []
+            assert client.post("/api/plan/reforecast").status_code == 200
+            assert _sessions_on(tmp_path, days) == []
+    finally:
+        p.stop()
+
+
+def test_6_1_generate_keeps_the_unavailable_periods(tmp_path, monkeypatch):
+    client, plan, p = _app_plan(tmp_path, monkeypatch, G0)
+    try:
+        lo, hi = G0 + _dt.timedelta(days=8), G0 + _dt.timedelta(days=9)
+        days = [lo.isoformat(), hi.isoformat()]
+        assert client.post("/api/plan/mark-unavailable",
+                           json={"start": days[0], "end": days[1]}).status_code == 200
+        body = {"goal": "event", "event_date": "2026-12-13", "event_km": 160,
+                "event_climb": 2000, "rest_days": [4], "hours_per_week": 12.5,
+                "daily_availability": {str(k): v for k, v in {**DAILY, 4: 0}.items()},
+                "max_weekday": 2.0, "max_weekend": 3.0}
+        r = client.post("/api/plan/generate", json=body)
+        assert r.status_code == 200, r.text
+        assert _sessions_on(tmp_path, days) == []
+        stored = json.loads((tmp_path / "current_plan.json").read_text())
+        assert stored.get("unavailable_periods")
+    finally:
+        p.stop()
+
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_6_1_a_no_change_recalculate_still_runs_the_final_step(kind):
+    """recalculate_plan's <= 8 % deviation return, and extend's horizon_full,
+    skipped the final step: a date zeroed after the plan was built stayed
+    filled (V2)."""
+    base = gen(owner(kind))
+    t = G0 + _dt.timedelta(days=1)
+    zero = [s.day for s in pending_ahead(base, t)][:3]
+    g = owner(kind, plan_weeks=0)
+    g._calendar = {d.isoformat(): 0.0 for d in zero}
+    clock.freeze(t)
+    _, weeks, info = tp.recalculate_plan(g, copy.deepcopy(base), 55, athlete=ATH,
+                                         recent_weekly_tss=380)
+    assert not [s for s in pending_ahead(weeks, t) if s.day in zero], info["action"]

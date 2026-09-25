@@ -1013,3 +1013,25 @@ def test_the_badge_reads_the_weeks_own_rides(tmp_path, monkeypatch):
     assert got["short_of_budget"] and got["short_of_budget"]["reason"] == "ridden", got["short_of_budget"]
     assert got["short_of_budget"]["ridden"] == 500.0
 
+
+def test_9_9_the_week_under_way_is_read_from_its_rides(monkeypatch):
+    """The owner's 09-25 sync: the week under way planned 299 on its days
+    behind (a missed Tuesday) where 503 was ridden. Read off the plan, the
+    load carried into 09-28 was 340 and the guard lowered that week from 469
+    to 442; read from the rides, it stands."""
+    import ride_storage
+    g, weeks = _owner_weeks()
+    mon, t = _dt.date(2026, 9, 21), _dt.date(2026, 9, 24)
+    for w in weeks:
+        for s in w.sessions:
+            if mon <= s.day < t and s.session_type != "rest":
+                s.status = "missed" if s.day == mon + _dt.timedelta(days=1) else "done"
+    rides = [{"date": "2026-09-21", "tss": 205.0}, {"date": "2026-09-23", "tss": 18.0},
+             {"date": "2026-09-24", "tss": 280.0}]
+    monkeypatch.setattr(ride_storage, "chronic_weekly_tss", lambda rides=None, today=None: 367.0)
+    nxt = mon + _dt.timedelta(days=7)
+    built = next(w.tss_target for w in weeks if w.start == nxt)
+    clock.freeze(t)
+    tp.finalize_weeks(weeks, g, rides=rides)
+    w = next(w for w in weeks if w.start == nxt)
+    assert w.tss_target == built and not w.guard_lowered, (built, w.tss_target, w.guard_lowered)

@@ -14783,7 +14783,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                     built = (float(rec["from"]) if isinstance(rec, dict) and rec.get("from")
                              and float(rec.get("to") or -1) == float(w.tss_target)
                              else float(w.tss_target))
-                    new = max(0.0, min(built, cap))
+                    # Within the auditor's tolerance (check_acwr's 1.05) the
+                    # built budget stands: lowering the owner's week under way
+                    # from 479 to 477 was a warning about nothing.
+                    new = built if built <= cap * _VOLUME_CEILING_TOLERANCE else max(0.0, cap)
                     if new < built:
                         if not (isinstance(rec, dict) and float(rec.get("to") or -1) == new
                                 and float(rec.get("from") or -1) == built):
@@ -14798,9 +14801,17 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                         w.guard_lowered = None
             # ...as the ramp follows a row: its load, capped at its budget
             # (_row_load; the volume pass's tolerance is slack, not load).
-            load = sum(float(x.tss_estimate or 0) for x in ridden_)
-            if (w.tss_target or 0) > 0:
-                load = min(load, float(w.tss_target))
+            # The week under way's days behind the rider are what they rode,
+            # when the rides are here: the owner's 09-21 week planned 299
+            # on those days (a missed Tuesday) where 503 was ridden, and read
+            # from the plan the guard lowered 09-28 from 469 to 442.
+            if w is cur and rides is not None:
+                load = (_completed_tss_in(rides, w.start, first - timedelta(days=1), matched)
+                        + sum(float(x.tss_estimate or 0) for x in ridden_ if x.day >= first))
+            else:
+                load = sum(float(x.tss_estimate or 0) for x in ridden_)
+                if (w.tss_target or 0) > 0:
+                    load = min(load, float(w.tss_target))
             carried = chronic_after(carried, load * 7 / days, days)
 
     # The budget, then the unload week, then a file that fits what is left of

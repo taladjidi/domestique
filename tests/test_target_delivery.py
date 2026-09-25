@@ -651,3 +651,65 @@ def test_9_3_the_fill_itself_stays_within_the_weekly_hours():
     tp._fill_easy_to_budget(w, g, lib)
     grown = tp._row_minutes(w, clock.today())
     assert was < grown <= 7 * 60 + 1, (was, grown)
+
+
+# ── 9.9 The 1.3 x guard runs on every sync ───────────────────────────────
+
+def _weekend_away(gate_seed_unused=None):
+    t0, t = _dt.date(2026, 9, 14), _dt.date(2026, 9, 17)
+    g = lambda: sweep_goal("event", t0, rest=[0, 1, 2, 3, 4], daily={5: 4.0, 6: 4.0},
+                           hpw=8, race_in=8)
+    base = sweep_gen(g(), t0, 40, 250)
+    clock.freeze(t)
+    away = {"2026-09-19": 0.0, "2026-09-20": 0.0}
+    return g, base, t, away
+
+
+def test_9_9_a_sync_brings_the_weeks_after_a_lighter_stretch_down(gate_seed):
+    """weekend-event8 (weekends only, carrying 250 a week), planned on 09-14;
+    at the 09-17 sync the rider marks that weekend away. The week after asked
+    2 h tempo + 4 h z2 = 310 TSS against the 152 the rider would carry into
+    it (2.04 x; d190fa82 1.13 x). The sync caps every week from today on at
+    1.3 x the load carried into it -- the rider's real load, following the
+    weeks as planned -- and never raises one."""
+    g, base, t, away = _weekend_away()
+    before = {w.start: w.tss_target for w in base}
+    weeks = tp.reforecast(g(), copy.deepcopy(base), recent_activities=[],
+                          availability_overrides=away, recent_weekly_tss=250)[0]
+    assert not pi.check_acwr(weeks, 250, today=t)
+    assert all(w.tss_target <= before[w.start] for w in weeks if w.start in before)
+
+
+def test_9_9_every_sync_holds_the_guard(gate_seed):
+    """reforecast_dict (what every sync runs) and refit hold it too."""
+    import _gate_env as env
+    g, base, t, away = _weekend_away()
+    plan = env._stored(copy.deepcopy(base), g())
+    tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away,
+                       recent_weekly_tss=250)
+    assert not pi.check_acwr(env._read_stored(plan), 250, today=t)
+
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_9_9_every_entry_point_holds_the_guard(kind):
+    """The owner after every entry point, each handed the rider's load
+    (380) as production reads it from the ride archive. The weeks after the
+    one under way: the auditor reads that one's days behind today off the
+    plan, and the harness's rides (60 TSS a day) are not what it planned."""
+    base = F.gen(F.owner(kind))
+    for name, weeks in F.entry_points(kind, base, F.T3, lambda: F.owner(kind)):
+        later = {w.week_num for w in weeks if w.start > F.T3}
+        assert not [v for v in pi.check_acwr(weeks, 380, today=F.T3)
+                    if v.week_num in later], name
+
+
+def test_9_9_a_sync_reads_the_riders_load_from_the_ride_archive(gate_seed, monkeypatch):
+    """The app hands a sync no load: the final step reads the archive
+    (ride_storage.chronic_weekly_tss, each ride once, cycling only)."""
+    import ride_storage
+    import _gate_env as env
+    g, base, t, away = _weekend_away()
+    monkeypatch.setattr(ride_storage, "chronic_weekly_tss", lambda *a, **k: 250.0)
+    plan = env._stored(copy.deepcopy(base), g())
+    tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away)
+    assert not pi.check_acwr(env._read_stored(plan), 250, today=t)

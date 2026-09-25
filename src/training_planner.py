@@ -12294,6 +12294,7 @@ def reforecast(
     # (save-availability, /api/plan/reforecast, daily_adapt_plan) keep the
     # full algorithm.
     accept_redraw_fast: bool = False,
+    recent_weekly_tss: "float | None" = None,
 ) -> tuple[list[PlannedWeek], dict]:
     """Shift future hard sessions up/down one intensity level based on TSB.
 
@@ -12905,7 +12906,8 @@ def reforecast(
     # touched days (FC4a, v2.5.0) -- so every date it changed is registered.
     for _d in sorted(finalize_weeks(plan_weeks, goal,
                                     calendar=availability_overrides,
-                                    rides=recent_activities)):
+                                    rides=recent_activities,
+                                    normal_week=recent_weekly_tss)):
         _iso = _d.isoformat()
         if _iso not in seen:
             merged_touched.append(_iso)
@@ -13427,6 +13429,7 @@ def reforecast_dict(
     yesterday_dfa_alpha1: "float | None" = None,
     propagation_days: "set | None" = None,
     accept_redraw_fast: bool = False,
+    recent_weekly_tss: "float | None" = None,
 ) -> "tuple[dict, int, dict]":
     """v1.5.0 — single-layer reforecast on the persisted plan dict.
 
@@ -13492,6 +13495,7 @@ def reforecast_dict(
             actual_wprime_polarization=actual_wprime_polarization,
             yesterday_dfa_alpha1=yesterday_dfa_alpha1,
             accept_redraw_fast=accept_redraw_fast,
+            recent_weekly_tss=recent_weekly_tss,
         )
     except Exception as _e:
         _tp_log_error(error_codes.Codes.REFORECAST_DICT_FAILED, exc=_e,
@@ -14588,6 +14592,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     today = clock.today()
     if not weeks:
         return set()
+    if normal_week is None:
+        # 9.9: the load the rider really carries (the ride archive, each ride
+        # once, cycling only), for the syncs that are not handed it.
+        normal_week = athlete_weekly_load(None, None)
     lib = library if library is not None else load_workout_library()
     rows = _library_rows(lib)
     cal = {**(getattr(goal, "_calendar", None) or {}), **(calendar or {})}
@@ -14688,24 +14696,25 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     def net(wk):
         return _row_net(wk, today, rides, matched, weeks)
 
-    # 9.2 -- the 1.3 x guard (Gabbett 2016) on the weeks as they are planned.
-    # The ramp budgets each row within ACWR_CEILING x the load it counted
-    # when the row was built; the passes since cut some rows (a hard floor
-    # on a long easy day, a type ceiling, an unload), so a rider would carry
-    # less into a later row than the ramp counted, and a row holding its
-    # full budget read 1.43 x against it. Given the rider's normal week, a
-    # row this entry point built, from today on, takes as its budget no more
-    # than ACWR_CEILING x the load carried into it -- the auditor's rule
-    # (check_acwr): from the
-    # normal week, following every row ahead as planned (capped at its
-    # budget, as the ramp follows it), the taper not judged, rows under four
-    # days counted but not judged. The budget itself
-    # is lowered, so an entry point that does not know the rider's load (a
-    # sync's reforecast) holds the row to the same number.
+    # 9.2 / 9.9 -- the 1.3 x guard (Gabbett 2016) on the weeks as they are
+    # planned, on every entry point. The ramp budgets each row within
+    # ACWR_CEILING x the load it counted when the row was built; the passes
+    # since cut rows it had counted, and a rider who rides less than the plan
+    # (a missed day, a weekend marked away) carries less into the coming
+    # weeks than any of their budgets assumed: a sync after weekend-event8
+    # marked a weekend unavailable left the next week at 2.04 x. Given the
+    # rider's load (``normal_week``: the builders' athlete_weekly_load, else
+    # the ride archive's), every row from the week under way on takes as its
+    # budget no more than ACWR_CEILING x the load carried into it -- the
+    # auditor's rule (check_acwr): from that load, following every row ahead
+    # as planned (capped at its budget, as the ramp follows it), the taper
+    # not judged, rows under four days counted but not judged. It only ever
+    # lowers a budget (a sync never tops a week up: only the rows an entry
+    # point built are filled, below).
     fresh = {id(w) for w in built or []}
 
     def _guard():
-        if not fresh or not normal_week or float(normal_week) <= 0:
+        if not normal_week or float(normal_week) <= 0:
             return
         carried = float(normal_week)
         for w in ahead:
@@ -14713,7 +14722,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
             load = sum(float(x.tss_estimate or 0) for x in w.sessions
                        if x is not None and x.session_type != "rest"
                        and getattr(x, "status", "pending") not in plan_invariants.NOT_RIDDEN)
-            if (id(w) in fresh and w.start >= today and days >= 4 and (w.tss_target or 0) > 0
+            if (days >= 4 and (w.tss_target or 0) > 0
                     and str(getattr(w, "phase", "")).lower() != "taper"):
                 race = sum(float(x.tss_estimate or 0) for x in w.sessions
                            if x is not None and getattr(x, "is_race", False))
@@ -15777,6 +15786,7 @@ def refit_remaining_week(
     *,
     seed_salt: int = 0,
     athlete: dict | None = None,
+    recent_weekly_tss: "float | None" = None,
 ) -> tuple[list[PlannedWeek], dict]:
     """v2.0.7 — re-fit the REMAINING trainable days of the CURRENT week after a
     HARD session was missed, redistributing the missed stimulus within the
@@ -16160,7 +16170,7 @@ def refit_remaining_week(
         current_plan_weeks, goal, library=library,
         plan_start_date=(current_plan_weeks[0].start if current_plan_weeks
                          else week.start),
-        seed_salt=seed_salt)
+        seed_salt=seed_salt, normal_week=recent_weekly_tss)
     refit_info["refit_days"] = sorted(set(refit_days) | {d.isoformat() for d in _final})
     return current_plan_weeks, refit_info
 

@@ -281,12 +281,13 @@ def entry_points(kind, base, t, goal_fn, rides=None):
         past = [s for s in cur.sessions if s.day < t and s.session_type != "rest"]
         if past and not any(s.status == "missed" and tp._session_is_hit(s) for s in past):
             past[-1].session_type, past[-1].status = "vo2max", "missed"
-        return tp.refit_remaining_week(goal_fn(), wk, t)[0]
+        # the rider's load, as production reads it from the ride archive (9.9)
+        return tp.refit_remaining_week(goal_fn(), wk, t, recent_weekly_tss=380)[0]
 
     def refc():
         series = {t + _dt.timedelta(days=i): -35.0 for i in range(-14, 140)}
         return tp.reforecast(goal_fn(), copy.deepcopy(base), tsb_series=series,
-                             recent_activities=rides)[0]
+                             recent_activities=rides, recent_weekly_tss=380)[0]
 
     drivers = [("regenerate", regen), ("recalculate", recalc), ("refit", refit),
                ("reforecast", refc)]

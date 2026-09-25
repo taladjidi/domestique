@@ -835,8 +835,132 @@ def chronic_after(chronic: float, weekly_load: float, days: int = 7) -> float:
     return chronic * keep + float(weekly_load or 0) * (1 - keep)
 
 
+# ── The load the rider carries: ONE projection, for the planner and this auditor ──
+# From ride_storage.carried_in (the record on the eve of the week under way),
+# the builders' ramp (training_planner.LoadRamp), the final step's 1.3 x guard
+# (finalize_weeks) and check_acwr below follow it here and nowhere else. They
+# read it three ways -- the builders on today's EWMA, the guard on the eve of
+# the week under way, the auditor on whatever its caller passed, with the week
+# under way counted from the plan -- so a held week and a same-day regenerate
+# disagreed (404 against 274 on a light sim) and the auditor flagged weeks the
+# guard had passed (the coordinator's review of a0739673).
+
+
+def rode_on(rides, day: date) -> bool:
+    """Is there a ride dated ``day`` (each ride once, cycling only)? A record
+    with neither a sport nor any load is not one: Strava's blank husk of a
+    ride still syncing read as "rode today" (the evaluation of f59ccdee)."""
+    iso = day.isoformat()
+
+    def real(a):
+        return _load_of(a) > 0 or bool((a.get("sport") or a.get("type") or "").strip())
+    return any(real(a) for a in rides_once(
+        [a for a in rides or [] if isinstance(a, dict)
+         and str(a.get("date") or a.get("start_date_local")
+                 or a.get("started_at") or "")[:10] == iso]))
+
+
+def ahead_from(today: date, rides) -> date:
+    """The first day still to plan: today, or tomorrow once a ride is dated
+    today -- that ride is the day's work, and today's pending session is no
+    longer load ahead (the owner's 2026-09-24 regenerate: a 280-TSS ride
+    today was invisible and today's 68-TSS session still counted, so Friday
+    was filled from 55 to 180 min in a week already at 1.46 x)."""
+    return today + timedelta(days=1) if rode_on(rides, today) else today
+
+
+def _week_monday(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def ridden_tss(rides, lo: date, hi: date, matched_ids=()) -> float:
+    """What the rider rode in [lo, hi]: each ride once, cycling only."""
+    if hi < lo:
+        return 0.0
+    inside = [a for a in rides or () if isinstance(a, dict) and lo.isoformat()
+              <= str(a.get("date") or a.get("start_date_local") or a.get("started_at") or "")[:10]
+              <= hi.isoformat()]
+    return sum(_load_of(a) for a in rides_once(inside, matched_ids))
+
+
+def held_budget(built: float, carried: float, w, tolerance: float = 1.05) -> float:
+    """What the 1.3 x guard holds row ``w``'s budget to, given the load
+    carried into it: ACWR_SWEET_SPOT x ``carried`` over the row's days, less
+    its race; the budget as built stands within ``tolerance`` of that (the
+    auditor's 1.05: lowering the owner's 479 to 477 was a warning about
+    nothing). A taper row, and a row under four days, are not held. The one
+    rule the final step's guard applies and the projection follows
+    (carried_step): a builder's ramp following a week it keeps reads that
+    week as the guard will hold it, not as it was built."""
+    days = (w.end - w.start).days + 1
+    if days < 4 or str(getattr(w, "phase", "")).lower() == "taper" or not built or built <= 0:
+        return float(built or 0)
+    race = sum(float(s.tss_estimate or 0) for s in w.sessions
+               if s is not None and getattr(s, "is_race", False))
+    cap = float(round(ACWR_SWEET_SPOT * carried * days / 7 - race))
+    return float(built) if float(built) <= cap * tolerance else max(0.0, cap)
+
+
+def carried_step(carried: float, at: date, w, today: date, rides, *, first=None,
+                 cap=None, matched=()) -> "tuple[float, date]":
+    """The load carried once row ``w`` is behind the rider, and the day that
+    reading stands at: (chronic, w.end + 1). From ``at`` (the day ``carried``
+    stands at; the week under way's Monday to start) to the row's end, the
+    days before ``first`` (ahead_from) are what the rider rode -- never the
+    plan's sessions, which a missed day overstates and an unplanned ride
+    understates: the owner's 09-21 week planned 299 where 503 was ridden --
+    and the days from ``first`` on are the row's sessions still to ride, no
+    more than ``cap``, the row's own budget as the guard holds it
+    (held_budget; the ramp's _row_load: a builder's row above its budget is
+    trimmed back to it, and a trim's tolerance is slack, not load) -- for
+    the row under way what is left of
+    it (D2: the budget less what was ridden in the row, and the week's gross
+    less what was ridden since Monday, the final step's _row_net). A row
+    that ended before ``at`` moves nothing."""
+    if w.end < at:
+        return carried, at
+    first = ahead_from(today, rides) if first is None else first
+    rode = ridden_tss(rides, at, min(first - timedelta(days=1), w.end), matched)
+    planned = sum(float(s.tss_estimate or 0) for s in w.sessions
+                  if s is not None and _ridden(s) and s.day >= max(first, at))
+    if cap:
+        room = held_budget(float(cap), carried, w)
+        if w.start <= today <= w.end:
+            span = (w.end - w.start).days + 1
+            gross = room * 7 / span if 0 < span < 7 else room
+            last = min(first - timedelta(days=1), w.end)
+            room = min(room - ridden_tss(rides, w.start, last, matched),
+                       gross - ridden_tss(rides, _week_monday(today), last, matched))
+        planned = min(planned, max(0.0, room))
+    days = (w.end - at).days + 1
+    return chronic_after(carried, (rode + planned) * 7 / days, days), w.end + timedelta(days=1)
+
+
+def carried_through(weeks, today: date, rides, carried, matched=()):
+    """Each row that has not ended before the week under way's Monday, with
+    the load the rider carries into it: ``carried`` into the week under way
+    (ride_storage.carried_in, the one reading: the record on the eve of that
+    week), then followed row by row (carried_step) as each row stands once
+    the caller is done with it -- a row the guard lowers carries its lowered
+    budget into the next. The one projection the builders' ramp, the final
+    step's guard and check_acwr all follow; ``rides`` is the ride record
+    (ride_storage.ride_record), which this module does not read itself.
+    Yields nothing without a load to start from."""
+    rides = rides or []
+    c = float(carried or 0)
+    if c <= 0:
+        return
+    at, first = _week_monday(today), ahead_from(today, rides)
+    for w in weeks:
+        if w.end < at:
+            continue
+        yield w, c
+        c, at = carried_step(c, at, w, today, rides, first=first,
+                             cap=getattr(w, "tss_target", None), matched=matched)
+
+
 def check_acwr(weeks, chronic, today=None, tolerance=1.05,
-               limit=ACWR_SWEET_SPOT) -> list[Violation]:
+               limit=ACWR_SWEET_SPOT, rides=None) -> list[Violation]:
     """No week asks more than ``limit`` x the load the rider carries into it:
     the top of the sweet spot, in every phase, or ACWR_DANGER, the line no
     week may cross.
@@ -851,19 +975,52 @@ def check_acwr(weeks, chronic, today=None, tolerance=1.05,
     ALL_CHECKS take a plan and no rider, and a plan does not carry the
     rider's load.
     """
-    carried, out = float(chronic), []
-    for w in _weeks_ahead(weeks, today):
-        days = (w.end - w.start).days + 1
-        if days <= 0:
-            continue
-        load = sum(float(s.tss_estimate or 0) for s in w.sessions if _ridden(s)) * 7 / days
+    out = []
+
+    def judge(w, carried, load, days):
         phase = str(getattr(w, "phase", "")).lower()
         if (days >= 4 and phase != "taper" and carried > 0
                 and load > limit * carried * tolerance + 1):
             out.append(Violation("acwr", w.week_num,
                                  f"{load:.0f} TSS a week against {carried:.0f} carried "
                                  f"({load / carried:.2f}x; {limit}x allowed)"))
-        carried = chronic_after(carried, load, days)
+    if today is None:
+        # A plan with no day to stand on (a plan as built, no rider): from
+        # ``chronic``, every row as planned.
+        carried = float(chronic)
+        for w in weeks:
+            days = (w.end - w.start).days + 1
+            if days <= 0:
+                continue
+            load = sum(float(s.tss_estimate or 0) for s in w.sessions if _ridden(s)) * 7 / days
+            judge(w, carried, load, days)
+            carried = chronic_after(carried, load, days)
+        return out
+    # On a day: ``chronic`` is the load carried into the week under way
+    # (ride_storage.carried_in) and ``rides`` the ride record, followed by
+    # the one projection (carried_through) the guard follows, the week under
+    # way at what was ridden plus what is left. From today's EWMA and the
+    # week's planned sessions, a sim flagged 7-9 days a run that the guard
+    # had held within 1.3 x (the coordinator's review of a0739673).
+    rides = rides or []
+    first = ahead_from(today, rides)
+    for w, carried in carried_through(weeks, today, rides, chronic):
+        if w.end < today:
+            continue
+        days = (w.end - w.start).days + 1
+        if days <= 0:
+            continue
+        if w.start <= today and ridden_tss(rides, w.start, min(first - timedelta(days=1), w.end)):
+            # The week under way once the rider has ridden in it: its days
+            # behind are history, as a week behind today is (``chronic``
+            # holds what the rider did), and what is left of it is held to
+            # the week's net (D2) -- the owner's 09-21 week read 1.37 x for
+            # the 503 he had ridden, a finding no plan could answer. It still
+            # carries its load into the next (carried_through).
+            continue
+        load = sum(float(s.tss_estimate or 0) for s in w.sessions
+                   if _ridden(s) and s.day >= max(first, w.start)) * 7 / days
+        judge(w, carried, load, days)
     return out
 
 
@@ -1086,7 +1243,7 @@ def audit(weeks, goal, rides=None, today=None, chronic=None,
     if chronic is None:
         chronic = chronic_from_rides(rides, today)
     if chronic is not None:
-        out.extend(check_acwr(weeks, float(chronic), today))
+        out.extend(check_acwr(weeks, float(chronic), today, rides=rides))
     return out
 
 

@@ -100,14 +100,18 @@ def test_a_rebuild_budgets_from_the_riders_load(entry):
     not read the rider's load starts from CTL x 7 or from their free time, and
     breaks this in its first week."""
     weeks, first = _rebuild(entry)
+    # The load carried into the week under way, then through every row from
+    # it -- the week recalculate keeps included: the rider rides it before
+    # the first week the rebuild lays out (plan_invariants.carried_through).
+    today = _TODAY[0]
     carried = float(RECENT)
     for w in weeks:
         days = (w.end - w.start).days + 1
-        if w.end < first:
+        if w.end < today:
             continue
         budget = w.tss_target * 7 / days
-        assert days < 4 or w.phase == "taper" or budget <= tp.ACWR_CEILING * carried + 1, (
-            entry, w.week_num, budget, carried)
+        assert (w.end < first or days < 4 or w.phase == "taper"
+                or budget <= tp.ACWR_CEILING * carried + 1), (entry, w.week_num, budget, carried)
         carried = pi.chronic_after(carried, budget, days)
 
 

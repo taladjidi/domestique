@@ -300,13 +300,18 @@ def _week(i, loads, stepback=False, target=0.0, away=False):
                   for d, load in enumerate(loads)])
 
 
-def test_a_week_away_resets_the_block_the_cuts_read():
+def test_a_week_away_resets_the_block_the_cuts_read(ride_record, freeze_clock):
     """The ramp reads load or unload from the row it follows. Counted from
     the stepback flag alone, a week the rider was away for stayed in the
     block, and the next unload was cut against a load week from before it
     (the third part 3 review, M2: nothing failed when the flag was put
     back)."""
-    ramp = tp.LoadRamp(45.0, 315.0)
+    # the four weeks from today on: the ramp follows no week behind the
+    # rider (read on the machine's date, the test changed with the calendar)
+    freeze_clock(MONDAY)
+    # carrying enough that the 1.3 x hold (plan_invariants.held_budget,
+    # which the ramp now follows) leaves the cut, not the ceiling, to answer
+    ramp = tp.LoadRamp(45.0, 600.0)
     for w in (_week(0, [0, 0, 40, 0, 40, 60, 60]),          # 200
               _week(1, [0] * 7, away=True),                  # a week away
               _week(2, [0, 0, 80, 0, 80, 120, 120]),         # 400

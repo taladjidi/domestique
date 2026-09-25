@@ -18244,9 +18244,12 @@ def _chronic_weekly_tss_safe() -> "float | None":
     the archive cannot answer, so the planner falls back to CTL x 7. Every
     planning entry point passes this in: derived inside the planner, the
     fallback parsed the archive again (the ultrareview of 2026-09-14)."""
+    # The one reading of the load carried (ride_storage.carried_in): the
+    # eve of the week under way, as the final step's guard and the auditor
+    # read it.
     try:
         import ride_storage as _rs
-        return _rs.chronic_weekly_tss(_load_all_rides_safe())
+        return _rs.carried_in(clock.today(), _load_all_rides_safe())
     except Exception:
         return None
 

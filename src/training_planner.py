@@ -3125,13 +3125,21 @@ class LoadRamp:
     they carry allows 366 (2026-09-13).
     """
 
-    def __init__(self, ctl, chronic=None, target_ctl=None):
+    def __init__(self, ctl, chronic=None, target_ctl=None, rides=None):
         self.ctl = float(ctl or 0.0)
         start = float(chronic or 0.0) or self.ctl * 7
         if start <= 0:
             # Nothing known about the rider: Couzens' loading rule at CTL 0.
             start = 7.0 * LOAD_K_DEFAULT
         self.chronic = start            # the load carried, TSS a week
+        # ...standing on the week under way's Monday: ``chronic`` is the one
+        # reading (ride_storage.carried_in, the eve of that week), and
+        # follow() carries it forward row by row as the final step's guard
+        # and check_acwr do (plan_invariants.carried_step), the week under
+        # way at what was ridden plus what is left of it.
+        _t = clock.today()
+        self._at = _t - timedelta(days=_t.weekday())
+        self._rides = rides             # the ride record, read on first use
         self.target = target_ctl
         self.loads: list = []           # full load weeks, in order
         self.block: list = []           # full load weeks since the last unload
@@ -3186,17 +3194,29 @@ class LoadRamp:
         weeks -- moves nothing: the rider's CTL today already holds whatever
         they rode, and a ramp fed those weeks budgeted today from fitness
         never built."""
-        if pw.end < clock.today():
+        today = clock.today()
+        if pw.end < today:
             return
-        self.advance(_row_load(pw, budget), (pw.end - pw.start).days + 1,
-                     not _is_unload_week(pw))
+        if self._rides is None:
+            self._rides = _ride_record()
+        # Capped at the row's own budget, as the guard caps it (a stub row's
+        # is its days' share; ``budget`` is a full week's in some builders).
+        chronic, self._at = plan_invariants.carried_step(
+            self.chronic, self._at, pw, today, self._rides,
+            cap=pw.tss_target or budget or None)
+        # CTL already holds the days behind today; it moves over the rest.
+        self.advance(_row_load(pw, budget), (pw.end - max(pw.start, today)).days + 1,
+                     not _is_unload_week(pw), chronic=chronic)
 
-    def advance(self, weekly_load, days: int = 7, load_week: bool = True) -> None:
-        """A row's load, given per full week, over the row's days."""
+    def advance(self, weekly_load, days: int = 7, load_week: bool = True,
+                chronic: "float | None" = None) -> None:
+        """A row's load, given per full week, over the row's days. ``chronic``:
+        the load carried after it, where follow() has read it (carried_step)."""
         daily = float(weekly_load or 0) / 7
         for _ in range(max(0, int(days))):
             self.ctl += (daily - self.ctl) / 42
-        self.chronic = chronic_after(self.chronic, weekly_load, days)
+        self.chronic = (chronic_after(self.chronic, weekly_load, days)
+                        if chronic is None else chronic)
         if load_week and weekly_load and days >= 7:
             self.loads.append(float(weekly_load))
             self.block.append(float(weekly_load))
@@ -3588,14 +3608,14 @@ def athlete_weekly_load(current_ctl, recent_weekly_tss=None, rides=None):
     Generate then built (notes/review/dupes.md DUP-1, DUP-14).
     """
     if recent_weekly_tss is None:
+        # The one reading of the load carried (ride_storage.carried_in):
+        # the ride record on the eve of the week under way, as the final
+        # step's guard and the auditor read it. Read today, the builders'
+        # ramp and the guard started from two numbers, and a held week and a
+        # same-day regenerate disagreed (the coordinator's review of
+        # a0739673).
         import ride_storage as _rs
-        if rides is not None:
-            recent_weekly_tss = _rs.chronic_weekly_tss(rides, today=clock.today())
-        else:
-            try:
-                recent_weekly_tss = _rs.chronic_weekly_tss(today=clock.today())
-            except Exception as _e:  # noqa: BLE001
-                log.debug(f"chronic_weekly_tss fetch failed: {_e}")
+        recent_weekly_tss = _rs.carried_in(clock.today(), rides)
     if recent_weekly_tss is None and current_ctl and current_ctl > 0:
         recent_weekly_tss = round(current_ctl * 7)
     return recent_weekly_tss
@@ -8925,7 +8945,8 @@ def generate_plan(
     # The week's budget, one number per week (Step 5 part 3).
     _ramp = LoadRamp(current_ctl, recent_weekly_tss,
                      None if goal.goal_type == "continuous"
-                     else plan_target_ctl(goal, current_ctl, event_targets)[1])
+                     else plan_target_ctl(goal, current_ctl, event_targets)[1],
+                     rides=_rec)
     for phase in phases:
         # v1.6.1 — wrap each phase's per-week build so an exception inside
         # plan_week / sample_week_workouts / match_zwo surfaces as
@@ -10053,7 +10074,8 @@ def _report_acwr(weeks: list, carried: "float | None") -> list:
     if not carried or float(carried) <= 0:
         return []
     try:
-        violations = plan_invariants.check_acwr(weeks, float(carried))
+        violations = plan_invariants.check_acwr(weeks, float(carried), clock.today(),
+                                                rides=_ride_record())
     except Exception:                                            # noqa: BLE001
         return []
     for v in violations:
@@ -10490,30 +10512,13 @@ def _ride_record() -> list:
 
 
 def _rode_on(rides, day: date) -> bool:
-    """Is there a ride dated ``day`` (each ride once, cycling only)? A record
-    with neither a sport nor any load is not one: Strava's blank husk of a
-    ride still syncing read as "rode today" (the evaluation of f59ccdee)."""
-    iso = day.isoformat()
-
-    def real(a):
-        try:
-            load = float(a.get("tss") or a.get("icu_training_load") or 0)
-        except (TypeError, ValueError):
-            load = 0.0
-        return load > 0 or bool((a.get("sport") or a.get("type") or "").strip())
-    return any(real(a) for a in rides_once(
-        [a for a in rides or [] if isinstance(a, dict)
-         and str(a.get("date") or a.get("start_date_local")
-                 or a.get("started_at") or "")[:10] == iso]))
+    """plan_invariants.rode_on: the one reading of "rode that day"."""
+    return plan_invariants.rode_on(rides, day)
 
 
 def _ahead_from(today: date, rides) -> date:
-    """The first day still to plan: today, or tomorrow once a ride is dated
-    today -- that ride is the day's work, and today's pending session is no
-    longer load ahead (the owner's 2026-09-24 regenerate: a 280-TSS ride
-    today was invisible and today's 68-TSS session still counted, so Friday
-    was filled from 55 to 180 min in a week already at 1.46 x)."""
-    return today + timedelta(days=1) if _rode_on(rides, today) else today
+    """plan_invariants.ahead_from: the first day still to plan."""
+    return plan_invariants.ahead_from(today, rides)
 
 
 def _row_net(wk, today: date, rides=None, matched=(), weeks=None) -> "float | None":
@@ -14064,7 +14069,7 @@ def regenerate_from_today(
 
     # The week's budget runs on from the rider's CTL today, through the
     # recovery ramp's own weeks (Step 5 part 3).
-    _ramp = LoadRamp(current_ctl, recent_weekly_tss, adjusted_target)
+    _ramp = LoadRamp(current_ctl, recent_weekly_tss, adjusted_target, rides=_rec)
     for rw in recovery_weeks:
         _ramp.follow(rw, rw.tss_target)
     for phase in new_phases:
@@ -14783,45 +14788,28 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     def _guard():
         if not normal_week or float(normal_week) <= 0:
             return
-        # The load carried INTO the week under way. ``normal_week`` is read
-        # today, and already holds the days of that week behind the rider,
-        # which the week's own load counts again below -- counted twice, a
-        # rider riding the plan exactly was held 6-11 % low for the whole
-        # horizon (the evaluation of f59ccdee). The archive's reading on the
-        # eve of that week is the load it started from (the one reader,
-        # ride_storage.chronic_weekly_tss); without an archive, today's.
-        # Always from the eve of the first week ahead -- on a Monday too:
-        # today's reading counts the unridden Monday as a zero in its 7-day
-        # window (the owner's Sunday 343.5 against Monday 299.4), and every
-        # Monday lowered 10-12 (396 -> 361) for a day (the evaluation of
-        # 3793952c, MF-3).
-        carried = float(normal_week)
-        w0 = ahead[0] if ahead else None
-        cur = w0 if w0 is not None and w0.start <= today else None
-        if w0 is not None:
-            # From the ride record (the one reader of the rider's rides).
-            import ride_storage as _rs
-            try:
-                eve = _rs.chronic_weekly_tss(rides, today=min(w0.start, today) - timedelta(days=1))
-            except Exception:  # noqa: BLE001 -- the archive is a best reading
-                eve = None
-            if eve:
-                carried = float(eve)
-        for w in ahead:
+        # The one projection (plan_invariants.carried_through): the ride
+        # record on the eve of the week under way (``normal_week`` where it
+        # cannot answer), each row followed as it stands once judged here --
+        # the week under way at what was ridden plus what is left, a later
+        # row at its planned load capped at its budget -- as the builders'
+        # ramp and check_acwr follow it.
+        import ride_storage as _rs
+        for w, carried in plan_invariants.carried_through(
+                weeks, today, rides, _rs.carried_in(today, rides or []) or normal_week,
+                matched=matched):
+            if w.end < today:
+                continue
             days = (w.end - w.start).days + 1
-            ridden_ = [x for x in w.sessions if x is not None and x.session_type != "rest"
-                       and getattr(x, "status", "pending") not in plan_invariants.NOT_RIDDEN]
             if (days >= 4 and (w.tss_target or 0) > 0
                     and str(getattr(w, "phase", "")).lower() != "taper"):
-                race = sum(float(x.tss_estimate or 0) for x in w.sessions
-                           if x is not None and getattr(x, "is_race", False))
-                cap = float(round(ACWR_CEILING * carried * days / 7 - race))
                 rec = getattr(w, "guard_lowered", None)
                 if id(w) in fresh:
                     # A row this entry point built: the guard's number IS its
                     # budget as built -- nothing was lowered for the rider to
                     # see, and a replan would only write the same again.
-                    w.tss_target = max(0.0, min(float(w.tss_target), cap))
+                    w.tss_target = plan_invariants.held_budget(
+                        float(w.tss_target), carried, w, tolerance=1.0)
                     w.guard_lowered = None
                 else:
                     # The budget as built: what the guard lowered it from,
@@ -14830,9 +14818,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                              and float(rec.get("to") or -1) == float(w.tss_target)
                              else float(w.tss_target))
                     # Within the auditor's tolerance (check_acwr's 1.05) the
-                    # built budget stands: lowering the owner's week under way
-                    # from 479 to 477 was a warning about nothing.
-                    new = built if built <= cap * _VOLUME_CEILING_TOLERANCE else max(0.0, cap)
+                    # built budget stands (plan_invariants.held_budget, the
+                    # rule the projection follows too).
+                    new = plan_invariants.held_budget(built, carried, w,
+                                                      tolerance=_VOLUME_CEILING_TOLERANCE)
                     if new < built:
                         if not (isinstance(rec, dict) and float(rec.get("to") or -1) == new
                                 and float(rec.get("from") or -1) == built):
@@ -14850,23 +14839,6 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                             restored.add(id(w))
                         w.tss_target = built
                         w.guard_lowered = None
-            # ...as the ramp follows a row: its load, capped at its budget
-            # (_row_load; the volume pass's tolerance is slack, not load).
-            # The week under way's days behind the rider are what they rode,
-            # when the rides are here: the owner's 09-21 week planned 299
-            # on those days (a missed Tuesday) where 503 was ridden, and read
-            # from the plan the guard lowered 09-28 from 469 to 442.
-            if w is cur:
-                # the days behind are the rides (none read: none ridden --
-                # never the plan's sessions, which a missed day overstates and
-                # an unplanned ride understates)
-                load = (_completed_tss_in(rides, w.start, first - timedelta(days=1), matched)
-                        + sum(float(x.tss_estimate or 0) for x in ridden_ if x.day >= first))
-            else:
-                load = sum(float(x.tss_estimate or 0) for x in ridden_)
-                if (w.tss_target or 0) > 0:
-                    load = min(load, float(w.tss_target))
-            carried = chronic_after(carried, load * 7 / days, days)
 
     # The budget, then the unload week, then a file that fits what is left of
     # each slot, then its served load -- in that order. The last shortening
@@ -15343,7 +15315,15 @@ def recalculate_plan(
 
     # The week's budget, one number per week (Step 5 part 3).
     _ramp = LoadRamp(current_ctl, recent_weekly_tss,
-                     plan_target_ctl(adjusted_goal, current_ctl, event_targets)[1])
+                     plan_target_ctl(adjusted_goal, current_ctl, event_targets)[1],
+                     rides=_rec)
+    # ...carried through the weeks it keeps (the week under way: what was
+    # ridden plus what is left of it) to the first week it builds, as the
+    # final step's guard carries it: started at the kept week's eve and
+    # stepped straight to the first new row, the ramp read the kept week as
+    # zero load and budgeted the next at 365 where the guard held 459.
+    for w in past_weeks:
+        _ramp.follow(w, w.tss_target)
     for phase in new_phases:
         cursor = max(phase.start, regen_start)
         week_in_phase = 0  # v2.0.3 F6: 0-indexed within phase, drives the sampler
@@ -15709,11 +15689,9 @@ def extend_continuous_plan(
     # The week's budget runs on from the rider's CTL today through what is
     # still ahead in the weeks already planned (Step 5 part 3). A continuous
     # plan has no target; its guards bound it.
-    _ramp = LoadRamp(current_ctl, recent_weekly_tss)
+    _ramp = LoadRamp(current_ctl, recent_weekly_tss, rides=_rec)
     for w in sorted(current_plan_weeks, key=lambda w: w.start):
-        if w.end >= clock.today():
-            _ramp.advance(_row_load(w, w.tss_target), (w.end - max(w.start, clock.today())).days + 1,
-                          not _is_unload_week(w))
+        _ramp.follow(w, w.tss_target)
     for _ in range(deficit):
         # The plan's 3:1 rhythm, continued from the weeks already there --
         # including a deload the app advanced into one of them.

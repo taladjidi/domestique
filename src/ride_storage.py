@@ -1147,7 +1147,7 @@ def ride_moving_s(ride: dict) -> int:
 
 def ride_record() -> list[dict]:
     """The rider's rides, for every load fact the planner and its auditor
-    read -- the load carried (plan_invariants.carried_in) and the week under
+    read -- the load carried (carried_in) and the week under
     way (plan_invariants.carried_step, the final step's D2): the ride archive
     (load_all_rides: intervals.icu records and FIT imports, deduped).
 
@@ -2077,6 +2077,30 @@ def chronic_weekly_tss(
         week = sum(per_day.get(end - _dt.timedelta(days=j), 0.0) for j in range(7))
         carried = chronic_after(carried, week, 7)
     return round(carried, 1)
+
+
+def carried_in(today, rides=None) -> "float | None":
+    """The load the rider carries into the week under way, in TSS a week:
+    chronic_weekly_tss on the Sunday before ``today``'s Monday. The one
+    reading: the builders (training_planner.athlete_weekly_load, and the
+    number app._chronic_weekly_tss_safe hands every entry point), the final
+    step's guard and the auditor's check_acwr all start from it, and follow
+    the plan from there (plan_invariants.carried_through). On that eve and
+    not today: today's reading already holds the days of this week behind
+    the rider, which the week's own load counts again (a rider riding the
+    plan exactly was held 6-11 % low, the evaluation of f59ccdee), and on a
+    Monday it counts the unridden Monday as a zero (10-12 lowered 396 -> 361
+    every Monday, 3793952c MF-3). None when the record cannot answer (too
+    short to have settled, nothing ridden in its window): the caller's
+    fallback, CTL x 7, stands. ``rides``: the record already in hand
+    (ride_record), else it is read."""
+    import datetime as _dt
+    monday = today - _dt.timedelta(days=today.weekday())
+    try:
+        return chronic_weekly_tss(ride_record() if rides is None else rides,
+                                  today=monday - _dt.timedelta(days=1))
+    except Exception:  # noqa: BLE001 -- an unreadable record cannot answer
+        return None
 
 
 def persist_wellness(record: dict) -> Path | None:

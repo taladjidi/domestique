@@ -705,10 +705,12 @@ def test_9_9_every_entry_point_holds_the_guard(kind):
     (380) as production reads it from the ride archive. The weeks after the
     one under way: the auditor reads that one's days behind today off the
     plan, and the harness's rides (60 TSS a day) are not what it planned."""
+    import ride_storage
     base = F.gen(F.owner(kind))
     for name, weeks in F.entry_points(kind, base, F.T3, lambda: F.owner(kind)):
         later = {w.week_num for w in weeks if w.start > F.T3}
-        assert not [v for v in pi.check_acwr(weeks, 380, today=F.T3)
+        assert not [v for v in pi.check_acwr(weeks, 380, today=F.T3,
+                                             rides=ride_storage.ride_record())
                     if v.week_num in later], name
 
 
@@ -1282,10 +1284,11 @@ def test_the_heal_reads_the_planner_clock():
     assert tp.heal_unmatched_sessions_dict(plan, tp.load_workout_library())["candidates"] == 0
 
 
-# ── One reader (the coordinator's review of a0739673) ────────────────────
-# The rider's rides are read in one place (ride_storage.ride_record): no
-# caller hands the planner a rides list for the load carried or the week
-# under way.
+# ── One reader, one reading (the coordinator's review of a0739673) ───────
+# The rider's rides are read in one place (ride_storage.ride_record) and the
+# load they carry is read one way (plan_invariants.carried_in, followed by
+# carried_step): the builders' ramp, the final step's guard and the auditor
+# read the same number for every week.
 
 def _settled(lo, hi, per_week=380.0):
     """A ride archive settled at ``per_week`` from ``lo`` to ``hi`` (a ride
@@ -1335,3 +1338,124 @@ def test_one_reader_a_regenerate_reads_the_ride_record_not_its_argument(ride_rec
                 if s.day >= _THU and s.session_type != "rest" and not s.is_race)
     # nothing more than one short spin once the rides alone spent the week (6.7)
     assert ahead <= max(0.0, gross * 1.05 - 450) + 60, (ahead, gross)
+
+
+def test_one_reading_the_builders_read_the_load_on_the_weeks_eve(ride_record):
+    """Every day of a week the builders read the same load carried into it:
+    the record's on the Sunday before. Read today, a Monday counted itself
+    as a zero and a Thursday counted Monday to Wednesday twice."""
+    import ride_storage
+    rec = _thursday_record()
+    ride_record(rec)
+    eve = ride_storage.chronic_weekly_tss(rec, today=_MON - _dt.timedelta(days=1))
+    got = []
+    for d in (_MON, _MON + _dt.timedelta(days=1), _THU):
+        clock.freeze(d)
+        got.append(tp.athlete_weekly_load(None))
+    assert eve and got == [eve] * 3, (eve, got)
+
+
+def _carried_spec(weeks, rec, today, fallback):
+    """The load carried into each row, read here from the record and the plan
+    as it came out -- not through the planner: the record's reading on the eve
+    of the week under way, then each row from that Monday on at what was
+    ridden before today plus its sessions from today, no more than its
+    budget (for the row under way, what is left of it: D2)."""
+    import ride_storage
+    mon = today - _dt.timedelta(days=today.weekday())
+    c = ride_storage.chronic_weekly_tss(rec, today=mon - _dt.timedelta(days=1)) or fallback
+
+    def rode(lo, hi):
+        return sum(r["tss"] for r in rec if lo.isoformat() <= r["started_at"][:10] <= hi.isoformat())
+    out, at = {}, mon
+    for w in sorted(weeks, key=lambda w: w.start):
+        if w.end < at:
+            continue
+        out[w.start] = c
+        last = min(today - _dt.timedelta(days=1), w.end)
+        planned = sum(float(s.tss_estimate or 0) for s in w.sessions
+                      if s.session_type != "rest" and s.status not in ("missed", "dismissed")
+                      and s.day >= max(today, at))
+        room = float(w.tss_target or 0)
+        if room:
+            if w.start <= today <= w.end:
+                span = (w.end - w.start).days + 1
+                gross = room * 7 / span if span < 7 else room
+                room = min(room - rode(w.start, last), gross - rode(mon, last))
+            planned = min(planned, max(0.0, room))
+        days = (w.end - at).days + 1
+        c = pi.chronic_after(c, (rode(at, last) + planned) * 7 / days, days)
+        at = w.end + _dt.timedelta(days=1)
+    return out
+
+
+@pytest.mark.parametrize("entry", ["generate", "regenerate", "recalculate", "extend"])
+def test_one_reading_the_ramp_carries_what_the_guard_carries(entry, ride_record, monkeypatch):
+    """A Thursday with 450 ridden since Monday: the load the builders' ramp
+    carries into each week it budgets is the load the final step's guard
+    and the auditor carry into it -- the record's on the week's eve, the week
+    under way at what was ridden plus what is left. The ramp read today's
+    EWMA and followed only the days left of the week (a same-day regenerate
+    budgeted 10-12 at 274 where a held week stood at 404), and recalculate
+    stepped straight over the week it keeps (365 where the guard held 459)."""
+    rec = _thursday_record()
+    ride_record(rec)
+    base = F.gen(F.owner("continuous"), today=_MON - _dt.timedelta(days=14))
+    ramp = {}
+    follow = tp.LoadRamp.follow
+
+    def spy(self, pw, budget):
+        if pw.end >= _THU:
+            ramp.setdefault(pw.start, self.chronic)
+        return follow(self, pw, budget)
+    monkeypatch.setattr(tp.LoadRamp, "follow", spy)
+    g = F.owner("continuous", plan_weeks=0)
+    clock.freeze(_THU)
+    if entry == "generate":
+        weeks = tp.generate_plan(g, current_ctl=55, athlete=F.ATH)[1]
+    elif entry == "regenerate":
+        weeks = tp.regenerate_from_today(g, copy.deepcopy(base), 55, activities=[],
+                                         athlete=F.ATH)[1]
+    elif entry == "recalculate":
+        # an event plan: a continuous one's recalculate is extend
+        ev = F.owner("event", plan_weeks=0)
+        base = F.gen(F.owner("event"), today=_MON - _dt.timedelta(days=14))
+        ramp.clear()                         # the base's own ramp is not the rebuild's
+        clock.freeze(_THU)
+        weeks = tp.recalculate_plan(ev, copy.deepcopy(base), 70, athlete=F.ATH)[1]
+    else:
+        weeks = tp.extend_continuous_plan(g, copy.deepcopy(base)[:3], 55, athlete=F.ATH)[1]
+    spec = _carried_spec(weeks, rec, _THU, None)
+    rows = sorted(s for s in ramp if s > _THU and s in spec)
+    assert rows, (entry, sorted(ramp), sorted(spec))
+    # into the first week after the week under way, the same load
+    assert abs(ramp[rows[0]] / spec[rows[0]] - 1) <= 0.03, (entry, rows[0], ramp[rows[0]], spec[rows[0]])
+    # ...and never less after it: the final step's passes (an unload lighter
+    # than its block, the weekly hours) only take load off the weeks the
+    # ramp followed, and the guard then holds each new row to the load the
+    # final plan carries -- a ramp reading LESS was a regenerate budgeting
+    # below what a held week keeps
+    for s in rows[1:4]:
+        assert ramp[s] >= 0.97 * spec[s], (entry, s, round(ramp[s]), round(spec[s]))
+    for w in weeks:
+        days = (w.end - w.start).days + 1
+        if w.start > _THU and days >= 4 and w.phase != "taper":
+            assert w.tss_target <= tp.ACWR_CEILING * spec[w.start] * days / 7 + 1, (
+                entry, w.start, w.tss_target, round(spec[w.start]))
+
+
+def test_one_reading_the_auditor_passes_what_the_guard_held(ride_record):
+    """The auditor follows the load carried as the guard does: from the one
+    reading (ride_storage.carried_in) through the record and the plan. The
+    sims handed check_acwr today's EWMA and it counted the week under way
+    from the plan, and flagged 7-9 days a run that the guard had held within
+    1.3 x."""
+    import ride_storage
+    rec = _thursday_record()
+    ride_record(rec)
+    clock.freeze(_THU)
+    weeks = tp.generate_plan(F.owner("continuous"), current_ctl=55, athlete=F.ATH)[1]
+    assert not pi.check_acwr(weeks, ride_storage.carried_in(_THU, rec), today=_THU, rides=rec)
+    # ...and the auditor is not the guard: a plan asking more than the load
+    # carried allows is still flagged
+    assert pi.check_acwr(weeks, 0.5 * ride_storage.carried_in(_THU, rec), today=_THU, rides=rec)

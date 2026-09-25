@@ -224,6 +224,21 @@ def freeze_clock():
     _clock.unfreeze()
 
 
+@pytest.fixture
+def ride_record(monkeypatch):
+    """The one seam for the rider's rides (ride_storage.ride_record, the
+    reader of the load carried and the week under way): the test reads none
+    until it calls ride_record(rides). A test that handed the planner a rides
+    list, or read whatever its xdist worker's ride store held, now says here
+    what the rider rode (the coordinator's review of a0739673)."""
+    import ride_storage
+
+    def put(rides):
+        monkeypatch.setattr(ride_storage, "ride_record", lambda: list(rides))
+    put([])
+    return put
+
+
 @pytest.fixture(autouse=True)
 def _restore_tp_profile_dirs():
     """Order-independence guard for training_planner.PLAN_DIR / WORKOUT_DIR.

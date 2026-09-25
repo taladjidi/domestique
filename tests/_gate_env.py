@@ -46,6 +46,20 @@ config.ICU_ATHLETE_ID = "gate-athlete"      # pins match_zwo's seed input
 
 import training_planner as tp  # noqa: E402
 import plan_invariants as pi  # noqa: E402
+import ride_storage as _ride_storage  # noqa: E402
+
+# The one seam for the rider's rides (ride_storage.ride_record): the planner
+# reads the load carried and the week under way there and nowhere else, so a
+# driver says what the rider rode with record(), not by handing an entry
+# point a list (the coordinator's review of a0739673).
+_RECORD: list = []
+_ride_storage.ride_record = lambda: list(_RECORD)
+
+
+def record(rs):
+    """The rider's rides for the next entry point; None for none."""
+    _RECORD[:] = rs or []
+    return rs
 
 ANCHOR = _dt.date(2026, 9, 14)      # a Monday, fixed forever
 SEED = 20260914
@@ -173,6 +187,7 @@ class Rider:
 
     def base(self):
         at(ANCHOR)
+        record(None)
         return tp.generate_plan(self.goal(), seed_salt=self.salt, current_ctl=self.ctl,
                                 recent_weekly_tss=self.rwt, athlete=ATHLETE)[1]
 
@@ -182,7 +197,7 @@ def _generate(r, base):
 
 
 def _generate_thursday(r, base):
-    t, rs = _day(3), rides(ANCHOR, _day(2))
+    t, rs = _day(3), record(rides(ANCHOR, _day(2)))
     at(t)
     return tp.generate_plan(r.goal(), seed_salt=r.salt, current_ctl=r.ctl,
                             recent_weekly_tss=r.rwt, athlete=ATHLETE,
@@ -194,7 +209,7 @@ def _regenerate(days):
         t = _day(days)
         wk = copy.deepcopy(base)
         own_some(wk, t)
-        rs = rides(max(ANCHOR, t - _dt.timedelta(days=10)), t - _dt.timedelta(days=1))
+        rs = record(rides(max(ANCHOR, t - _dt.timedelta(days=10)), t - _dt.timedelta(days=1)))
         at(t)
         return tp.regenerate_from_today(r.goal(), wk, r.ctl, activities=rs,
                                         seed_salt=r.salt, athlete=ATHLETE,
@@ -205,7 +220,7 @@ def _regenerate(days):
 def _extend(days):
     def drive(r, base):
         t = _day(days)
-        rs = rides(t - _dt.timedelta(days=7), t - _dt.timedelta(days=1))
+        rs = record(rides(t - _dt.timedelta(days=7), t - _dt.timedelta(days=1)))
         at(t)
         return tp.extend_continuous_plan(r.goal(), copy.deepcopy(base), r.ctl,
                                          recent_activities=rs, athlete=ATHLETE,
@@ -217,7 +232,7 @@ def _extend(days):
 def _recalculate(days):
     def drive(r, base):
         t = _day(days)
-        rs = rides(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1))
+        rs = record(rides(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1)))
         at(t)
         return tp.recalculate_plan(r.goal(), copy.deepcopy(base), r.ctl,
                                    recent_activities=rs, athlete=ATHLETE,
@@ -230,6 +245,7 @@ def _refit(days):
         t = _day(days)
         wk = copy.deepcopy(base)
         miss_a_hard_day(wk, t)
+        record(None)
         at(t)
         return tp.refit_remaining_week(r.goal(), wk, t, seed_salt=r.salt,
                                        athlete=ATHLETE)[0], None, t
@@ -247,7 +263,7 @@ def _reforecast(days, tsb=None, avail=False):
     every reforecast@21 case (the audit's test lens, 2026-09-14)."""
     def drive(r, base):
         t = _day(days)
-        rs = rides(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1))
+        rs = record(rides(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1)))
         series = (None if tsb is None else
                   {t - _dt.timedelta(days=i): float(tsb) for i in range(15)})
         overrides = None
@@ -333,7 +349,7 @@ def _reforecast_dict(days, tsb, syncs=3):
         wk = copy.deepcopy(base)
         own_some(wk, t)
         plan = _stored(wk, r.goal())
-        rs = rides(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1))
+        rs = record(rides(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1)))
         series = {t + _dt.timedelta(days=i): float(tsb) for i in range(7 * 20)}
         at(t)
         for _ in range(syncs):

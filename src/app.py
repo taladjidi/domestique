@@ -18264,12 +18264,9 @@ def _load_all_rides_safe() -> list[dict]:
 
 
 def _load_all_rides_uncached() -> list[dict]:
-    try:
-        import ride_storage as _rs
-        return _rs.load_all_rides()
-    except Exception as e:
-        _log.warning(f"load_all_rides failed: {e}")
-        return []
+    # The one reader of the rider's rides (ride_storage.ride_record), memoised.
+    import ride_storage as _rs
+    return _rs.ride_record()
 
 
 def _longest_ride_h_90d(rides: list[dict] | None = None) -> float | None:

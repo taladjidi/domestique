@@ -132,6 +132,7 @@ def collect_entries(mode):
         for dname in rider.drivers:
             key = f"{rider.name}/{dname}"
             try:
+                env.record(None)             # no case reads the last one's rides
                 out = env.DRIVERS[dname](rider, base)
                 if isinstance(out, dict):
                     got[key] = {"projection": json.loads(json.dumps(

@@ -8832,7 +8832,8 @@ def generate_plan(
         current_ctl = 37.0
 
     # The rider's chronic load: the ACWR ceiling's base (athlete_weekly_load).
-    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss)
+    _rec = _ride_record()   # the one reader: the load carried, the week under way
+    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss, rides=_rec)
 
     # v1.11.0 IMPL-EVENT — event demand → plan targets (None for non-event goals
     # or missing athlete → all event wiring no-ops, non-event plans unchanged).
@@ -8945,7 +8946,7 @@ def generate_plan(
                                      week_in_phase=week_in_phase,
                                      seed_salt=seed_salt, event_targets=event_targets,
                                      prev_week_sessions=prev_week_sessions or [],
-                                     ridden=activities or [],
+                                     ridden=_rec,
                                      unavailable=_in_unavailable,
                                      tss_target=_budget),
                         _owner_state)
@@ -8980,7 +8981,7 @@ def generate_plan(
                 # how a Thursday generate prescribed a further 117 TSS of
                 # intensity to someone who had already ridden 369 that week.
                 # A no-op for every full week, where the cursor IS the Monday.
-                _done_tss = _completed_tss_in(activities,
+                _done_tss = _completed_tss_in(_rec,
                                               _monday_on_or_before(cursor),
                                               cursor + timedelta(days=6))
                 pw = plan_week(week_num, cursor, phase, goal, is_stepback,
@@ -9015,7 +9016,7 @@ def generate_plan(
                     week_available_minutes(goal, pw.start),
                     model=active_model_for_phase(phase.name, goal), phase_name=phase.name,
                     spent_zones=_completed_zones_in(
-                        activities, _monday_on_or_before(pw.start), pw.end))
+                        _rec, _monday_on_or_before(pw.start), pw.end))
                 pw.hit_allowance = int(budget.hit_count_max)
                 phase_rot = recent_hit_by_phase.setdefault(phase.name, [])
                 # Emphasis, block focus, blueprint or sampler: decided in one
@@ -9075,7 +9076,7 @@ def generate_plan(
                 # days at the peak→taper seam, D3 training after race day).
                 _clip_week_to_phase(pw, phase, cursor)
                 weeks.append(pw)
-                _fill_easy_to_budget(pw, goal, library, rides=activities)
+                _fill_easy_to_budget(pw, goal, library, rides=_rec)
                 _ramp.follow(pw, _budget)
                 prev_week_sessions = pw.sessions  # feed into next plan_week for 48h gap
                 cursor = _next_week_cursor(cursor, phase)
@@ -9277,7 +9278,7 @@ def generate_plan(
         while _d <= _hi:
             _cal[_d.isoformat()] = 0.0
             _d += timedelta(days=1)
-    finalize_weeks(weeks, goal, library=library, calendar=_cal, rides=activities,
+    finalize_weeks(weeks, goal, library=library, calendar=_cal,
                    normal_week=recent_weekly_tss, plan_start_date=plan_start_date,
                    seed_salt=seed_salt, built=weeks)
 
@@ -10476,28 +10477,16 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.zwo_name = ""
 
 
-def _ride_record(rides=None) -> "list | None":
-    """The rides the planner reads the rider's load from, one function for
-    every entry point: the rides the caller holds, else the ride archive
-    (ride_storage.load_all_rides -- ICU records and FIT imports, the records
-    athlete_weekly_load reads). The weekly recalc and refit handed the final
-    step no rides, and it read the owner's week under way off the plan -- 299
-    planned where 503 was ridden -- and lowered the next week with a false
-    "recent load 340" (the evaluation of 3793952c, MF-1).
-
-    The caller's list first, not the archive whatever it passes: every
-    caller that passes rides passes the rider's own, from the same store
-    (db.query_activities, the archive), and an archive read over a caller's
-    list made the full gate's planner tests depend on whatever ride store
-    their xdist worker's profile held (5 passes-alone, deliver5)."""
-    if rides is not None:
-        return rides
-    try:
-        import ride_storage as _rs
-        archive = _rs.load_all_rides()
-    except Exception:  # noqa: BLE001 -- no profile, no archive: no rides
-        archive = []
-    return archive or None
+def _ride_record() -> "list | None":
+    """The rider's rides, for the load carried and the week under way: the
+    one reader, ride_storage.ride_record (the ride archive). No caller hands
+    the planner a rides list for these facts any more -- the daily sync's
+    db.query_activities (14 days, "date" rows) and the weekly recalc's none
+    read the rider's load two ways (the coordinator's review of a0739673).
+    None when the record holds nothing: the week under way's sessions
+    before today that were not missed stand in (_row_net), as they did."""
+    import ride_storage as _rs
+    return _rs.ride_record() or None
 
 
 def _rode_on(rides, day: date) -> bool:
@@ -12980,7 +12969,6 @@ def reforecast(
     # touched days (FC4a, v2.5.0) -- so every date it changed is registered.
     for _d in sorted(finalize_weeks(plan_weeks, goal,
                                     calendar=availability_overrides,
-                                    rides=recent_activities,
                                     normal_week=recent_weekly_tss)):
         _iso = _d.isoformat()
         if _iso not in seen:
@@ -13969,7 +13957,8 @@ def regenerate_from_today(
     build_weeks = post_recovery_weeks - max(1, adjusted_taper // 7)
     # The rider's chronic load, for the same ACWR ceiling generate applies. It
     # was fetched only after the phases were built, for the volume pass.
-    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss)
+    _rec = _ride_record()   # the one reader: the load carried, the week under way
+    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss, rides=_rec)
 
     # 8. Build unavailable date set
     unavailable_dates = set()
@@ -14095,7 +14084,7 @@ def regenerate_from_today(
                         is_stepback=is_stepback, week_in_phase=week_in_phase,
                         seed_salt=seed_salt, event_targets=event_targets,
                         prev_week_sessions=prev_week_sessions or [],
-                        ridden=activities or [],
+                        ridden=_rec,
                         unavailable=lambda d: d in unavailable_dates,
                         # Whatever the athlete already owns inside this week.
                         # Regeneration plans around these; it does not redo
@@ -14125,7 +14114,7 @@ def regenerate_from_today(
                            prev_week_sessions=prev_week_sessions,
                            seed_salt=seed_salt,
                            completed_tss=_completed_tss_in(
-                               activities, cursor, cursor + timedelta(days=6)),
+                               _rec, cursor, cursor + timedelta(days=6)),
                            tss_target=_budget)
 
             # Unavailable days are rest as the weeks are built (the stepback
@@ -14160,7 +14149,7 @@ def regenerate_from_today(
                 budget, pw.tss_target,
                 week_available_minutes(adjusted_goal, pw.start),
                 model=active_model_for_phase(phase.name, adjusted_goal), phase_name=phase.name,
-                spent_zones=_completed_zones_in(activities, pw.start, pw.end))
+                spent_zones=_completed_zones_in(_rec, pw.start, pw.end))
             phase_rot = recent_hit_by_phase.setdefault(phase.name, [])
             _ctx = week_context(adjusted_goal, phase, week_num, cursor,
                             is_stepback=is_stepback, week_in_phase=week_in_phase,
@@ -14209,7 +14198,7 @@ def regenerate_from_today(
             # FC1-CLIP (v2.5.0): never spill past the phase end (D2/D3).
             _clip_week_to_phase(pw, phase, cursor)
             new_weeks.append(pw)
-            _fill_easy_to_budget(pw, adjusted_goal, library, rides=activities)
+            _fill_easy_to_budget(pw, adjusted_goal, library, rides=_rec)
             _ramp.follow(pw, _budget)
             prev_week_sessions = pw.sessions  # feed into next plan_week (PL2)
             cursor = _next_week_cursor(cursor, phase)
@@ -14285,7 +14274,7 @@ def regenerate_from_today(
     # and the days already behind the rider put back LAST, as they were.
     _cal = {d.isoformat(): 0.0 for d in unavailable_dates}
     finalize_weeks(all_weeks, goal, old_weeks=old_plan_weeks, library=library,
-                   calendar=_cal, rides=activities, normal_week=recent_weekly_tss,
+                   calendar=_cal, normal_week=recent_weekly_tss,
                    plan_start_date=(phase_start_date if new_phases else today),
                    seed_salt=seed_salt, built=new_weeks)
     return new_phases, all_weeks, regen_info
@@ -14630,7 +14619,6 @@ def _restore_moved_misses(weeks: list, records: list, today: date) -> None:
 def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                    library: "list | None" = None,
                    calendar: "dict[str, float] | None" = None,
-                   rides: "list | None" = None,
                    normal_week: "float | None" = None,
                    plan_start_date: "date | None" = None,
                    seed_salt: int = 0,
@@ -14656,9 +14644,9 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
 
     Only sessions dated today or later, pending, not the race, are touched
     before the record is restored. ``calendar`` (ISO date -> hours) adds to
-    goal._calendar (with_calendar). ``rides`` measure the week under way; with
-    none, its sessions before today that were not missed or dismissed stand
-    in. ``normal_week`` is the rider's normal week in TSS. ``built`` are the
+    goal._calendar (with_calendar). The week under way and the load carried
+    are the ride record's (_ride_record, the one reader): no caller passes
+    rides. ``normal_week`` is the rider's normal week in TSS. ``built`` are the
     rows the calling entry point just built (generate: all of them): only
     those are topped up to their budget and held to the 1.3 x guard (9.1,
     9.2) -- a sync, or extend's kept weeks, are finalized as they stand.
@@ -14669,7 +14657,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     today = clock.today()
     if not weeks:
         return set()
-    rides = _ride_record(rides)
+    rides = _ride_record()
     if normal_week is None:
         # 9.9: the load the rider really carries (the ride archive, each ride
         # once, cycling only), for the syncs that are not handed it.
@@ -14811,12 +14799,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         w0 = ahead[0] if ahead else None
         cur = w0 if w0 is not None and w0.start <= today else None
         if w0 is not None:
-            # From the ride archive itself (the one reader of the load
-            # carried), not the caller's list: a sync's db activities carry
-            # no started_at, and the EWMA read nothing from them.
+            # From the ride record (the one reader of the rider's rides).
             import ride_storage as _rs
             try:
-                eve = _rs.chronic_weekly_tss(today=min(w0.start, today) - timedelta(days=1))
+                eve = _rs.chronic_weekly_tss(rides, today=min(w0.start, today) - timedelta(days=1))
             except Exception:  # noqa: BLE001 -- the archive is a best reading
                 eve = None
             if eve:
@@ -15177,7 +15163,8 @@ def recalculate_plan(
     # 1. Keep completed weeks (including current in-progress week)
     past_weeks = [w for w in current_plan_weeks if w.end < today or (w.start <= today <= w.end)]
     # The rider's chronic load, read as generate and regenerate read it.
-    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss)
+    _rec = _ride_record()   # the one reader: the load carried, the week under way
+    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss, rides=_rec)
     future_weeks = [w for w in current_plan_weeks if w.start > today]
 
     # §6.12 — gather preserved sessions from the FUTURE weeks before they are
@@ -15219,7 +15206,7 @@ def recalculate_plan(
         # Minor deviation — just annotate, don't regenerate. The final step
         # still holds the plan to its rules (a no_change return used to skip
         # it, and a zeroed day stayed filled: the 2026-09-24 review, V2).
-        _held = finalize_weeks(current_plan_weeks, goal, rides=recent_activities,
+        _held = finalize_weeks(current_plan_weeks, goal,
                                normal_week=recent_weekly_tss)
         return ([], current_plan_weeks, {
             "action": "finalized" if _held else "no_change",
@@ -15419,7 +15406,7 @@ def recalculate_plan(
                 budget, pw.tss_target,
                 week_available_minutes(adjusted_goal, pw.start),
                 model=active_model_for_phase(phase.name, adjusted_goal), phase_name=phase.name,
-                spent_zones=_completed_zones_in(recent_activities, pw.start, pw.end))
+                spent_zones=_completed_zones_in(_rec, pw.start, pw.end))
             phase_rot = recent_hit_by_phase.setdefault(phase.name, [])
             _ctx = week_context(adjusted_goal, phase, week_num, cursor,
                             is_stepback=is_stepback, week_in_phase=week_in_phase,
@@ -15486,7 +15473,7 @@ def recalculate_plan(
             # FC1-CLIP (v2.5.0): never spill past the phase end (D2/D3).
             _clip_week_to_phase(pw, phase, cursor)
             new_weeks.append(pw)
-            _fill_easy_to_budget(pw, adjusted_goal, library, rides=recent_activities)
+            _fill_easy_to_budget(pw, adjusted_goal, library, rides=_rec)
             _ramp.follow(pw, _budget)
             prev_week_sessions = pw.sessions  # feed into next plan_week (PL2)
             cursor = _next_week_cursor(cursor, phase)
@@ -15545,7 +15532,7 @@ def recalculate_plan(
     # race passes, the per-day clamp and the ceiling, and no calendar: a day
     # the rider had zeroed came back filled on the weekly auto-recalc.
     finalize_weeks(all_weeks, goal, old_weeks=current_plan_weeks, library=library,
-                   rides=recent_activities, normal_week=recent_weekly_tss,
+                   normal_week=recent_weekly_tss,
                    plan_start_date=(new_phases[0].start if new_phases else regen_start),
                    seed_salt=seed_salt, built=new_weeks)
 
@@ -15606,7 +15593,7 @@ def extend_continuous_plan(
     def _no_change(reason: str, detail: str = "") -> tuple:
         # The final step still runs (the 2026-09-24 review, V2): nothing to
         # append is not nothing to enforce.
-        _held = finalize_weeks(current_plan_weeks, goal, rides=recent_activities,
+        _held = finalize_weeks(current_plan_weeks, goal,
                                normal_week=recent_weekly_tss) if current_plan_weeks else set()
         info = {
             "action": "finalized" if _held else "no_change",
@@ -15646,7 +15633,8 @@ def extend_continuous_plan(
             "plan left unchanged.")
 
     # Load-based sizing: the rider's chronic load, as every entry point reads it.
-    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss)
+    _rec = _ride_record()   # the one reader: the load carried, the week under way
+    recent_weekly_tss = athlete_weekly_load(current_ctl, recent_weekly_tss, rides=_rec)
 
     # ── Append anchor: contiguous with the last existing week ───────────────
     last_end = max(w.end for w in current_plan_weeks)
@@ -15817,7 +15805,7 @@ def extend_continuous_plan(
 
         _clip_week_to_phase(pw, phase, cursor)
         new_weeks.append(pw)
-        _fill_easy_to_budget(pw, goal, library, rides=recent_activities)
+        _fill_easy_to_budget(pw, goal, library, rides=_rec)
         _ramp.follow(pw, _budget)
         prev_week_sessions = pw.sessions
         cursor = _next_week_cursor(cursor, phase)
@@ -15871,7 +15859,7 @@ def extend_continuous_plan(
     # weeks up to 1.24x their target) and no race pass (a B race beyond the
     # horizon was never marked once the plan reached it).
     finalize_weeks(all_weeks, goal, old_weeks=current_plan_weeks, library=library,
-                   rides=recent_activities, normal_week=recent_weekly_tss,
+                   normal_week=recent_weekly_tss,
                    plan_start_date=append_start, seed_salt=seed_salt, built=new_weeks)
 
     info = {

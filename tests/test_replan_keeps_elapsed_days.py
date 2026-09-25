@@ -30,7 +30,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app as app_module  # noqa: E402
+import app as app_module
+import ride_storage  # noqa: E402
 import clock  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -104,7 +105,9 @@ class TestReplanKeepsElapsedDays(unittest.TestCase):
                           side_effect=lambda k, fn, **kw: fn() if k != "training"
                           else {"ctl": 40}), \
              patch.object(app_module.db, "query_activities",
-                          return_value=self._ridden()):
+                          return_value=self._ridden()), \
+             patch.object(ride_storage, "ride_record", return_value=self._ridden()):
+            # the one seam: the planner reads the rider's rides here
             r = self.client.post("/api/plan/regenerate")
         self.assertEqual(r.status_code, 200, r.text)
         return json.loads(self.plan_p.read_text())

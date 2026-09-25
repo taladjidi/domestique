@@ -257,6 +257,26 @@ def _clock():
     clock.unfreeze()
 
 
+_put_record = None
+
+
+@pytest.fixture(autouse=True)
+def _one_seam(ride_record):
+    """Every test here reads the rider's rides through the one seam
+    (conftest.ride_record): none unless it says, never its xdist worker's
+    ride store."""
+    global _put_record
+    _put_record = ride_record
+    yield
+    _put_record = None
+
+
+def record(rides):
+    """The rider's rides for the planner (the one seam); returns them."""
+    _put_record(rides)
+    return rides
+
+
 def entry_points(kind, base, t, goal_fn, rides=None):
     """Every planner entry point, driven from ``base`` on day ``t``. Yields
     (name, weeks). The goal each gets comes from goal_fn (fresh each time)."""
@@ -295,9 +315,13 @@ def entry_points(kind, base, t, goal_fn, rides=None):
         drivers.append(("extend", lambda: tp.extend_continuous_plan(
             goal_fn(), copy.deepcopy(base), 55, recent_activities=rides, athlete=ATH,
             recent_weekly_tss=380)[1]))
-    for name, fn in drivers:
-        clock.freeze(t)
-        yield name, fn()
+    import ride_storage
+    from unittest.mock import patch
+    # the one seam: every driver, and the caller's own finalize, read ``rides``
+    with patch.object(ride_storage, "ride_record", lambda: list(rides)):
+        for name, fn in drivers:
+            clock.freeze(t)
+            yield name, fn()
 
 
 def pending_ahead(weeks, t):
@@ -446,7 +470,7 @@ def test_6_5_extend_holds_appended_weeks_to_their_target(rider):
             rs = [r for r in ride_days(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1))
                   if _dt.date.fromisoformat(r["date"]).weekday() in goal_fn().available_days]
             _, weeks, _ = tp.recalculate_plan(goal_fn(), copy.deepcopy(base), ctl,
-                                              recent_activities=rs, athlete=ATH,
+                                              recent_activities=record(rs), athlete=ATH,
                                               recent_weekly_tss=rwt)
             for w in weeks:
                 if w.start in old or (w.end - w.start).days < 6:
@@ -481,12 +505,13 @@ def test_6_6_a_b_race_beyond_the_horizon_is_marked_once_extend_reaches_it():
 # 6.7 -------------------------------------------------------------------
 
 @pytest.mark.parametrize("kind", ["event", "continuous"])
-def test_6_7_a_heavy_monday_to_wednesday_counts_against_the_week(kind):
+def test_6_7_a_heavy_monday_to_wednesday_counts_against_the_week(kind, ride_record):
     """450 TSS ridden Monday-Wednesday, then generate / regenerate on
     Thursday: on 02a0f514 the calendar week came to 583 against 494 (a floor
     added a VO2max day after the budget was set)."""
     t = G0 + _dt.timedelta(days=3)
     rides = [{"date": (G0 + _dt.timedelta(days=i)).isoformat(), "tss": 150.0} for i in range(3)]
+    ride_record(rides)
     clock.freeze(t)
     ph, weeks = tp.generate_plan(owner(kind), current_ctl=55, recent_weekly_tss=380,
                                  athlete=ATH, activities=rides)
@@ -642,15 +667,12 @@ def test_6_1_a_closed_date_never_reaches_the_calendar_push():
 
 
 @pytest.mark.parametrize("kind", ["event", "continuous"])
-def test_the_final_step_is_a_fixpoint(kind):
+def test_the_final_step_is_a_fixpoint(kind, ride_record):
     """Every sync runs it (reforecast_dict): a second run on its own output
     changes nothing, or each sync would churn the rider's calendar."""
     for name, weeks in entry_points(kind, gen(owner(kind)), T3, lambda: owner(kind)):
         clock.freeze(T3)
-        again = tp.finalize_weeks(weeks, owner(kind),
-                                  rides=ride_days(T3 - _dt.timedelta(days=14),
-                                                  T3 - _dt.timedelta(days=1)),
-                                  normal_week=380)
+        again = tp.finalize_weeks(weeks, owner(kind), normal_week=380)
         assert again == set(), (name, sorted(again)[:5])
 
 
@@ -764,7 +786,7 @@ def test_m1_a_duplicate_recording_does_not_rest_the_rest_of_the_week(kind):
     def ahead(acts):
         plan = {"goal": tp.goal_to_dict(owner(kind)), "weeks": [tp.week_to_dict(w) for w in base]}
         clock.freeze(t)
-        tp.reforecast_dict(plan, tsb_series={}, recent_activities=acts)
+        tp.reforecast_dict(plan, tsb_series={}, recent_activities=record(acts))
         return [(s["day"], s["session_type"], s["duration_min"]) for w in plan["weeks"]
                 for s in w["sessions"] if t.isoformat() <= s["day"] <= "2026-09-20"]
     got = ahead(dup)
@@ -810,7 +832,7 @@ def test_m2_a_missed_session_the_budget_will_not_carry_stays_missed():
     rides = [{"id": "r1", "date": G0.isoformat(), "sport": "Ride", "tss": 600.0}]
     for _ in range(2):                              # two syncs
         plan, _action, _info, _msg = app_module._apply_plan_update(
-            plan, training={}, activities=rides, today=t)
+            plan, training={}, activities=record(rides), today=t)
         assert _owed(plan, tue), "the missed session is gone"
         # And no session anywhere: a day left "moved_from:X" is only a stub
         # when X holds the session, pending, moved from that day.
@@ -984,7 +1006,7 @@ def test_dc_an_extended_block_keeps_its_unload_week_lightest(monkeypatch):
     rides = [{"date": (b0 + _dt.timedelta(days=i)).isoformat(), "tss": 60.0}
              for i in range(3) if (b0 + _dt.timedelta(days=i)).weekday() != 4]
     clock.freeze(t)
-    weeks = tp.extend_continuous_plan(g(), copy.deepcopy(base), 55, recent_activities=rides,
+    weeks = tp.extend_continuous_plan(g(), copy.deepcopy(base), 55, recent_activities=record(rides),
                                       athlete={"ftp": 247}, recent_weekly_tss=380,
                                       seed_salt=7)[1]
     assert not [str(v) for v in pi.audit(weeks, g(), today=t) if v.rule == "stepback_lightest"]
@@ -1022,7 +1044,7 @@ def _moved_plan():
             s["status"] = "done"
     t = G0 + _dt.timedelta(days=3)
     clock.freeze(t)
-    plan = app_module._apply_plan_update(plan, training={}, activities=_LIGHT, today=t)[0]
+    plan = app_module._apply_plan_update(plan, training={}, activities=record(_LIGHT), today=t)[0]
     assert [s for w in plan["weeks"] for s in w["sessions"]
             if s["day"] == _SAT and s.get("moved_from") == _TUE], "sync 1 did not move it"
     return plan
@@ -1035,12 +1057,13 @@ def _nowhere(plan):
     return not (tue.get("status") == "missed" and tue["session_type"] != "rest") and not held
 
 
-def test_mf1_a_later_sync_that_rests_the_destination_restores_the_session():
+def test_mf1_a_later_sync_that_rests_the_destination_restores_the_session(ride_record):
     import app as app_module
     plan = _moved_plan()
     t = G0 + _dt.timedelta(days=3)
     clock.freeze(t)
     big = _LIGHT + [{"id": "r2", "date": "2026-09-16", "sport": "Ride", "tss": 600.0}]
+    ride_record(big)
     plan = app_module._apply_plan_update(plan, training={}, activities=big, today=t)[0]
     assert not _nowhere(plan)
     tue = next(s for w in plan["weeks"] for s in w["sessions"] if s["day"] == _TUE)
@@ -1053,6 +1076,8 @@ def _through_app(tmp_path, monkeypatch, plan, url, body):
     import app as app_module
     monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
     (tmp_path / "current_plan.json").write_text(json.dumps(plan))
+    import ride_storage
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: list(_LIGHT))   # the one seam
     clock.freeze(G0 + _dt.timedelta(days=3))
     with patch("db.query_activities", return_value=_LIGHT):
         r = TestClient(app_module.app).post(url, json=body)
@@ -1219,7 +1244,7 @@ def test_l1_every_ridden_load_reader_counts_rides_once():
 # re-stamped it to its served load (6.8) AFTER the load ramp had read it, so
 # the second regenerate read a different week and moved the weeks after it.
 
-def test_l3_regenerate_twice_gives_the_same_plan():
+def test_l3_regenerate_twice_gives_the_same_plan(ride_record):
     base = gen(owner("continuous"))
     t = G0 + _dt.timedelta(days=3)
     wk2 = next(w for w in base if w.start > t)
@@ -1228,13 +1253,16 @@ def test_l3_regenerate_twice_gives_the_same_plan():
             s.adapted = True
             s.tss_estimate = round(float(s.tss_estimate) * 0.7)   # a stored, stale load
 
+    rides = ride_days(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1))
+    ride_record(rides)                                   # the one seam
+
     def regen(weeks):
         clock.freeze(t)
         g = owner("continuous", plan_weeks=0)
         g.target_date = t + _dt.timedelta(weeks=12)
         return tp.regenerate_from_today(
             g, copy.deepcopy(weeks), 55, athlete=ATH, recent_weekly_tss=380,
-            activities=ride_days(t - _dt.timedelta(days=14), t - _dt.timedelta(days=1)))[1]
+            activities=rides)[1]
     once = regen(base)
     twice = regen(once)
     fp = lambda ws: [(w.start, w.tss_target, [(s.day, s.session_type, s.duration_min,  # noqa: E731

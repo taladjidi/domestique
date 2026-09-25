@@ -1145,6 +1145,25 @@ def ride_moving_s(ride: dict) -> int:
     return 0
 
 
+def ride_record() -> list[dict]:
+    """The rider's rides, for every load fact the planner and its auditor
+    read -- the load carried (plan_invariants.carried_in) and the week under
+    way (plan_invariants.carried_step, the final step's D2): the ride archive
+    (load_all_rides: intervals.icu records and FIT imports, deduped).
+
+    The one reader, and the one seam a test patches. The planner took a rides
+    list from each caller -- the daily sync handed it db.query_activities (14
+    days of rows keyed by "date", no "started_at"), the weekly recalc none --
+    and read the rider's load two ways, then three (the evaluation of
+    3793952c, MF-1; the coordinator's review of a0739673). An empty list, not
+    an error, when there is no archive to read."""
+    try:
+        return load_all_rides()
+    except Exception as e:  # noqa: BLE001 -- no archive is no rides
+        log.warning(f"ride_record: load_all_rides failed: {e}")
+        return []
+
+
 def load_all_rides() -> list[dict]:
     """v4.4.0 — return ICU-synced records + raw FIT imports as one merged
     flat list, deduped (ICU preferred when both have the same activity).
@@ -2015,7 +2034,7 @@ def chronic_weekly_tss(
     from plan_invariants import chronic_after
 
     if rides is None:
-        rides = load_all_rides()
+        rides = ride_record()
     if not rides:
         return None
     per_day: dict[_dt.date, float] = {}

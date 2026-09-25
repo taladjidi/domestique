@@ -134,6 +134,16 @@ def test_9_5_an_hour_is_budgeted_at_what_the_served_files_carry():
 import plan_invariants as pi  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _one_seam(ride_record):
+    """Every test here reads the rider's rides through the one seam
+    (conftest.ride_record): none unless it says, never its xdist worker's
+    ride store; the finalize suite's helpers (F.record) write there too."""
+    F._put_record = ride_record
+    yield
+    F._put_record = None
+
+
 def load_weeks(weeks, goal, t):
     """Full load rows ahead of ``t``: not unload, not taper, no race."""
     return [w for w in weeks
@@ -580,6 +590,8 @@ def _thursday_regenerate(kind, today_tss, monkeypatch):
             filled.append(left)
         return fill(pw, *a, **k)
     monkeypatch.setattr(tp, "_fill_easy_to_budget", fill_spy)
+    import ride_storage
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: list(rides))   # the one seam
     clock.freeze(t)
     g = F.owner(kind)
     g.plan_weeks = 0
@@ -901,15 +913,17 @@ def test_9_9_the_week_under_way_is_counted_once(monkeypatch):
     monkeypatch.setattr(ride_storage, "chronic_weekly_tss",
                         lambda rides=None, today=None: 300.0 if today <= mon else load_thu)
     a, b = copy.deepcopy(weeks), copy.deepcopy(weeks)
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: [])
     clock.freeze(mon)
     tp.finalize_weeks(a, g)
     rides = [{"date": d.isoformat(), "tss": v} for d, v in per_day.items() if d < thu]
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: rides)
     for w in b:
         for s in w.sessions:
             if s.day < thu and s.session_type != "rest":
                 s.status = "done"
     clock.freeze(thu)
-    tp.finalize_weeks(b, g, rides=rides)
+    tp.finalize_weeks(b, g)
     assert [(w.start, w.tss_target) for w in a if w.start >= mon] == \
            [(w.start, w.tss_target) for w in b if w.start >= mon]
 
@@ -1029,10 +1043,11 @@ def test_9_9_the_week_under_way_is_read_from_its_rides(monkeypatch):
     rides = [{"date": "2026-09-21", "tss": 205.0}, {"date": "2026-09-23", "tss": 18.0},
              {"date": "2026-09-24", "tss": 280.0}]
     monkeypatch.setattr(ride_storage, "chronic_weekly_tss", lambda rides=None, today=None: 367.0)
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: rides)
     nxt = mon + _dt.timedelta(days=7)
     built = next(w.tss_target for w in weeks if w.start == nxt)
     clock.freeze(t)
-    tp.finalize_weeks(weeks, g, rides=rides)
+    tp.finalize_weeks(weeks, g)
     w = next(w for w in weeks if w.start == nxt)
     assert w.tss_target == built and not w.guard_lowered, (built, w.tss_target, w.guard_lowered)
 
@@ -1076,7 +1091,7 @@ def test_mf1_the_weekly_recalc_reads_the_rides_not_the_plan(tmp_path, monkeypatc
     plan.update(generated="2026-09-14T08:00:00", recalc_date="2026-09-14T08:00:00")
     monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
     (tmp_path / "current_plan.json").write_text(_json.dumps(plan))
-    monkeypatch.setattr(ride_storage, "load_all_rides", _owner_archive)
+    monkeypatch.setattr(ride_storage, "ride_record", _owner_archive)   # the one seam
     monkeypatch.setattr(A, "get_today_metrics", lambda: {})
     monkeypatch.setattr(A, "_planning_ctl", lambda *a, **k: 55.0)
     monkeypatch.setattr(A, "fetch_wellness", lambda *a, **k: [])
@@ -1091,12 +1106,12 @@ def test_mf1_the_weekly_recalc_reads_the_rides_not_the_plan(tmp_path, monkeypatc
 
 
 def test_mf1_a_sync_carries_the_archives_load_not_its_14_days(monkeypatch):
-    """The daily sync hands the final step db.query_activities: 14 days of
+    """The daily sync handed the final step db.query_activities: 14 days of
     rows keyed by "date", no "started_at". Read from that list the 28-day
     EWMA of the load carried found nothing, fell back to the builder's
     reading, and the sync and the weekly recalc read the owner's load two
-    ways. The load carried is the archive's, whatever the caller holds; the
-    caller's list reads only the days of the week under way."""
+    ways. No caller hands the final step rides now: the load carried and the
+    week under way are both the ride record's."""
     import ride_storage
     g, weeks = _owner_weeks()
     for w in weeks:
@@ -1109,11 +1124,9 @@ def test_mf1_a_sync_carries_the_archives_load_not_its_14_days(monkeypatch):
                 "started_at": _dt.date.fromordinal(d).isoformat() + "T10:00:00"}
                for d in range(_dt.date(2026, 6, 1).toordinal(), _dt.date(2026, 8, 17).toordinal())
                if _dt.date.fromordinal(d).weekday() != 4] + _owner_archive()
-    monkeypatch.setattr(ride_storage, "load_all_rides", lambda: archive)
-    db_rows = [{"date": r["started_at"][:10], "tss": r["tss"], "type": "Ride"}
-               for r in archive if r["started_at"][:10] >= "2026-09-12"]
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: archive)
     clock.freeze(_dt.date(2026, 9, 25))
-    tp.finalize_weeks(weeks, g, rides=db_rows, normal_week=150)
+    tp.finalize_weeks(weeks, g, normal_week=150)
     w = next(w for w in weeks if w.start == nxt)
     eve = ride_storage.chronic_weekly_tss(archive, today=_dt.date(2026, 9, 20))
     assert eve and eve > 350, eve     # the archive settled: ~380 a week carried
@@ -1132,7 +1145,7 @@ def test_mf3_a_monday_sync_reads_the_same_load_as_tuesdays(monkeypatch):
     readings = {mon - _dt.timedelta(days=1): 300.0, mon: 260.0}
     monkeypatch.setattr(ride_storage, "chronic_weekly_tss",
                         lambda rides=None, today=None: readings.get(today, 300.0))
-    monkeypatch.setattr(ride_storage, "load_all_rides", lambda: [
+    monkeypatch.setattr(ride_storage, "ride_record", lambda: [
         {"ride_id": "icu_x", "sport": "Ride", "started_at": "2026-09-27T10:00:00", "tss": 60.0}])
     a, b = copy.deepcopy(weeks), copy.deepcopy(weeks)
     clock.freeze(mon)
@@ -1267,3 +1280,58 @@ def test_the_heal_reads_the_planner_clock():
          "zwo_file": "", "status": "pending"}]}]}
     assert tp.count_unmatched_pending_sessions(plan) == 0      # behind the rider
     assert tp.heal_unmatched_sessions_dict(plan, tp.load_workout_library())["candidates"] == 0
+
+
+# ── One reader (the coordinator's review of a0739673) ────────────────────
+# The rider's rides are read in one place (ride_storage.ride_record): no
+# caller hands the planner a rides list for the load carried or the week
+# under way.
+
+def _settled(lo, hi, per_week=380.0):
+    """A ride archive settled at ``per_week`` from ``lo`` to ``hi`` (a ride
+    every day but Friday)."""
+    out, d = [], lo
+    while d <= hi:
+        if d.weekday() != 4:
+            out.append({"ride_id": f"icu_s{d.toordinal()}", "source": "icu", "sport": "Ride",
+                        "started_at": d.isoformat() + "T10:00:00", "tss": per_week / 6})
+        d += _dt.timedelta(days=1)
+    return out
+
+
+_THU = _dt.date(2026, 10, 1)
+_MON = _THU - _dt.timedelta(days=3)
+
+
+def _thursday_record():
+    """Settled at 380 a week to the eve of the week under way, then 150 on
+    each of Monday to Wednesday."""
+    return _settled(_dt.date(2026, 7, 1), _MON - _dt.timedelta(days=1)) + [
+        {"ride_id": f"icu_w{i}", "source": "icu", "sport": "Ride", "tss": 150.0,
+         "started_at": (_MON + _dt.timedelta(days=i)).isoformat() + "T10:00:00"}
+        for i in range(3)]
+
+
+def test_one_reader_the_final_step_takes_no_rides():
+    """No caller hands the final step a rides list: the daily sync handed it
+    db.query_activities (14 days of "date" rows), the weekly recalc none."""
+    import inspect
+    assert "rides" not in inspect.signature(tp.finalize_weeks).parameters
+
+
+def test_one_reader_a_regenerate_reads_the_ride_record_not_its_argument(ride_record):
+    """The rides a caller hands a builder are not what the planner reads the
+    week under way from: 450 in the record Monday to Wednesday, none in the
+    list the caller passed, and the week still counts the 450."""
+    ride_record(_thursday_record())
+    g = F.owner("continuous", plan_weeks=0)
+    base = F.gen(F.owner("continuous"), today=_MON - _dt.timedelta(days=14))
+    clock.freeze(_THU)
+    weeks = tp.regenerate_from_today(g, copy.deepcopy(base), 55, activities=[],
+                                     athlete=F.ATH, recent_weekly_tss=380)[1]
+    wk = next(w for w in weeks if w.start <= _THU <= w.end)
+    gross = wk.tss_target * 7 / ((wk.end - wk.start).days + 1)
+    ahead = sum(s.tss_estimate for s in wk.sessions
+                if s.day >= _THU and s.session_type != "rest" and not s.is_race)
+    # nothing more than one short spin once the rides alone spent the week (6.7)
+    assert ahead <= max(0.0, gross * 1.05 - 450) + 60, (ahead, gross)

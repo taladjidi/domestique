@@ -10872,8 +10872,11 @@ def _enforce_stepback_is_lightest(weeks: list, goal=None,
             # load (_wk_tss), as the auditor reads it: dropping it (bbbb15fe)
             # left an unload week whose only build was under way with no
             # reference at all -- owner-cont synced 10-02 went 306 -> 359.
+            # ...unless it holds too little to be one (the auditor's rule,
+            # plan_invariants.thin_week_under_way).
             if (getattr(weeks[j], "phase", "") != "taper"
-                    and ((weeks[j].end - weeks[j].start).days + 1) >= 7):
+                    and ((weeks[j].end - weeks[j].start).days + 1) >= 7
+                    and not plan_invariants.thin_week_under_way(weeks[j], _today)):
                 builds.append(weeks[j])
             j -= 1
         if not builds:

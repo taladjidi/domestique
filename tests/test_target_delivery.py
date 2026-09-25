@@ -1199,3 +1199,28 @@ async function fetch(url) {
 """
     res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0 and "OK" in res.stdout, res.stderr + res.stdout
+
+
+def test_a_thin_week_under_way_is_not_an_unload_reference():
+    """three-day/1h extend@9: the week under way held one 32-TSS ride and the
+    FTP test (training load 32 of a 144 budget), and the unload week after
+    it -- three rides at the 30-min floor, 61 -- was judged heavier than its
+    block. A build week under way holding under half its budget is not the
+    reference, for the planner or the auditor; MF-B's case (306 of 306)
+    still is."""
+    import plan_invariants as pi_
+    t = _dt.date(2026, 10, 2)
+    clock.freeze(t)
+    weeks = _block_underway()
+    thin = copy.deepcopy(weeks)
+    for s in thin[0].sessions[1:]:
+        s.session_type, s.tss_estimate, s.duration_min = "rest", 0.0, 0
+    thin[0].sessions[3].session_type, thin[0].sessions[3].tss_estimate = "ftp_test", 80.0
+    thin[0].tss_target = 144.0
+    thin[1].tss_target = 104.0
+    for s in thin[1].sessions:
+        if s.session_type != "rest":
+            s.tss_estimate, s.duration_min = 20.0, 30
+    assert pi_.thin_week_under_way(thin[0], t) and not pi_.thin_week_under_way(weeks[0], t)
+    assert not pi_.check_stepback_lightest(thin, t)
+    assert "stepback_lightest" in [v.rule for v in pi_.check_stepback_lightest(weeks, t)]

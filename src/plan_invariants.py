@@ -714,6 +714,21 @@ def stepback_looks_lighter(deload, builds) -> "tuple[bool, str]":
                    f"{theirs:.0f} in an all-easy build week")
 
 
+def thin_week_under_way(w, today) -> bool:
+    """A build week under way that holds too little to be an unload week's
+    reference: its planned training load (_training, the FTP test left out)
+    under half its budget -- a week of one short ride and the test, or a
+    stub the rider mostly skipped. Judged against it, an unload week of
+    three rides at the 30-min floor read heavier than its block (three-day/1h
+    extend@9, the evaluation of 3793952c). One rule for the planner's unload
+    pass and this auditor."""
+    if today is None or not (w.start < today <= w.end):
+        return False
+    target = float(getattr(w, "tss_target", 0) or 0)
+    load = sum(float(s.tss_estimate or 0) for s in _training(w))
+    return target > 0 and load < 0.5 * target
+
+
 def check_stepback_lightest(weeks, today=None) -> list[Violation]:
     """An unload week is lighter than the load weeks of its block.
 
@@ -757,6 +772,8 @@ def check_stepback_lightest(weeks, today=None) -> list[Violation]:
             continue
         if w.is_stepback and underway:
             block = []
+            continue
+        if thin_week_under_way(w, today):
             continue
         if w.is_stepback:
             # A load week the budget or readiness rested reads light for what

@@ -17267,8 +17267,7 @@
    ],
    "inv": [
     "hard_share:3",
-    "hard_share:5",
-    "stepback_lightest:4"
+    "hard_share:5"
    ]
   },
   "cont/three-day/1h/generate": {
@@ -18554,9 +18553,9 @@
       [
        "2026-10-06",
        "z2",
-       107,
-       66.0,
-       "endurance_steady_62pct_105min.zwo",
+       118,
+       73.0,
+       "z2_steady_61pct_119min.zwo",
        "pending"
       ],
       [
@@ -18605,7 +18604,7 @@
      "2026-10-12",
      "2026-10-18",
      "continuous",
-     302.0,
+     306.0,
      null,
      false,
      [
@@ -19948,9 +19947,9 @@
       [
        "2026-10-06",
        "z2",
-       30,
-       21.0,
-       "sweet_spot_1x2min_83pct_31min.zwo",
+       58,
+       52.0,
+       "recovery_1x10min_95pct_58min.zwo",
        "pending"
       ],
       [
@@ -19964,33 +19963,33 @@
       [
        "2026-10-08",
        "z2",
-       40,
-       37.0,
-       "tempo_6x40s_76pct_41min.zwo",
+       54,
+       36.0,
+       "intervals_steady_65pct_51min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-09",
        "recovery",
-       30,
-       8.0,
-       "recovery_steady_37pct_30min.zwo",
+       49,
+       26.0,
+       "recovery_1x1min_90pct_49min.zwo",
        "pending"
       ],
       [
        "2026-10-10",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-11",
        "z2",
-       30,
-       21.0,
-       "sweet_spot_1x2min_83pct_31min.zwo",
+       60,
+       37.0,
+       "intervals_steady_61pct_60min.zwo",
        "pending"
       ]
      ]
@@ -54358,25 +54357,25 @@
       [
        "2026-10-06",
        "z2",
-       30,
-       21.0,
-       "sweet_spot_1x2min_83pct_31min.zwo",
+       57,
+       51.0,
+       "recovery_1x10min_95pct_58min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "recovery",
-       45,
-       17.0,
-       "recovery_steady_50pct_45min_v6.zwo",
+       50,
+       27.0,
+       "recovery_1x90s_90pct_50min.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "z2",
-       30,
-       20.0,
-       "sweet_spot_2x3min-3min_90pct_29min.zwo",
+       60,
+       40.0,
+       "intervals_steady_65pct_51min_v2.zwo",
        "pending"
       ],
       [
@@ -54390,9 +54389,9 @@
       [
        "2026-10-10",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       59,
+       34.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [

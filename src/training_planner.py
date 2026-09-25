@@ -10477,11 +10477,21 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
 
 
 def _rode_on(rides, day: date) -> bool:
-    """Is there a ride dated ``day`` (each ride once, cycling only)?"""
+    """Is there a ride dated ``day`` (each ride once, cycling only)? A record
+    with neither a sport nor any load is not one: Strava's blank husk of a
+    ride still syncing read as "rode today" (the evaluation of f59ccdee)."""
     iso = day.isoformat()
-    return bool(rides_once([a for a in rides or [] if isinstance(a, dict)
-                            and str(a.get("date") or a.get("start_date_local")
-                                    or a.get("started_at") or "")[:10] == iso]))
+
+    def real(a):
+        try:
+            load = float(a.get("tss") or a.get("icu_training_load") or 0)
+        except (TypeError, ValueError):
+            load = 0.0
+        return load > 0 or bool((a.get("sport") or a.get("type") or "").strip())
+    return any(real(a) for a in rides_once(
+        [a for a in rides or [] if isinstance(a, dict)
+         and str(a.get("date") or a.get("start_date_local")
+                 or a.get("started_at") or "")[:10] == iso]))
 
 
 def _ahead_from(today: date, rides) -> date:

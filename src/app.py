@@ -8936,9 +8936,11 @@ def api_weekly_plan(week_offset: int = Query(0)):
     current_ctl = _planning_ctl()
     plan = _read_stored_plan()
     # The rides, so a week whose budget they already spent says so (9.6, the
-    # evaluation of a73647b3, S3): the same records /api/week-summary reads.
+    # evaluation of a73647b3, S3): the ride archive, which holds any week the
+    # view is asked for -- /api/activities' fallback holds 7 days, and last
+    # week's badge read "other" (the evaluation of f59ccdee).
     try:
-        rides = api_activities()
+        rides = _load_all_rides_safe()
     except Exception:  # noqa: BLE001 -- the view stands without them
         rides = None
     result = _stored_week_view(plan, week_offset, rides=rides).as_weekly_plan()

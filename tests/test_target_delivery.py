@@ -966,3 +966,50 @@ console.log('OK');
 """
     res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0 and "OK" in res.stdout, res.stderr + res.stdout
+
+
+# ── Minor (evaluation of f59ccdee) ───────────────────────────────────────
+
+def test_a_blank_husk_dated_today_is_not_a_ride():
+    """Strava's blank husk (no sport, no TSS) dated today read as "rode
+    today": today's pending session left the load ahead and the week's
+    remainder was measured from tomorrow."""
+    t = _dt.date(2026, 9, 24)
+    assert not tp._rode_on([{"date": t.isoformat(), "sport": "", "tss": None}], t)
+    assert not tp._rode_on([{"date": t.isoformat()}], t)
+    assert tp._rode_on([{"date": t.isoformat(), "sport": "Ride", "tss": 0}], t)
+    assert tp._rode_on([{"date": t.isoformat(), "tss": 80.0}], t)
+    assert not tp._rode_on([{"date": t.isoformat(), "sport": "Run", "tss": 80.0}], t)
+
+
+def test_the_badge_reads_the_weeks_own_rides(tmp_path, monkeypatch):
+    """/api/weekly-plan read the rides from /api/activities, whose fallback
+    holds 7 days: last week's badge read "other" though its rides spent the
+    budget. It reads the ride archive, which holds the week."""
+    import json as _json
+    import app as app_module
+    import cache
+    mon = _dt.date(2026, 9, 21)
+    clock.freeze(_dt.date(2026, 9, 30))
+    ss = [{"day": (mon + _dt.timedelta(days=i)).isoformat(), "session_type": "z2",
+           "duration_min": 90, "tss_estimate": 100.0, "zwo_file": "", "status": "done"}
+          for i in range(4)] + [{"day": (mon + _dt.timedelta(days=4)).isoformat(),
+                                 "session_type": "rest", "duration_min": 0, "tss_estimate": 0,
+                                 "rest_reason": "budget"}]
+    plan = {"goal": {"type": "continuous", "hours_per_week": 15.0},
+            "weeks": [{"week_num": 1, "start": mon.isoformat(),
+                       "end": (mon + _dt.timedelta(days=6)).isoformat(), "phase": "continuous",
+                       "tss_target": 479.0, "is_stepback": False, "sessions": ss}]}
+    (tmp_path / "current_plan.json").write_text(_json.dumps(plan))
+    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "get_today_metrics", lambda: {})
+    monkeypatch.setattr(app_module, "fetch_wellness", lambda *a, **k: [])
+    archive = [{"started_at": (mon + _dt.timedelta(days=i)).isoformat() + "T10:00:00",
+                "sport": "Ride", "tss": 125.0, "ride_id": f"r{i}"} for i in range(4)]
+    monkeypatch.setattr(app_module, "_load_all_rides_safe", lambda *a, **k: archive)
+    monkeypatch.setattr(app_module, "api_activities", lambda: [])   # the 7-day list
+    cache.clear_cache()
+    got = app_module.api_weekly_plan(week_offset=-1)
+    assert got["short_of_budget"] and got["short_of_budget"]["reason"] == "ridden", got["short_of_budget"]
+    assert got["short_of_budget"]["ridden"] == 500.0
+

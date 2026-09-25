@@ -10477,16 +10477,16 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.zwo_name = ""
 
 
-def _ride_record() -> "list | None":
+def _ride_record() -> list:
     """The rider's rides, for the load carried and the week under way: the
     one reader, ride_storage.ride_record (the ride archive). No caller hands
     the planner a rides list for these facts any more -- the daily sync's
     db.query_activities (14 days, "date" rows) and the weekly recalc's none
     read the rider's load two ways (the coordinator's review of a0739673).
-    None when the record holds nothing: the week under way's sessions
-    before today that were not missed stand in (_row_net), as they did."""
+    An empty record is nothing ridden: the plan's sessions before today no
+    longer stand in for rides no caller handed over."""
     import ride_storage as _rs
-    return _rs.ride_record() or None
+    return _rs.ride_record()
 
 
 def _rode_on(rides, day: date) -> bool:

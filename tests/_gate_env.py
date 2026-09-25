@@ -245,10 +245,18 @@ def _refit(days):
         t = _day(days)
         wk = copy.deepcopy(base)
         miss_a_hard_day(wk, t)
-        record(None)
+        # the rider rode the week under way as planned up to today, missed
+        # day apart -- what the plan's sessions stood in for when refit was
+        # handed no rides; the planner now reads the load from the record,
+        # and so does the auditor
+        mon = t - _dt.timedelta(days=t.weekday())
+        rs = record([{"date": s.day.isoformat(), "tss": float(s.tss_estimate or 0)}
+                     for w_ in wk for s in w_.sessions
+                     if mon <= s.day < t and s.session_type != "rest"
+                     and getattr(s, "status", "pending") not in ("missed", "dismissed")])
         at(t)
         return tp.refit_remaining_week(r.goal(), wk, t, seed_salt=r.salt,
-                                       athlete=ATHLETE)[0], None, t
+                                       athlete=ATHLETE)[0], rs, t
     return drive
 
 

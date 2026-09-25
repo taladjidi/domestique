@@ -9069,7 +9069,7 @@ def generate_plan(
                 # days at the peak→taper seam, D3 training after race day).
                 _clip_week_to_phase(pw, phase, cursor)
                 weeks.append(pw)
-                _fill_easy_to_budget(pw, goal, library, max(0.0, pw.tss_target - _done_tss))
+                _fill_easy_to_budget(pw, goal, library, rides=activities)
                 _ramp.follow(pw, _budget)
                 prev_week_sessions = pw.sessions  # feed into next plan_week for 48h gap
                 cursor = _next_week_cursor(cursor, phase)
@@ -10470,6 +10470,53 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.zwo_name = ""
 
 
+def _rode_on(rides, day: date) -> bool:
+    """Is there a ride dated ``day`` (each ride once, cycling only)?"""
+    iso = day.isoformat()
+    return bool(rides_once([a for a in rides or [] if isinstance(a, dict)
+                            and str(a.get("date") or a.get("start_date_local")
+                                    or a.get("started_at") or "")[:10] == iso]))
+
+
+def _ahead_from(today: date, rides) -> date:
+    """The first day still to plan: today, or tomorrow once a ride is dated
+    today -- that ride is the day's work, and today's pending session is no
+    longer load ahead (the owner's 2026-09-24 regenerate: a 280-TSS ride
+    today was invisible and today's 68-TSS session still counted, so Friday
+    was filled from 55 to 180 min in a week already at 1.46 x)."""
+    return today + timedelta(days=1) if _rode_on(rides, today) else today
+
+
+def _row_net(wk, today: date, rides=None, matched=(), weeks=None) -> "float | None":
+    """D2 for the row under way: what is left of its budget,
+    min(target - ridden in the row, gross - ridden since Monday), gross being
+    a stub row's target over its span. Ridden = the rides through TODAY
+    (a ride done today is ridden); without rides, the sessions before today
+    of ``weeks`` that were not missed or dismissed. None for a row not under
+    way, or one starting on a Monday that is today with nothing ridden yet.
+    The one reading of the week under way: the final step's budget, and the
+    fill in every builder and in the final step."""
+    monday = today - timedelta(days=today.weekday())
+    if not (wk.start <= today <= wk.end):
+        return None
+    if wk.start == today == monday and not _rode_on(rides, today):
+        return None
+    target = float(wk.tss_target or 0)
+    if target <= 0:
+        return None                 # a row without a budget stays unbounded
+
+    def ridden(lo):
+        if rides is not None:
+            return _completed_tss_in(rides, lo, today, matched)
+        return sum(float(s.tss_estimate or 0) for w in weeks or [wk] for s in w.sessions
+                   if s is not None and lo <= s.day < today and s.session_type != "rest"
+                   and not getattr(s, "is_race", False)
+                   and getattr(s, "status", "pending") not in ("missed", "dismissed"))
+    span = (wk.end - wk.start).days + 1
+    gross = target * 7 / span if 0 < span < 7 else target
+    return max(0.0, min(target - ridden(wk.start), gross - ridden(monday)))
+
+
 def _hours_room(w, goal, today: date) -> "float | None":
     """The minutes the rider's weekly hours leave the row from ``today`` on:
     ``hours_per_week`` over the row's days (a stub row gets its days' share),
@@ -10560,7 +10607,8 @@ def _race_in_week(w, goal) -> bool:
 
 
 def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
-                         calendar: "dict | None" = None) -> None:
+                         calendar: "dict | None" = None, rides=None, matched=(),
+                         weeks: "list | None" = None) -> None:
     """Contract 9.1/9.2 (D2 made real): a load week's easy rides grow until
     the week carries its budget, before the ramp reads the week.
 
@@ -10578,20 +10626,29 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
     nearest the old file's TSS an hour, never carrying less than the shorter
     ride did), and carries that file's load (6.8). Unload, taper and race weeks are sized
     against their block and are left alone.
+
+    The row under way is held to what is left of it (_row_net, D2: ``rides``
+    through today, else the sessions of ``weeks`` before today), and its
+    load is the days still to plan (_ahead_from: tomorrow once a ride is
+    dated today). ``target`` caps the budget further (a TrainingWeek row's
+    net).
     """
-    ahead = target is not None and pw.start < clock.today() <= pw.end
-    target = float(pw.tss_target or 0) if target is None else float(target)
+    today = clock.today()
+    budget = float(pw.tss_target or 0)
+    left_of_row = _row_net(pw, today, rides, matched, weeks)
+    if left_of_row is not None:
+        budget = min(budget, left_of_row)
+    if target is not None:
+        budget = min(budget, float(target))
+    target = budget
     if (target <= 0 or not library or _is_unload_week(pw)
             or str(getattr(pw, "phase", "")).lower() == "taper" or _race_in_week(pw, goal)):
         return
-    today = clock.today()
-    # A target for the week under way is what is left of it (net, D2): the
-    # load it is held against is then the days from today, not the row's
-    # days behind the rider as well.
+    first = _ahead_from(today, rides)
     load = sum(float(s.tss_estimate or 0) for s in pw.sessions
                if s is not None and s.session_type != "rest" and not getattr(s, "is_race", False)
-               and (not ahead or (s.day >= today and getattr(s, "status", "pending")
-                                  not in plan_invariants.NOT_RIDDEN)))
+               and s.day >= first
+               and getattr(s, "status", "pending") not in plan_invariants.NOT_RIDDEN)
     short = target - load
     # Within the volume pass's tolerance the week holds its budget already:
     # a few minutes more would only swap files.
@@ -10601,7 +10658,7 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
     cal = calendar if calendar is not None else (getattr(goal, "_calendar", None) or {})
     cand = []
     for s in pw.sessions:
-        if (not _pending_ahead(s, today) or _rider_owned(s) or getattr(s, "adapted", False)
+        if (not _pending_ahead(s, first) or _rider_owned(s) or getattr(s, "adapted", False)
                 or getattr(s, "is_opener", False) or s.session_type not in _FILL_TYPES
                 or not s.duration_min):
             continue
@@ -14071,7 +14128,7 @@ def regenerate_from_today(
             # FC1-CLIP (v2.5.0): never spill past the phase end (D2/D3).
             _clip_week_to_phase(pw, phase, cursor)
             new_weeks.append(pw)
-            _fill_easy_to_budget(pw, adjusted_goal, library)
+            _fill_easy_to_budget(pw, adjusted_goal, library, rides=activities)
             _ramp.follow(pw, _budget)
             prev_week_sessions = pw.sessions  # feed into next plan_week (PL2)
             cursor = _next_week_cursor(cursor, phase)
@@ -14171,7 +14228,7 @@ def _keep_elapsed_days(all_weeks: list, old_plan_weeks: list, today: date) -> No
     row's start moves back with it. One row per calendar week either way -- a
     second, stub row would double-count in every by-date reader.
 
-    ``tss_target`` grows by what those days asked for, because every consumer
+    ``tss_target`` grows to the ramp's budget for the row's new span, because every consumer
     that prorates a week (plan_invariants.budget: ``target - behind``) derives
     the remainder by SUBTRACTING the days behind today. Leaving the target at
     the remainder would make budget() subtract them twice, and a week whose
@@ -14203,9 +14260,19 @@ def _keep_elapsed_days(all_weeks: list, old_plan_weeks: list, today: date) -> No
     elapsed = [s for s in elapsed if s.day not in kept]
     new_cur.sessions = sorted(elapsed + list(new_cur.sessions),
                               key=lambda s: (getattr(s, "day", None) or today))
+    stub_days = (new_cur.end - new_cur.start).days + 1
     new_cur.start = old_cur.start
-    new_cur.tss_target = round(float(new_cur.tss_target or 0)
-                               + sum(float(s.tss_estimate or 0) for s in elapsed))
+    # The widened row's budget is the ramp's, over the days it now spans: the
+    # stub carried its days' share of the calendar week, so the row takes the
+    # same week's share for its new span -- and every reader then subtracts
+    # what was ridden behind today (plan_invariants.budget, _row_net: D2).
+    # It grew by what the old plan had asked on those days, missed ones
+    # included: the owner's 2026-09-24 regenerate made the week 670 where the
+    # ramp budgeted 532 (304 over four days), a missed Tuesday's 135 came
+    # back as room, and Friday was filled from 55 to 180 min.
+    span = (new_cur.end - new_cur.start).days + 1
+    if stub_days > 0:
+        new_cur.tss_target = round(float(new_cur.tss_target or 0) * span / stub_days)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -14611,29 +14678,15 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     # gross being a stub row's target over its span.
     _restore_record(weeks, old_weeks, today)
     ahead = [w for w in weeks if w.end >= today]
-    monday = today - timedelta(days=today.weekday())
 
     matched = {str(m.get("activity_id")) for w in weeks for s in w.sessions
                if s is not None for m in (getattr(s, "completion_matches", None) or [])
                if isinstance(m, dict) and m.get("activity_id")}
 
-    def ridden(lo):
-        if rides is not None:
-            return _completed_tss_in(rides, lo, today - timedelta(days=1), matched)
-        return sum(float(s.tss_estimate or 0) for w in weeks for s in w.sessions
-                   if s is not None and lo <= s.day < today and s.session_type != "rest"
-                   and not getattr(s, "is_race", False)
-                   and getattr(s, "status", "pending") not in ("missed", "dismissed"))
+    first = _ahead_from(today, rides)
 
     def net(wk):
-        if not (wk.start <= today <= wk.end) or wk.start == today == monday:
-            return None
-        target = float(wk.tss_target or 0)
-        if target <= 0:
-            return None             # a row without a budget stays unbounded
-        span = (wk.end - wk.start).days + 1
-        gross = target * 7 / span if 0 < span < 7 else target
-        return max(0.0, min(target - ridden(wk.start), gross - ridden(monday)))
+        return _row_net(wk, today, rides, matched, weeks)
 
     # 9.2 -- the 1.3 x guard (Gabbett 2016) on the weeks as they are planned.
     # The ramp budgets each row within ACWR_CEILING x the load it counted
@@ -14777,15 +14830,19 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         # this entry point built, held to what is left of the week under
         # way, first in every round.
         _guard()
-        for w in (x for x in ahead if id(x) in fresh):
+        # Not the row under way: its builder already held it to what is
+        # left (the stub's share less today's ride, D2), and once the record
+        # step widened it back to Monday the stub's share is no longer
+        # visible here -- a top-up to the whole week's remainder filled the
+        # owner's Friday on 2026-09-24 (M1).
+        for w in (x for x in ahead if id(x) in fresh and x.start >= today):
             # The week owner's net, where it wrote one (TrainingWeek), bounds
             # the fill: it reads a stub row's target as the gross.
-            _t = net(w)
-            if getattr(w, "net_tss_target", None) is not None:
-                _t = min(float(w.tss_target or 0) if _t is None else _t, float(w.net_tss_target))
-            _fill_easy_to_budget(w, goal, lib, _t, calendar=cal)
+            _t = getattr(w, "net_tss_target", None)
+            _fill_easy_to_budget(w, goal, lib, _t, calendar=cal, rides=rides,
+                                 matched=matched, weeks=weeks)
         _guard()
-        _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
+        _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=first,
                                        normal_week=normal_week, library=lib)
         _enforce_weekly_hours(ahead, goal, today, lib)
         # An unload week lighter than its block (Issurin's 3:1), judged on
@@ -15272,7 +15329,7 @@ def recalculate_plan(
             # FC1-CLIP (v2.5.0): never spill past the phase end (D2/D3).
             _clip_week_to_phase(pw, phase, cursor)
             new_weeks.append(pw)
-            _fill_easy_to_budget(pw, adjusted_goal, library)
+            _fill_easy_to_budget(pw, adjusted_goal, library, rides=recent_activities)
             _ramp.follow(pw, _budget)
             prev_week_sessions = pw.sessions  # feed into next plan_week (PL2)
             cursor = _next_week_cursor(cursor, phase)
@@ -15603,7 +15660,7 @@ def extend_continuous_plan(
 
         _clip_week_to_phase(pw, phase, cursor)
         new_weeks.append(pw)
-        _fill_easy_to_budget(pw, goal, library)
+        _fill_easy_to_budget(pw, goal, library, rides=recent_activities)
         _ramp.follow(pw, _budget)
         prev_week_sessions = pw.sessions
         cursor = _next_week_cursor(cursor, phase)

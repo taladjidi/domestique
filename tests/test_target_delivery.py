@@ -561,3 +561,76 @@ def test_9_1_the_week_under_way_is_filled_against_what_is_left():
     ahead = week_load(w, clock.today())
     tp._fill_easy_to_budget(w, g, lib, target=ahead + 40)
     assert ahead + 30 <= week_load(w, clock.today()) <= ahead + 50
+
+
+# ── M1 (evaluation of a73647b3): a ride done today is ridden ─────────────
+
+def _thursday_regenerate(kind, today_tss, monkeypatch):
+    """The owner's plan regenerated on Thursday 09-24 of its second week:
+    Monday ridden, Tuesday missed, Wednesday ridden, and a ride done today
+    before the regenerate (the owner's 2026-09-24: 280 TSS in the evening).
+    Returns (the ramp's budget for the rebuilt stub row from today, its
+    span, the load planned after today, ridden today, ridden since Monday)."""
+    t = _dt.date(2026, 9, 24)
+    base = F.gen(F.owner(kind))
+    for w in base:
+        for s in w.sessions:
+            if s.day == t - _dt.timedelta(days=2) and s.session_type != "rest":
+                s.status = "missed"
+    # the week before ridden as planned (no absence, so no recovery ramp)
+    rides = F.ride_days(t - _dt.timedelta(days=10), t - _dt.timedelta(days=4))
+    rides += [{"date": (t - _dt.timedelta(days=3)).isoformat(), "tss": 100.0},
+              {"date": (t - _dt.timedelta(days=1)).isoformat(), "tss": 40.0}]
+    if today_tss:
+        rides.append({"date": t.isoformat(), "tss": float(today_tss)})
+    stub = []
+    follow = tp.LoadRamp.follow
+
+    def spy(self, pw, budget):
+        if pw.start == t:
+            stub.append((budget, (pw.end - pw.start).days + 1))
+        return follow(self, pw, budget)
+    monkeypatch.setattr(tp.LoadRamp, "follow", spy)
+    filled, fill = [], tp._fill_easy_to_budget
+
+    def fill_spy(pw, *a, **k):
+        if pw.start == t:                        # the builder stub row
+            left = (tp._row_net(pw, t, k.get("rides")) if hasattr(tp, "_row_net")
+                    else pw.tss_target)          # d190fa82..a73647b3: no net here
+            filled.append(left)
+        return fill(pw, *a, **k)
+    monkeypatch.setattr(tp, "_fill_easy_to_budget", fill_spy)
+    clock.freeze(t)
+    g = F.owner(kind)
+    g.plan_weeks = 0
+    weeks = tp.regenerate_from_today(g, copy.deepcopy(base), 55, activities=rides,
+                                     athlete=F.ATH, recent_weekly_tss=380)[1]
+    monkeypatch.undo()
+    wk = next(w for w in weeks if w.start <= t <= w.end)
+    after = sum(float(s.tss_estimate or 0) for s in wk.sessions
+                if s.day > t and s.session_type != "rest" and not s.is_race)
+    budget, span = stub[0]
+    since_monday = sum(r["tss"] for r in rides if r["date"] >= (t - _dt.timedelta(days=3)).isoformat())
+    return budget, span, after, float(today_tss), since_monday, filled, wk
+
+
+@pytest.mark.parametrize("kind", ["continuous", "event"])
+def test_m1_a_regenerate_counts_the_ride_done_today(kind, monkeypatch):
+    """D2 for the week under way: after today it may carry the rebuilt row's
+    budget less what was ridden in it, and the week's gross less what was
+    ridden since Monday -- today's ride included; a missed day's ask is not
+    budget to hand out again (D6). On a73647b3 the ride today was invisible
+    to the builder's stub row and to the final step, and the merged row's
+    target carried the missed Tuesday: the owner's Friday grew 55 -> 180 min."""
+    budget, span, after, today, since_monday, filled, wk = _thursday_regenerate(kind, 100, monkeypatch)
+    # ``budget`` is the ramp's week; the stub row carries its days' share
+    left = max(0.0, min(budget * span / 7 - today, budget - since_monday))
+    # one short spin may stay when the rides alone spent the week (6.7)
+    assert after <= max(left * 1.05 + 1, 60), (budget, span, since_monday, after)
+    # ...and the builder's fill (9.2: the load the ramp follows) holds the
+    # stub row to what is left once today's ride is counted
+    assert filled and all(x is not None and x <= left + 1 for x in filled), (left, filled)
+    # ...and the row, widened back to Monday by the record step, carries the
+    # ramp's budget for the week -- not the old plan's asks, missed ones
+    # included, on top of the stub's (the owner's week read 670 for 532)
+    assert (wk.end - wk.start).days == 6 and abs(wk.tss_target - budget) <= 1, (wk.tss_target, budget)

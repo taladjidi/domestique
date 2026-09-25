@@ -10476,6 +10476,24 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.zwo_name = ""
 
 
+def _ride_record(rides=None) -> "list | None":
+    """The rides the planner reads the rider's load from: the ride archive
+    (ride_storage.load_all_rides -- ICU records and FIT imports, the same
+    records athlete_weekly_load reads), whatever the caller passed. The
+    caller's list stands only where there is no archive at all (a fresh
+    install, the hermetic suites). One reader for every entry point: the
+    weekly recalc and refit handed the final step no rides, and it read the
+    owner's week under way off the plan -- 299 planned where 503 was ridden --
+    and lowered the next week with a false "recent load 340" (the evaluation
+    of 3793952c, MF-1)."""
+    try:
+        import ride_storage as _rs
+        archive = _rs.load_all_rides()
+    except Exception:  # noqa: BLE001 -- no profile, no archive: the caller's
+        archive = []
+    return archive if archive else rides
+
+
 def _rode_on(rides, day: date) -> bool:
     """Is there a ride dated ``day`` (each ride once, cycling only)? A record
     with neither a sport nor any load is not one: Strava's blank husk of a
@@ -14620,6 +14638,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     today = clock.today()
     if not weeks:
         return set()
+    rides = _ride_record(rides)
     if normal_week is None:
         # 9.9: the load the rider really carries (the ride archive, each ride
         # once, cycling only), for the syncs that are not handed it.
@@ -14753,10 +14772,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         # ride_storage.chronic_weekly_tss); without an archive, today's.
         carried = float(normal_week)
         cur = next((w for w in ahead if w.start < today <= w.end), None)
-        if cur is not None:
+        if cur is not None and rides:
             import ride_storage as _rs
             try:
-                eve = _rs.chronic_weekly_tss(today=cur.start - timedelta(days=1))
+                eve = _rs.chronic_weekly_tss(rides, today=cur.start - timedelta(days=1))
             except Exception:  # noqa: BLE001 -- the archive is a best reading
                 eve = None
             if eve:
@@ -14805,7 +14824,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
             # when the rides are here: the owner's 09-21 week planned 299
             # on those days (a missed Tuesday) where 503 was ridden, and read
             # from the plan the guard lowered 09-28 from 469 to 442.
-            if w is cur and rides is not None:
+            if w is cur:
+                # the days behind are the rides (none read: none ridden --
+                # never the plan's sessions, which a missed day overstates and
+                # an unplanned ride understates)
                 load = (_completed_tss_in(rides, w.start, first - timedelta(days=1), matched)
                         + sum(float(x.tss_estimate or 0) for x in ridden_ if x.day >= first))
             else:

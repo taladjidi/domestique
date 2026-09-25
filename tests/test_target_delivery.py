@@ -1035,3 +1035,56 @@ def test_9_9_the_week_under_way_is_read_from_its_rides(monkeypatch):
     tp.finalize_weeks(weeks, g, rides=rides)
     w = next(w for w in weeks if w.start == nxt)
     assert w.tss_target == built and not w.guard_lowered, (built, w.tss_target, w.guard_lowered)
+
+
+# ── MF-1 (evaluation of 3793952c): one reader of the rider's load ────────
+
+def _owner_archive():
+    """The owner's week of 09-21 as the ride archive holds it (ICU records):
+    Mon 205, Tue missed, Wed 18, Thu 280 -- and the weeks before at 380."""
+    out = []
+    d = _dt.date(2026, 8, 17)
+    while d < _dt.date(2026, 9, 21):
+        if d.weekday() != 4:
+            out.append({"ride_id": f"icu_a{d.toordinal()}", "source": "icu", "sport": "Ride",
+                        "started_at": d.isoformat() + "T10:00:00", "tss": 380 / 6})
+        d += _dt.timedelta(days=1)
+    for day, tss in (("2026-09-21", 205.0), ("2026-09-23", 18.0), ("2026-09-24", 280.0)):
+        out.append({"ride_id": f"icu_{day}", "source": "icu", "sport": "Ride",
+                    "started_at": day + "T10:00:00", "tss": tss})
+    return out
+
+
+def test_mf1_the_weekly_recalc_reads_the_rides_not_the_plan(tmp_path, monkeypatch):
+    """POST /api/plan/auto-recalc on the owner's shape, 09-26: the weekly
+    recalc (continuous -> extend) handed the final step no rides, so the
+    guard read the week under way off the plan (a missed Tuesday: 299 where
+    503 was ridden) and lowered 09-28 from its budget with a false "recent
+    load 340". The planner reads the ride archive itself, whatever the
+    caller passes."""
+    import json as _json
+    import app as A
+    import ride_storage
+    from fastapi.testclient import TestClient
+    g, weeks = _owner_weeks()
+    for w in weeks:
+        for s in w.sessions:
+            if _dt.date(2026, 9, 21) <= s.day < _dt.date(2026, 9, 25) and s.session_type != "rest":
+                s.status = "missed" if s.day == _dt.date(2026, 9, 22) else "done"
+    built = {w.start.isoformat(): w.tss_target for w in weeks}
+    plan = stored(weeks, g)
+    plan.update(generated="2026-09-14T08:00:00", recalc_date="2026-09-14T08:00:00")
+    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    (tmp_path / "current_plan.json").write_text(_json.dumps(plan))
+    monkeypatch.setattr(ride_storage, "load_all_rides", _owner_archive)
+    monkeypatch.setattr(A, "get_today_metrics", lambda: {})
+    monkeypatch.setattr(A, "_planning_ctl", lambda *a, **k: 55.0)
+    monkeypatch.setattr(A, "fetch_wellness", lambda *a, **k: [])
+    clock.freeze(_dt.date(2026, 9, 26))
+    A.clear_cache()
+    r = TestClient(A.app, base_url="http://127.0.0.1").post("/api/plan/auto-recalc")
+    assert r.status_code == 200, r.text[:300]
+    got = {w["start"]: w for w in _json.loads((tmp_path / "current_plan.json").read_text())["weeks"]}
+    w = got["2026-09-28"]
+    assert w["tss_target"] == built["2026-09-28"] and not w.get("guard_lowered"), \
+        (r.json().get("action"), built["2026-09-28"], w["tss_target"], w.get("guard_lowered"))

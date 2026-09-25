@@ -655,6 +655,14 @@ def _weekend_away(gate_seed_unused=None):
     return g, base, t, away
 
 
+# The weekend rider carried 250 on Monday 09-14 and rides no weekday: on
+# Thursday the archive reads that load three days decayed. The auditor
+# follows the plan from the Monday (the evaluator's "follow" measure), so
+# the week under way is counted once.
+T0 = _dt.date(2026, 9, 14)
+LOAD_AT_T = round(pi.chronic_after(250, 0, 3), 1)
+
+
 def test_9_9_a_sync_brings_the_weeks_after_a_lighter_stretch_down(gate_seed):
     """weekend-event8 (weekends only, carrying 250 a week), planned on 09-14;
     at the 09-17 sync the rider marks that weekend away. The week after asked
@@ -665,8 +673,8 @@ def test_9_9_a_sync_brings_the_weeks_after_a_lighter_stretch_down(gate_seed):
     g, base, t, away = _weekend_away()
     before = {w.start: w.tss_target for w in base}
     weeks = tp.reforecast(g(), copy.deepcopy(base), recent_activities=[],
-                          availability_overrides=away, recent_weekly_tss=250)[0]
-    assert not pi.check_acwr(weeks, 250, today=t)
+                          availability_overrides=away, recent_weekly_tss=LOAD_AT_T)[0]
+    assert not pi.check_acwr(weeks, 250, today=T0)
     assert all(w.tss_target <= before[w.start] for w in weeks if w.start in before)
 
 
@@ -675,8 +683,8 @@ def test_9_9_every_sync_holds_the_guard(gate_seed):
     g, base, t, away = _weekend_away()
     plan = stored(copy.deepcopy(base), g())
     tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away,
-                       recent_weekly_tss=250)
-    assert not pi.check_acwr(read_stored(plan), 250, today=t)
+                       recent_weekly_tss=LOAD_AT_T)
+    assert not pi.check_acwr(read_stored(plan), 250, today=T0)
 
 
 @pytest.mark.parametrize("kind", ["event", "continuous"])
@@ -697,10 +705,10 @@ def test_9_9_a_sync_reads_the_riders_load_from_the_ride_archive(gate_seed, monke
     (ride_storage.chronic_weekly_tss, each ride once, cycling only)."""
     import ride_storage
     g, base, t, away = _weekend_away()
-    monkeypatch.setattr(ride_storage, "chronic_weekly_tss", lambda *a, **k: 250.0)
+    monkeypatch.setattr(ride_storage, "chronic_weekly_tss", lambda *a, **k: LOAD_AT_T)
     plan = stored(copy.deepcopy(base), g())
     tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away)
-    assert not pi.check_acwr(read_stored(plan), 250, today=t)
+    assert not pi.check_acwr(read_stored(plan), 250, today=T0)
 
 
 # ── 9.10 Unload weeks carry their own budget ─────────────────────────────
@@ -844,3 +852,63 @@ def test_mf_b_an_unload_week_is_lighter_than_the_build_under_way():
     unload = sum(s.tss_estimate for s in weeks[1].sessions if s.session_type != "rest")
     assert unload <= 0.9 * 306 + 1, unload
     assert not pi_.check_stepback_lightest(weeks, _dt.date(2026, 10, 2))
+
+
+# ── 9.9 amended: the guard tracks, it does not ratchet ───────────────────
+
+def _owner_weeks():
+    g = F.owner("continuous")
+    return g, F.gen(g)
+
+
+def test_9_9_a_lowered_week_climbs_back_to_its_built_budget():
+    """A light stretch lowers the weeks ahead and records it (9.11); when the
+    load returns the next sync restores them, never above the budget they
+    were built with, and the record goes."""
+    g, weeks = _owner_weeks()
+    t = _dt.date(2026, 9, 21)
+    clock.freeze(t)
+    built = {w.start: w.tss_target for w in weeks}
+    tp.finalize_weeks(weeks, g, normal_week=200)
+    low = [w for w in weeks if w.start >= t and w.tss_target < built[w.start]]
+    assert low and all(w.guard_lowered and w.guard_lowered["from"] == built[w.start]
+                       and w.guard_lowered["to"] == w.tss_target
+                       and w.guard_lowered["when"] == "2026-09-21"
+                       and w.guard_lowered["carried"] >= 200 for w in low)
+    tp.finalize_weeks(weeks, g, normal_week=900)
+    assert all(w.tss_target == built[w.start] and not w.guard_lowered
+               for w in weeks if w.start >= t), [(w.start, w.tss_target, built[w.start]) for w in weeks]
+
+
+def test_9_9_the_week_under_way_is_counted_once(monkeypatch):
+    """A rider who rides the plan exactly, synced on Monday and again on
+    Thursday: the budgets are the same both times. The guard read the
+    Thursday load -- which already holds Mon-Wed -- as the load carried into
+    the week under way, and then counted Mon-Wed again in the week's own
+    load: a compliant rider was held 6-11 % low for the whole horizon (the
+    evaluation of f59ccdee). The load carried into a week under way is the
+    archive's reading on its eve."""
+    import ride_storage
+    g, weeks = _owner_weeks()
+    mon = _dt.date(2026, 9, 28)
+    thu = mon + _dt.timedelta(days=3)
+    wk = next(w for w in weeks if w.start == mon)
+    per_day = {s.day: float(s.tss_estimate or 0) for s in wk.sessions if s.session_type != "rest"}
+    load_thu = 300.0
+    for i in range(3):
+        load_thu = pi.chronic_after(load_thu, 7 * per_day.get(mon + _dt.timedelta(days=i), 0.0), 1)
+    # the archive: 300 on the eve of 09-28, then the plan ridden exactly
+    monkeypatch.setattr(ride_storage, "chronic_weekly_tss",
+                        lambda rides=None, today=None: 300.0 if today <= mon else load_thu)
+    a, b = copy.deepcopy(weeks), copy.deepcopy(weeks)
+    clock.freeze(mon)
+    tp.finalize_weeks(a, g)
+    rides = [{"date": d.isoformat(), "tss": v} for d, v in per_day.items() if d < thu]
+    for w in b:
+        for s in w.sessions:
+            if s.day < thu and s.session_type != "rest":
+                s.status = "done"
+    clock.freeze(thu)
+    tp.finalize_weeks(b, g, rides=rides)
+    assert [(w.start, w.tss_target) for w in a if w.start >= mon] == \
+           [(w.start, w.tss_target) for w in b if w.start >= mon]

@@ -2213,6 +2213,12 @@ class PlannedWeek:
     # or None for the default weekly-mixed plan. Set ONLY when
     # goal.block_periodization is on; None keeps the block plug-ins dormant.
     block_focus: "str | None" = None
+    # Contract 9.9/9.11: when the 1.3 x guard holds this week below the
+    # budget it was built with, {"from": that budget, "to": the guarded
+    # budget, "when": the ISO date it last changed, "carried": the load the
+    # guard read}. The guard restores the week to "from" as the load
+    # returns; a rebuild writes the week afresh without it.
+    guard_lowered: "dict | None" = None
 
 
 @dataclass
@@ -13416,6 +13422,9 @@ def _apply_reforecast_to_dict(
             continue
         if w.get("tss_target") != src_pw.tss_target:
             w["tss_target"] = src_pw.tss_target
+        # 9.11: the guard's record travels with the budget it explains
+        if w.get("guard_lowered") != src_pw.guard_lowered:
+            w["guard_lowered"] = src_pw.guard_lowered
         if w.get("hit_per_week") != src_pw.hit_per_week:
             w["hit_per_week"] = src_pw.hit_per_week
         if src_pw.auto_acwr_scaled and not w.get("auto_acwr_scaled"):
@@ -14725,21 +14734,61 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     def _guard():
         if not normal_week or float(normal_week) <= 0:
             return
+        # The load carried INTO the week under way. ``normal_week`` is read
+        # today, and already holds the days of that week behind the rider,
+        # which the week's own load counts again below -- counted twice, a
+        # rider riding the plan exactly was held 6-11 % low for the whole
+        # horizon (the evaluation of f59ccdee). The archive's reading on the
+        # eve of that week is the load it started from (the one reader,
+        # ride_storage.chronic_weekly_tss); without an archive, today's.
         carried = float(normal_week)
+        cur = next((w for w in ahead if w.start < today <= w.end), None)
+        if cur is not None:
+            import ride_storage as _rs
+            try:
+                eve = _rs.chronic_weekly_tss(today=cur.start - timedelta(days=1))
+            except Exception:  # noqa: BLE001 -- the archive is a best reading
+                eve = None
+            if eve:
+                carried = float(eve)
         for w in ahead:
             days = (w.end - w.start).days + 1
-            load = sum(float(x.tss_estimate or 0) for x in w.sessions
-                       if x is not None and x.session_type != "rest"
-                       and getattr(x, "status", "pending") not in plan_invariants.NOT_RIDDEN)
+            ridden_ = [x for x in w.sessions if x is not None and x.session_type != "rest"
+                       and getattr(x, "status", "pending") not in plan_invariants.NOT_RIDDEN]
             if (days >= 4 and (w.tss_target or 0) > 0
                     and str(getattr(w, "phase", "")).lower() != "taper"):
                 race = sum(float(x.tss_estimate or 0) for x in w.sessions
                            if x is not None and getattr(x, "is_race", False))
                 cap = float(round(ACWR_CEILING * carried * days / 7 - race))
-                if cap < w.tss_target:
-                    w.tss_target = max(0.0, cap)
+                rec = getattr(w, "guard_lowered", None)
+                if id(w) in fresh:
+                    # A row this entry point built: the guard's number IS its
+                    # budget as built -- nothing was lowered for the rider to
+                    # see, and a replan would only write the same again.
+                    w.tss_target = max(0.0, min(float(w.tss_target), cap))
+                    w.guard_lowered = None
+                else:
+                    # The budget as built: what the guard lowered it from,
+                    # while its record still describes the week; else its own.
+                    built = (float(rec["from"]) if isinstance(rec, dict) and rec.get("from")
+                             and float(rec.get("to") or -1) == float(w.tss_target)
+                             else float(w.tss_target))
+                    new = max(0.0, min(built, cap))
+                    if new < built:
+                        if not (isinstance(rec, dict) and float(rec.get("to") or -1) == new
+                                and float(rec.get("from") or -1) == built):
+                            w.guard_lowered = {"from": built, "to": new,
+                                               "when": today.isoformat(),
+                                               "carried": round(carried)}
+                        w.tss_target = new
+                    else:
+                        # 9.9 amended: the load came back; the week goes back
+                        # to its budget, never above it.
+                        w.tss_target = built
+                        w.guard_lowered = None
             # ...as the ramp follows a row: its load, capped at its budget
             # (_row_load; the volume pass's tolerance is slack, not load).
+            load = sum(float(x.tss_estimate or 0) for x in ridden_)
             if (w.tss_target or 0) > 0:
                 load = min(load, float(w.tss_target))
             carried = chronic_after(carried, load * 7 / days, days)

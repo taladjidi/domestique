@@ -1090,6 +1090,36 @@ def test_mf1_the_weekly_recalc_reads_the_rides_not_the_plan(tmp_path, monkeypatc
         (r.json().get("action"), built["2026-09-28"], w["tss_target"], w.get("guard_lowered"))
 
 
+def test_mf1_a_sync_carries_the_archives_load_not_its_14_days(monkeypatch):
+    """The daily sync hands the final step db.query_activities: 14 days of
+    rows keyed by "date", no "started_at". Read from that list the 28-day
+    EWMA of the load carried found nothing, fell back to the builder's
+    reading, and the sync and the weekly recalc read the owner's load two
+    ways. The load carried is the archive's, whatever the caller holds; the
+    caller's list reads only the days of the week under way."""
+    import ride_storage
+    g, weeks = _owner_weeks()
+    for w in weeks:
+        for s in w.sessions:
+            if _dt.date(2026, 9, 21) <= s.day < _dt.date(2026, 9, 25) and s.session_type != "rest":
+                s.status = "missed" if s.day == _dt.date(2026, 9, 22) else "done"
+    nxt = _dt.date(2026, 9, 28)
+    built = next(w.tss_target for w in weeks if w.start == nxt)
+    archive = [{"ride_id": f"icu_b{d}", "source": "icu", "sport": "Ride", "tss": 380 / 6,
+                "started_at": _dt.date.fromordinal(d).isoformat() + "T10:00:00"}
+               for d in range(_dt.date(2026, 6, 1).toordinal(), _dt.date(2026, 8, 17).toordinal())
+               if _dt.date.fromordinal(d).weekday() != 4] + _owner_archive()
+    monkeypatch.setattr(ride_storage, "load_all_rides", lambda: archive)
+    db_rows = [{"date": r["started_at"][:10], "tss": r["tss"], "type": "Ride"}
+               for r in archive if r["started_at"][:10] >= "2026-09-12"]
+    clock.freeze(_dt.date(2026, 9, 25))
+    tp.finalize_weeks(weeks, g, rides=db_rows, normal_week=150)
+    w = next(w for w in weeks if w.start == nxt)
+    eve = ride_storage.chronic_weekly_tss(archive, today=_dt.date(2026, 9, 20))
+    assert eve and eve > 350, eve     # the archive settled: ~380 a week carried
+    assert w.tss_target == built and not w.guard_lowered, (built, eve, w.tss_target, w.guard_lowered)
+
+
 def test_mf3_a_monday_sync_reads_the_same_load_as_tuesdays(monkeypatch):
     """On a Monday the week ahead starts today and the guard read today's
     archive: its 7-day window counts the unridden Monday as a zero (Sunday

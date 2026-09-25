@@ -10477,21 +10477,27 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
 
 
 def _ride_record(rides=None) -> "list | None":
-    """The rides the planner reads the rider's load from: the ride archive
-    (ride_storage.load_all_rides -- ICU records and FIT imports, the same
-    records athlete_weekly_load reads), whatever the caller passed. The
-    caller's list stands only where there is no archive at all (a fresh
-    install, the hermetic suites). One reader for every entry point: the
-    weekly recalc and refit handed the final step no rides, and it read the
-    owner's week under way off the plan -- 299 planned where 503 was ridden --
-    and lowered the next week with a false "recent load 340" (the evaluation
-    of 3793952c, MF-1)."""
+    """The rides the planner reads the rider's load from, one function for
+    every entry point: the rides the caller holds, else the ride archive
+    (ride_storage.load_all_rides -- ICU records and FIT imports, the records
+    athlete_weekly_load reads). The weekly recalc and refit handed the final
+    step no rides, and it read the owner's week under way off the plan -- 299
+    planned where 503 was ridden -- and lowered the next week with a false
+    "recent load 340" (the evaluation of 3793952c, MF-1).
+
+    The caller's list first, not the archive whatever it passes: every
+    caller that passes rides passes the rider's own, from the same store
+    (db.query_activities, the archive), and an archive read over a caller's
+    list made the full gate's planner tests depend on whatever ride store
+    their xdist worker's profile held (5 passes-alone, deliver5)."""
+    if rides is not None:
+        return rides
     try:
         import ride_storage as _rs
         archive = _rs.load_all_rides()
-    except Exception:  # noqa: BLE001 -- no profile, no archive: the caller's
+    except Exception:  # noqa: BLE001 -- no profile, no archive: no rides
         archive = []
-    return archive if archive else rides
+    return archive or None
 
 
 def _rode_on(rides, day: date) -> bool:
@@ -14804,11 +14810,13 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         carried = float(normal_week)
         w0 = ahead[0] if ahead else None
         cur = w0 if w0 is not None and w0.start <= today else None
-        if w0 is not None and rides:
+        if w0 is not None:
+            # From the ride archive itself (the one reader of the load
+            # carried), not the caller's list: a sync's db activities carry
+            # no started_at, and the EWMA read nothing from them.
             import ride_storage as _rs
             try:
-                eve = _rs.chronic_weekly_tss(
-                    rides, today=min(w0.start, today) - timedelta(days=1))
+                eve = _rs.chronic_weekly_tss(today=min(w0.start, today) - timedelta(days=1))
             except Exception:  # noqa: BLE001 -- the archive is a best reading
                 eve = None
             if eve:

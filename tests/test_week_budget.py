@@ -69,7 +69,11 @@ def test_load_weeks_rise_from_the_riders_own_load():
     assert weeks[0].tss_target >= 300
     bases = [w.tss_target for w in weeks if w.phase == "base"]
     builds = [w.tss_target for w in weeks if w.phase.startswith("build")]
-    assert min(builds) > max(bases)
+    # On average, not week by week: since each week carries its budget
+    # (contract 9.1/9.2) the 1.3 x guard binds inside a block, and the first
+    # build week after the unload restarts from the chronic load the unload
+    # left (454 against the last base week's 486).
+    assert sum(builds) / len(builds) > sum(bases) / len(bases)
 
 
 def test_available_hours_are_a_ceiling():
@@ -137,11 +141,10 @@ def test_the_sweet_spot_guards_the_cuts_too():
     (36, 250),
     (43, 300), (55, 385), (70, 490),
     # the owner, carrying more than CTL x 7: week 6 read 1.45x, and 1.38x
-    # once the final step held every week to its budget -- still over, since
-    # the weeks before it under-deliver their ask and the carried load lags
-    # (ACWR is audited, not enforced: M7 is out of this round's scope).
-    pytest.param(33, 256, marks=pytest.mark.xfail(
-        strict=True, reason="the carried load lags under-delivered weeks (M7)")),
+    # once the final step held every week to its budget, since the weeks
+    # before it under-delivered their ask and the carried load lagged the
+    # ramp's. They carry it since contract 9.1/9.2.
+    (33, 256),
 ])
 def test_the_acwr_holds(ctl, chronic):
     """No week over 1.3x the load the rider carries into it (a 28-day EWMA),
@@ -268,11 +271,13 @@ def test_the_home_card_sizes_the_plans_own_week():
                    available_days=[1, 2, 3, 4, 5, 6], rest_days=[0], plan_weeks=0)
     phases, weeks = tp.generate_plan(goal, seed_salt=1, current_ctl=43.0,
                                      recent_weekly_tss=300.0, athlete=ATHLETE)
-    week = next(w for w in weeks if w.phase == "build2" and not w.is_stepback)
-    phase = next(p for p in phases if p.name == "build2")
-    # the label runs above (588 against 525 since the hours cap reads the
-    # served files' rate, contract 9.5; it was 694 against 540)
-    assert phase.weekly_tss_target > 1.1 * week.tss_target
+    # A load week the label runs well above (build2's 694 against 540 on
+    # 2026-09-14; since the weeks carry their budgets (contract 9.1/9.2) the
+    # budgets climb to the guard and build2's meet their label, so the first
+    # such week is build1's, 550 against 454).
+    label = {p.name: p.weekly_tss_target for p in phases}
+    week = next(w for w in weeks if not w.is_stepback and w.phase != "taper"
+                and label[w.phase] > 1.15 * w.tss_target)
     plan = {"weeks": [tp.week_to_dict(w) for w in weeks]}
     card = week_view.build(plan, week.start, {}, tp._session_type_from_row)
     assert card.planned_tss == _load(week)

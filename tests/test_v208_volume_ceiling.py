@@ -110,7 +110,9 @@ def test_peak_week_bounded_by_recent_load_not_availability(seed_salt):
         f"seed={seed_salt}: peak week {peak_tss:.0f} TSS still near the old "
         f"availability saturation (~1592) — ceiling not load-based"
     )
-    assert peak_hours < 16.0, (
+    # The load sets the hours: a week carries its budget in easy volume
+    # (contract 9.1), 820 TSS in 17.4 h at the most, not the 24.5 h sum.
+    assert peak_hours < 0.8 * _GENEROUS_HPW, (
         f"seed={seed_salt}: peak week {peak_hours:.1f}h near the 24.5h "
         f"availability sum — ceiling not load-based"
     )

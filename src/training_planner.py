@@ -3075,15 +3075,9 @@ def served_band_tss_per_hour(library: "list | None" = None) -> dict:
     if key not in _SERVED_RATE_CACHE:
         per = {b: [] for b in _BAND_CLASSES}
         band_of = {c: b for b, cs in _BAND_CLASSES.items() for c in cs}
-        for r in lib or []:
-            cc = _content_class_for_row(r)
-            try:
-                fd, ft = float(r.get("Duration(min)") or 0), float(r.get("TSS") or 0)
-                ok = float(r.get("Score") or 0) >= _class_aware_score_floor(cc)
-            except (TypeError, ValueError):
-                continue
-            if cc in band_of and fd > 0 and ft > 0 and ok:
-                per[band_of[cc]].append(ft / fd * 60)
+        for _fd, per_min, cc, _row in _served_pool(lib or []):
+            if cc in band_of:
+                per[band_of[cc]].append(per_min * 60)
         _SERVED_RATE_CACHE.clear()
         _SERVED_RATE_CACHE[key] = {b: (statistics.median(v) if v else _BAND_TSS_PER_HOUR[b])
                                    for b, v in per.items()}
@@ -9075,6 +9069,7 @@ def generate_plan(
                 # days at the peak→taper seam, D3 training after race day).
                 _clip_week_to_phase(pw, phase, cursor)
                 weeks.append(pw)
+                _fill_easy_to_budget(pw, goal, library, max(0.0, pw.tss_target - _done_tss))
                 _ramp.follow(pw, _budget)
                 prev_week_sessions = pw.sessions  # feed into next plan_week for 48h gap
                 cursor = _next_week_cursor(cursor, phase)
@@ -10043,9 +10038,10 @@ def _report_acwr(weeks: list, carried: "float | None") -> list:
     Measured over twelve generated plans, it fires for detrained riders
     (carried 150-250 TSS a week, ramps of 1.40-1.58x against a 1.3x sweet
     spot) and never for fit ones (400-600) -- the population the ratio exists
-    to protect. Reported, not enforced: clamping a week is a change to what
-    riders are given, and that is a decision, not a cleanup. Returns the
-    violations so a caller can surface them.
+    to protect. Reported here; since contract 9.2 the final step holds every
+    row from today on to the guard (finalize_weeks), so what is left to
+    report is a row already under way. Returns the violations so a caller
+    can surface them.
     """
     if not carried or float(carried) <= 0:
         return []
@@ -10540,6 +10536,129 @@ def _enforce_weekly_hours(weeks: list, goal, today: date, library: list) -> None
             if not _ease_one_hard(w, library, lambda s: s.day >= today and _pending_ahead(s, today)
                                   and not _rider_owned(s)):
                 break
+
+
+_FILL_TYPES = ("z2", "long_z2")
+_FILL_MIN_ADD_MIN = 5            # less is noise, and costs the ride its file
+
+
+def _race_in_week(w, goal) -> bool:
+    """Does the row hold the goal's event or one of its B/C races?"""
+    days = [getattr(goal, "target_date", None)]
+    for ev in getattr(goal, "events", None) or []:
+        d = ev.get("date") if isinstance(ev, dict) else getattr(ev, "date", None)
+        days.append(date.fromisoformat(d[:10]) if isinstance(d, str) and d else d)
+    return any(isinstance(d, date) and w.start <= d <= w.end for d in days)
+
+
+def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
+                         calendar: "dict | None" = None) -> None:
+    """Contract 9.1/9.2 (D2 made real): a load week's easy rides grow until
+    the week carries its budget, before the ramp reads the week.
+
+    The sampler sizes a session by its file's length (about 75 minutes), and
+    nothing grew easy volume toward the budget: a full load week was laid out
+    at 413 of 501 budget minutes, and a ramp that follows what the plan
+    prescribes (_row_load) carried that shortfall into every later budget.
+
+    Only pending z2 and long_z2 rides grow, none the rider owns or an
+    adaptation chose, never past the date's minutes (the calendar's, else the
+    weekday's) or the week's hours (9.3), in proportion to the room each has.
+    Load scales to the BUDGET, never to free time (D5). A lengthened ride
+    keeps its file while the file fits the new length, else serves an easy
+    file that does (L-4; one not used elsewhere in the week first, then the
+    nearest the old file's TSS an hour, never carrying less than the shorter
+    ride did), and carries that file's load (6.8). Unload, taper and race weeks are sized
+    against their block and are left alone.
+    """
+    target = float(pw.tss_target or 0) if target is None else float(target)
+    if (target <= 0 or not library or _is_unload_week(pw)
+            or str(getattr(pw, "phase", "")).lower() == "taper" or _race_in_week(pw, goal)):
+        return
+    today = clock.today()
+    load = sum(float(s.tss_estimate or 0) for s in pw.sessions
+               if s is not None and s.session_type != "rest" and not getattr(s, "is_race", False))
+    short = target - load
+    # Within the volume pass's tolerance the week holds its budget already:
+    # a few minutes more would only swap files.
+    if load * _VOLUME_CEILING_TOLERANCE >= target:
+        return
+    rows = _library_rows(library)
+    cal = calendar if calendar is not None else (getattr(goal, "_calendar", None) or {})
+    cand = []
+    for s in pw.sessions:
+        if (not _pending_ahead(s, today) or _rider_owned(s) or getattr(s, "adapted", False)
+                or getattr(s, "is_opener", False) or s.session_type not in _FILL_TYPES
+                or not s.duration_min):
+            continue
+        row = rows.get((s.zwo_file or "").strip())
+        cap, _ = _date_cap_min(goal, s.day, cal)
+        room = cap - int(s.duration_min)
+        if row is None or room <= 0:
+            continue
+        cand.append((s, room, float(row["TSS"]) / float(row["Duration(min)"])))
+    hours = _hours_room(pw, goal, today)
+    if hours is not None:
+        left = hours - _row_minutes(pw, today)
+        total = sum(r for _, r, _ in cand)
+        if left <= 0:
+            return
+        if total > left:
+            cand = [(s, r * left / total, q) for s, r, q in cand]
+    can = sum(r * q for _, r, q in cand)
+    if can <= 0:
+        return
+    grow = min(1.0, short / can)
+    used = {(s.zwo_file or "").strip() for s in pw.sessions if s is not None}
+    for s, room, rate in cand:
+        add = int(room * grow)
+        if add < _FILL_MIN_ADD_MIN:
+            continue
+        slot = int(s.duration_min) + add
+        row = rows[(s.zwo_file or "").strip()]
+        band = _slot_file_band_min(slot)
+        if abs(float(row["Duration(min)"]) - slot) > band:
+            # A file that fits the new length (L-4), no lighter an hour than
+            # the old one's nearest: a longer ride that carries less than
+            # the shorter one did is not growth.
+            cc = _content_class_for_row(row)
+            fits = [x for x in _served_pool(library)
+                    if x[2] in (cc, "endurance") and abs(x[0] - slot) <= band
+                    and x[1] * slot >= float(s.tss_estimate or 0)]
+            if not fits:
+                continue
+            _fd, _pm, _cc, row = min(fits, key=lambda x: (
+                (x[3].get("File") or "") in used, abs(x[1] - rate), abs(x[0] - slot),
+                x[3].get("File") or ""))
+        used.add(row.get("File") or "")
+        s.zwo_file = row.get("File") or ""
+        s.zwo_name = row.get("Name") or ""
+        s.duration_min = slot
+        s.tss_estimate = round(float(row["TSS"]) * slot / float(row["Duration(min)"]))
+        _restamp(s, rows)
+
+
+_SERVED_POOL_CACHE: dict = {}
+
+
+def _served_pool(library) -> list:
+    """(minutes, TSS a minute, content class, row) of every library file that
+    clears its class's score floor -- the files the planner serves."""
+    key = (id(library), len(library))
+    if key not in _SERVED_POOL_CACHE:
+        out = []
+        for r in library:
+            cc = _content_class_for_row(r)
+            try:
+                fd, ft = float(r.get("Duration(min)") or 0), float(r.get("TSS") or 0)
+                ok = float(r.get("Score") or 0) >= _class_aware_score_floor(cc)
+            except (TypeError, ValueError):
+                continue
+            if fd > 0 and ft > 0 and ok:
+                out.append((fd, ft / fd, cc, r))
+        _SERVED_POOL_CACHE.clear()
+        _SERVED_POOL_CACHE[key] = out
+    return _SERVED_POOL_CACHE[key]
 
 
 def _ease_one_hard(wk, library: list, in_scope) -> bool:
@@ -13909,6 +14028,7 @@ def regenerate_from_today(
             # FC1-CLIP (v2.5.0): never spill past the phase end (D2/D3).
             _clip_week_to_phase(pw, phase, cursor)
             new_weeks.append(pw)
+            _fill_easy_to_budget(pw, adjusted_goal, library)
             _ramp.follow(pw, _budget)
             prev_week_sessions = pw.sessions  # feed into next plan_week (PL2)
             cursor = _next_week_cursor(cursor, phase)
@@ -14468,6 +14588,41 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         gross = target * 7 / span if 0 < span < 7 else target
         return max(0.0, min(target - ridden(wk.start), gross - ridden(monday)))
 
+    # 9.2 -- the 1.3 x guard (Gabbett 2016) on the weeks as they are planned.
+    # The ramp budgets each row within ACWR_CEILING x the load it counted
+    # when the row was built; the passes since cut some rows (a hard floor
+    # on a long easy day, a type ceiling, an unload), so a rider would carry
+    # less into a later row than the ramp counted, and a row holding its
+    # full budget read 1.43 x against it. Given the rider's normal week, a
+    # row from today on takes as its budget no more than ACWR_CEILING x the
+    # load carried into it -- the auditor's rule (check_acwr): from the
+    # normal week, following every row ahead as planned (capped at its
+    # budget, as the ramp follows it), the taper not judged, rows under four
+    # days counted but not judged. The budget itself
+    # is lowered, so an entry point that does not know the rider's load (a
+    # sync's reforecast) holds the row to the same number.
+    def _guard():
+        if not normal_week or float(normal_week) <= 0:
+            return
+        carried = float(normal_week)
+        for w in ahead:
+            days = (w.end - w.start).days + 1
+            load = sum(float(x.tss_estimate or 0) for x in w.sessions
+                       if x is not None and x.session_type != "rest"
+                       and getattr(x, "status", "pending") not in plan_invariants.NOT_RIDDEN)
+            if (w.start >= today and days >= 4 and (w.tss_target or 0) > 0
+                    and str(getattr(w, "phase", "")).lower() != "taper"):
+                race = sum(float(x.tss_estimate or 0) for x in w.sessions
+                           if x is not None and getattr(x, "is_race", False))
+                cap = float(round(ACWR_CEILING * carried * days / 7 - race))
+                if cap < w.tss_target:
+                    w.tss_target = max(0.0, cap)
+            # ...as the ramp follows a row: its load, capped at its budget
+            # (_row_load; the volume pass's tolerance is slack, not load).
+            if (w.tss_target or 0) > 0:
+                load = min(load, float(w.tss_target))
+            carried = chronic_after(carried, load * 7 / days, days)
+
     # The budget, then the unload week, then a file that fits what is left of
     # each slot, then its served load -- in that order. The last shortening
     # used to come after the re-match, leaving slots below their files (the
@@ -14565,6 +14720,21 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         return [sig(s) for w in ahead for s in w.sessions if s is not None]
     for _round in range(4):
         _was = _state()
+        # 9.1 -- a load week carries its budget. The builders grew it before
+        # the ramp read it; the passes since (a phase's hard floor on a long
+        # easy day, the long-ride progression, 48 h easing, a re-match to a
+        # lighter file) take some of it back, and a stored plan may predate
+        # the fill: the same growth, held to what is left of the week under
+        # way, first in every round.
+        _guard()
+        for w in ahead:
+            # The week owner's net, where it wrote one (TrainingWeek), bounds
+            # the fill: it reads a stub row's target as the gross.
+            _t = net(w)
+            if getattr(w, "net_tss_target", None) is not None:
+                _t = min(float(w.tss_target or 0) if _t is None else _t, float(w.net_tss_target))
+            _fill_easy_to_budget(w, goal, lib, _t, calendar=cal)
+        _guard()
         _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
                                        normal_week=normal_week, library=lib)
         _enforce_weekly_hours(ahead, goal, today, lib)
@@ -15052,6 +15222,7 @@ def recalculate_plan(
             # FC1-CLIP (v2.5.0): never spill past the phase end (D2/D3).
             _clip_week_to_phase(pw, phase, cursor)
             new_weeks.append(pw)
+            _fill_easy_to_budget(pw, adjusted_goal, library)
             _ramp.follow(pw, _budget)
             prev_week_sessions = pw.sessions  # feed into next plan_week (PL2)
             cursor = _next_week_cursor(cursor, phase)
@@ -15382,6 +15553,7 @@ def extend_continuous_plan(
 
         _clip_week_to_phase(pw, phase, cursor)
         new_weeks.append(pw)
+        _fill_easy_to_budget(pw, goal, library)
         _ramp.follow(pw, _budget)
         prev_week_sessions = pw.sessions
         cursor = _next_week_cursor(cursor, phase)

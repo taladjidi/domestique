@@ -807,3 +807,40 @@ def test_the_gate_env_removes_its_data_home():
         import shutil
         shutil.rmtree(home, ignore_errors=True)
     assert not left, home
+
+
+# ── MF-B (evaluation of f59ccdee): the week under way is in the block ────
+
+def _block_underway():
+    """A build week under way (Mon 09-28 .. Sun, today Friday 10-02) and the
+    unload week after it: the build is the block's only full week."""
+    mon = _dt.date(2026, 9, 28)
+
+    def wk(i, loads, stepback=False, target=400.0):
+        start = mon + _dt.timedelta(weeks=i)
+        ss = [tp.PlannedSession(day=start + _dt.timedelta(days=d), day_name="",
+                                session_type="rest" if load == 0 else "z2",
+                                duration_min=0 if load == 0 else 90, tss_estimate=float(load),
+                                description="x", zwo_file=F.Z2)
+              for d, load in enumerate(loads)]
+        return tp.PlannedWeek(week_num=i + 1, start=start, end=start + _dt.timedelta(days=6),
+                              phase="continuous", tss_target=target, is_stepback=stepback,
+                              sessions=ss)
+    return [wk(0, [60, 60, 60, 60, 66, 0, 0], target=306.0),
+            wk(1, [72, 72, 72, 72, 71, 0, 0], stepback=True, target=359.0)]
+
+
+def test_mf_b_an_unload_week_is_lighter_than_the_build_under_way():
+    """owner-cont, planned 09-14, synced 10-02: the only build of the block
+    was under way; bbbb15fe left it out, the unload pass had no reference,
+    and the unload week went to 359 against the build's 306 (d190fa82 221
+    against 256). The planner holds it under 0.9 x the build at its planned
+    load, and the auditor reads the block the same way."""
+    import plan_invariants as pi_
+    clock.freeze(_dt.date(2026, 10, 2))
+    weeks = _block_underway()
+    assert "stepback_lightest" in [v.rule for v in pi_.check_stepback_lightest(weeks, _dt.date(2026, 10, 2))]
+    tp._enforce_stepback_is_lightest(weeks, F.owner("continuous"), {})
+    unload = sum(s.tss_estimate for s in weeks[1].sessions if s.session_type != "rest")
+    assert unload <= 0.9 * 306 + 1, unload
+    assert not pi_.check_stepback_lightest(weeks, _dt.date(2026, 10, 2))

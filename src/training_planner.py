@@ -10812,15 +10812,12 @@ def _enforce_stepback_is_lightest(weeks: list, goal=None,
             # FC1-CLIP (v2.5.0): a clipped short row (<7 days, phase seam) is
             # not a real build week — its tiny TSS would drag the lightest-ref
             # down and force the deload toward zero. Full rows only.
-            # ...and not one begun before today: half ridden, it is history
-            # to the auditor (check_stepback_lightest), which compares an
-            # unload week with nothing that started behind the rider. Read
-            # here, the two disagreed on the block once unload weeks carried
-            # their budgets (9.10): a reforecast's week under way was the
-            # planner's reference and not the auditor's.
+            # The week under way belongs to the block, read at its planned
+            # load (_wk_tss), as the auditor reads it: dropping it (bbbb15fe)
+            # left an unload week whose only build was under way with no
+            # reference at all -- owner-cont synced 10-02 went 306 -> 359.
             if (getattr(weeks[j], "phase", "") != "taper"
-                    and ((weeks[j].end - weeks[j].start).days + 1) >= 7
-                    and weeks[j].start >= _today):
+                    and ((weeks[j].end - weeks[j].start).days + 1) >= 7):
                 builds.append(weeks[j])
             j -= 1
         if not builds:

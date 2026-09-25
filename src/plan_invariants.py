@@ -722,13 +722,18 @@ def check_stepback_lightest(weeks, today=None) -> list[Violation]:
     weeks since the last unload: a stepback, an unload phase or a holiday.
     Counted from stepbacks alone, a regenerate's recovery weeks sat in the
     block, and an unload lighter than every load week before it was flagged.
-    Weeks that began before ``today`` are history -- half-ridden,
-    half-dismissed -- and are compared with nothing.
+    Weeks that ended before ``today`` are history and compared with nothing.
+    The week under way belongs to the block at its planned load -- what it
+    asked, missed and dismissed days included -- as the planner's unload pass
+    reads it (_enforce_stepback_is_lightest): left out, an unload week whose
+    only build was under way had no reference (the evaluation of f59ccdee,
+    MF-B); an unload week already under way is not judged.
     """
     out, block = [], []
     for w in weeks:
-        if today is not None and w.start < today:
+        if today is not None and w.end < today:
             continue
+        underway = today is not None and w.start < today
         if str(getattr(w, "phase", "")).lower() in UNLOAD_PHASES or asks_nothing(w):
             block = []
             continue
@@ -738,7 +743,8 @@ def check_stepback_lightest(weeks, today=None) -> list[Violation]:
         # since the test is its own file's length (contract 6.9) a week
         # holding nothing but the test read heavier than a light build week
         # (80 against 78, weekend-event8; the evaluation of b7be0395, D-C).
-        load = sum(float(s.tss_estimate or 0) for s in _training(w) if _ridden(s))
+        load = sum(float(s.tss_estimate or 0) for s in _training(w)
+                   if underway or _ridden(s))
         if not full:
             continue
         if load <= 0:
@@ -748,6 +754,9 @@ def check_stepback_lightest(weeks, today=None) -> list[Violation]:
             # before as the next unload's reference (3day-ftp, 2026-10-02).
             if w.is_stepback:
                 block = []
+            continue
+        if w.is_stepback and underway:
+            block = []
             continue
         if w.is_stepback:
             # A load week the budget or readiness rested reads light for what

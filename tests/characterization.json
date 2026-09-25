@@ -7549,9 +7549,9 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       13.0,
-       "endurance_steady_42pct_30min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
@@ -7589,17 +7589,17 @@
       [
        "2026-10-10",
        "z2",
-       57,
-       36.0,
+       60,
+       38.0,
        "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-11",
        "z2",
-       56,
-       29.0,
-       "endurance_steady_57pct_55min.zwo",
+       60,
+       38.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ]
      ]
@@ -7608,7 +7608,7 @@
      "2026-10-12",
      "2026-10-18",
      "continuous",
-     340.0,
+     341.0,
      null,
      false,
      [
@@ -8673,9 +8673,9 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       20.0,
-       "sweet_spot_2x3min-3min_90pct_29min.zwo",
+       60,
+       46.0,
+       "endurance_steady_70pct_63min.zwo",
        "pending"
       ],
       [
@@ -8689,9 +8689,9 @@
       [
        "2026-10-07",
        "z2",
-       30,
-       22.0,
-       "endurance_steady_70pct_33min.zwo",
+       60,
+       51.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "pending"
       ],
       [
@@ -8705,17 +8705,17 @@
       [
        "2026-10-09",
        "z2",
-       51,
-       38.0,
-       "intervals_steady_65pct_51min_v2.zwo",
+       58,
+       44.0,
+       "endurance_steady_68pct_58min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-10",
        "z2",
-       41,
+       60,
        38.0,
-       "tempo_6x40s_76pct_41min.zwo",
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
@@ -10863,10 +10863,10 @@
      [
       [
        "2026-10-05",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       45,
+       29.0,
+       "endurance_steady_65pct_45min_v2.zwo",
        "pending"
       ],
       [
@@ -13284,9 +13284,9 @@
       [
        "2026-10-05",
        "z2",
-       42,
-       30.0,
-       "sweet_spot_ladder4_94pct_42min.zwo",
+       50,
+       36.0,
+       "recovery_1x3min_80pct_50min.zwo",
        "pending"
       ],
       [
@@ -13300,9 +13300,9 @@
       [
        "2026-10-07",
        "z2",
-       30,
-       21.0,
-       "sweet_spot_1x2min_83pct_31min.zwo",
+       59,
+       50.0,
+       "recovery_1x10min_95pct_58min.zwo",
        "pending"
       ],
       [
@@ -13316,9 +13316,9 @@
       [
        "2026-10-09",
        "z2",
-       30,
-       20.0,
-       "sweet_spot_2x3min-3min_90pct_29min.zwo",
+       60,
+       40.0,
+       "endurance_steady_68pct_60min.zwo",
        "pending"
       ],
       [
@@ -17729,17 +17729,17 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       21.0,
-       "sweet_spot_2x3min-3min_90pct_29min.zwo",
+       50,
+       35.0,
+       "endurance_steady_70pct_50min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "recovery",
-       30,
-       20.0,
-       "recovery_1x4min_90pct_32min.zwo",
+       40,
+       17.0,
+       "recovery_steady_50pct_38min.zwo",
        "pending"
       ],
       [
@@ -17753,9 +17753,9 @@
       [
        "2026-10-08",
        "z2",
-       30,
-       23.0,
-       "endurance_steady_70pct_33min.zwo",
+       55,
+       42.0,
+       "tempo_steady_69pct_55min.zwo",
        "pending"
       ],
       [
@@ -21076,9 +21076,9 @@
       [
        "2026-10-07",
        "z2",
-       44,
-       40.0,
-       "intervals_6x40s_76pct_46min.zwo",
+       54,
+       42.0,
+       "intervals_steady_71pct_54min.zwo",
        "pending"
       ],
       [
@@ -21100,17 +21100,17 @@
       [
        "2026-10-10",
        "z2",
-       51,
-       38.0,
+       53,
+       40.0,
        "endurance_steady_69pct_53min.zwo",
        "pending"
       ],
       [
        "2026-10-11",
        "z2",
-       30,
-       16.0,
-       "endurance_steady_59pct_28min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ]
      ]
@@ -21340,17 +21340,17 @@
       [
        "2026-10-06",
        "z2",
-       74,
-       50.0,
-       "endurance_2x8min-5min_80pct_75min.zwo",
+       85,
+       58.0,
+       "endurance_steady_66pct_85min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       33,
-       23.0,
-       "endurance_steady_70pct_33min.zwo",
+       100,
+       71.0,
+       "endurance_steady_68pct_100min_v2.zwo",
        "pending"
       ],
       [
@@ -21391,7 +21391,7 @@
      "2026-10-12",
      "2026-10-18",
      "continuous",
-     368.0,
+     386.0,
      null,
      false,
      [
@@ -22468,17 +22468,17 @@
       [
        "2026-10-07",
        "z2",
-       37,
-       26.0,
-       "endurance_steady_59pct_38min.zwo",
+       100,
+       71.0,
+       "endurance_steady_68pct_100min.zwo",
        "pending"
       ],
       [
        "2026-10-08",
-       "z2",
-       45,
-       24.0,
-       "recovery_steady_58pct_45min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -41953,9 +41953,9 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       13.0,
-       "endurance_steady_42pct_30min.zwo",
+       60,
+       46.0,
+       "endurance_steady_70pct_63min.zwo",
        "pending"
       ],
       [
@@ -41969,8 +41969,8 @@
       [
        "2026-10-07",
        "recovery",
-       58,
-       48.0,
+       60,
+       50.0,
        "tempo_ladder3_90pct_60min.zwo",
        "pending"
       ],
@@ -43074,49 +43074,49 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       21.0,
-       "sweet_spot_2x3min-3min_90pct_29min.zwo",
+       50,
+       35.0,
+       "endurance_steady_70pct_50min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "z2",
-       30,
-       24.0,
-       "pyramid_1x2min_90pct_32min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "recovery",
-       42,
-       32.0,
-       "sweet_spot_3x2min-2min_90pct_40min.zwo",
+       44,
+       25.0,
+       "threshold_1x2min_81pct_46min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "z2",
-       30,
-       20.0,
-       "endurance_steady_70pct_33min.zwo",
+       51,
+       34.0,
+       "intervals_steady_65pct_51min.zwo",
        "pending"
       ],
       [
        "2026-10-09",
        "z2",
-       30,
-       16.0,
-       "recovery_5x20s-40s_125pct_30min.zwo",
+       58,
+       55.0,
+       "over_under_3x30s-210s_100pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-10",
-       "z2",
-       21,
-       14.0,
-       "endurance_steady_54pct_24min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -43384,10 +43384,10 @@
       ],
       [
        "2026-10-10",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       20,
+       14.2,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
@@ -43917,10 +43917,10 @@
       ],
       [
        "2026-10-10",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       20,
+       14.2,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
@@ -44252,10 +44252,10 @@
       ],
       [
        "2026-10-10",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       20,
+       14.2,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
@@ -44466,9 +44466,9 @@
       [
        "2026-10-06",
        "z2",
-       110,
-       79.0,
-       "endurance_steady_68pct_110min_v2.zwo",
+       150,
+       102.0,
+       "endurance_steady_62pct_150min.zwo",
        "pending"
       ],
       [
@@ -44769,10 +44769,10 @@
       ],
       [
        "2026-10-10",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       55,
+       40.0,
+       "intervals_steady_71pct_54min.zwo",
        "pending"
       ],
       [
@@ -45038,10 +45038,10 @@
       ],
       [
        "2026-10-10",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       20,
+       14.2,
+       "recovery_steady_55pct_20min_v3.zwo",
        "pending"
       ],
       [
@@ -45268,9 +45268,9 @@
       [
        "2026-10-05",
        "z2",
-       112,
-       76.0,
-       "endurance_2x8min-5min_80pct_105min.zwo",
+       150,
+       102.0,
+       "endurance_steady_68pct_140min.zwo",
        "pending"
       ],
       [
@@ -46910,8 +46910,8 @@
       [
        "2026-10-08",
        "z2",
-       102,
-       73.0,
+       105,
+       75.0,
        "endurance_steady_68pct_105min_v2.zwo",
        "pending"
       ],
@@ -47157,25 +47157,25 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       60,
+       43.0,
+       "endurance_steady_70pct_60min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "recovery",
-       45,
-       17.0,
-       "recovery_steady_50pct_45min_v6.zwo",
+       50,
+       31.0,
+       "intervals_4x2min-2min_76pct_50min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       30,
-       26.0,
-       "pyramid_1x2min_90pct_32min.zwo",
+       60,
+       51.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "pending"
       ],
       [
@@ -47188,10 +47188,10 @@
       ],
       [
        "2026-10-09",
-       "z2",
-       21,
-       18.0,
-       "recovery_ladder4_121pct_24min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -47223,9 +47223,9 @@
       [
        "2026-10-12",
        "z2",
-       45,
-       34.0,
-       "endurance_steady_75pct_45min.zwo",
+       50,
+       36.0,
+       "endurance_steady_72pct_50min.zwo",
        "pending"
       ],
       [
@@ -47255,9 +47255,9 @@
       [
        "2026-10-16",
        "z2",
-       52,
-       44.0,
-       "over_under_9x1min_80pct_53min.zwo",
+       55,
+       42.0,
+       "endurance_ladder6_110pct_46min.zwo",
        "pending"
       ],
       [
@@ -47289,9 +47289,9 @@
       [
        "2026-10-19",
        "z2",
-       60,
-       35.0,
-       "endurance_steady_62pct_60min.zwo",
+       48,
+       37.0,
+       "endurance_steady_70pct_48min.zwo",
        "pending"
       ],
       [
@@ -47305,9 +47305,9 @@
       [
        "2026-10-21",
        "z2",
-       47,
-       29.0,
-       "recovery_10x12s-3min_145pct_47min.zwo",
+       54,
+       42.0,
+       "intervals_steady_71pct_54min.zwo",
        "pending"
       ],
       [
@@ -47321,9 +47321,9 @@
       [
        "2026-10-23",
        "recovery",
-       45,
-       27.0,
-       "recovery_steady_58pct_45min_v2.zwo",
+       60,
+       30.0,
+       "recovery_steady_55pct_60min_v2.zwo",
        "pending"
       ],
       [
@@ -47354,42 +47354,42 @@
      [
       [
        "2026-10-26",
-       "recovery",
-       53,
-       32.0,
-       "recovery_steady_51pct_53min.zwo",
+       "z2",
+       60,
+       53.0,
+       "recovery_4x10s-50s_150pct_62min.zwo",
        "pending"
       ],
       [
        "2026-10-27",
        "threshold",
        60,
-       73.0,
-       "threshold_3x12min-3min_95pct_61min_v2.zwo",
+       64.0,
+       "threshold_3x5min-5min_95pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-28",
-       "z2",
-       50,
-       32.0,
-       "intervals_steady_65pct_50min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
        "2026-10-29",
        "threshold",
-       51,
-       67.0,
-       "over_under_7x30s_110pct_51min.zwo",
+       60,
+       80.0,
+       "over_under_5x30s_110pct_63min.zwo",
        "pending"
       ],
       [
        "2026-10-30",
-       "recovery",
-       60,
-       29.0,
-       "recovery_steady_52pct_60min.zwo",
+       "z2",
+       45,
+       35.0,
+       "recovery_2x1min-2min_76pct_45min.zwo",
        "pending"
       ],
       [
@@ -47414,16 +47414,16 @@
      "2026-11-02",
      "2026-11-08",
      "continuous",
-     168.0,
+     175.0,
      null,
      true,
      [
       [
        "2026-11-02",
-       "rest",
-       0,
-       0.0,
-       "",
+       "z2",
+       53,
+       46.0,
+       "over_under_9x1min_80pct_53min.zwo",
        "pending"
       ],
       [
@@ -47436,18 +47436,18 @@
       ],
       [
        "2026-11-04",
-       "z2",
-       53,
-       40.0,
-       "endurance_steady_69pct_53min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
        "2026-11-05",
        "z2",
-       48,
-       33.0,
-       "intervals_steady_67pct_48min.zwo",
+       60,
+       50.0,
+       "sweetspot_4x30s-150s_100pct_60min.zwo",
        "pending"
       ],
       [
@@ -47690,41 +47690,41 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       60,
+       43.0,
+       "endurance_steady_70pct_60min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "recovery",
-       30,
-       8.0,
-       "recovery_steady_37pct_30min.zwo",
+       50,
+       31.0,
+       "intervals_4x2min-2min_76pct_50min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       30,
-       26.0,
-       "pyramid_1x2min_90pct_32min.zwo",
+       60,
+       51.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "z2",
-       30,
-       20.0,
+       34,
+       22.7,
        "endurance_steady_63pct_33min.zwo",
        "pending"
       ],
       [
        "2026-10-09",
-       "z2",
-       21,
-       18.0,
-       "recovery_ladder4_121pct_24min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -47756,9 +47756,9 @@
       [
        "2026-10-12",
        "z2",
-       56,
-       29.0,
-       "endurance_steady_57pct_55min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
@@ -47772,9 +47772,9 @@
       [
        "2026-10-14",
        "z2",
-       56,
-       29.0,
-       "endurance_steady_57pct_55min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
@@ -47789,8 +47789,8 @@
        "2026-10-16",
        "z2",
        60,
-       51.0,
-       "endurance_9x10s-4min_150pct_62min.zwo",
+       46.0,
+       "endurance_steady_68pct_58min.zwo",
        "pending"
       ],
       [
@@ -48025,25 +48025,25 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       60,
+       43.0,
+       "endurance_steady_70pct_60min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "recovery",
-       45,
-       17.0,
-       "recovery_steady_50pct_45min_v6.zwo",
+       50,
+       31.0,
+       "intervals_4x2min-2min_76pct_50min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       30,
-       26.0,
-       "pyramid_1x2min_90pct_32min.zwo",
+       60,
+       51.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "pending"
       ],
       [
@@ -48056,10 +48056,10 @@
       ],
       [
        "2026-10-09",
-       "z2",
-       21,
-       18.0,
-       "recovery_ladder4_121pct_24min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -48278,16 +48278,16 @@
       [
        "2026-10-06",
        "z2",
-       37,
-       29.0,
-       "sweet_spot_3x2min_76pct_40min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       59,
-       50.0,
+       60,
+       51.0,
        "tempo_steady_75pct_60min.zwo",
        "pending"
       ],
@@ -48539,25 +48539,25 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       60,
+       43.0,
+       "endurance_steady_70pct_60min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "recovery",
-       45,
-       17.0,
-       "recovery_steady_50pct_45min_v6.zwo",
+       50,
+       31.0,
+       "intervals_4x2min-2min_76pct_50min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "vo2max",
-       30,
-       26.0,
-       "pyramid_1x2min_90pct_32min.zwo",
+       60,
+       51.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "missed"
       ],
       [
@@ -48570,10 +48570,10 @@
       ],
       [
        "2026-10-09",
-       "z2",
-       45,
-       31.0,
-       "endurance_steady_67pct_45min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -48808,25 +48808,25 @@
       [
        "2026-10-05",
        "z2",
-       30,
-       22.0,
-       "pyramid_steady_65pct_30min.zwo",
+       60,
+       43.0,
+       "endurance_steady_70pct_60min_v2.zwo",
        "pending"
       ],
       [
        "2026-10-06",
        "recovery",
-       45,
-       17.0,
-       "recovery_steady_50pct_45min_v6.zwo",
+       50,
+       31.0,
+       "intervals_4x2min-2min_76pct_50min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       30,
-       26.0,
-       "pyramid_1x2min_90pct_32min.zwo",
+       60,
+       51.0,
+       "tempo_9x30s-210s_90pct_63min.zwo",
        "pending"
       ],
       [
@@ -48839,10 +48839,10 @@
       ],
       [
        "2026-10-09",
-       "z2",
-       21,
-       18.0,
-       "recovery_ladder4_121pct_24min.zwo",
+       "rest",
+       0,
+       0.0,
+       "",
        "pending"
       ],
       [
@@ -49085,16 +49085,16 @@
       [
        "2026-10-06",
        "z2",
-       56,
-       29.0,
-       "endurance_steady_57pct_55min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       59,
-       50.0,
+       60,
+       51.0,
        "tempo_steady_75pct_60min.zwo",
        "pending"
       ],
@@ -51170,10 +51170,10 @@
       ],
       [
        "2026-10-07",
-       "rest",
-       0,
-       0.0,
-       "",
+       "recovery",
+       45,
+       23.0,
+       "recovery_steady_55pct_45min_v4.zwo",
        "pending"
       ],
       [
@@ -55461,25 +55461,25 @@
       [
        "2026-10-06",
        "z2",
-       34,
-       21.0,
-       "endurance_steady_65pct_35min.zwo",
+       46,
+       42.0,
+       "intervals_6x40s_76pct_46min.zwo",
        "pending"
       ],
       [
        "2026-10-07",
        "z2",
-       30,
-       23.0,
-       "endurance_steady_70pct_33min.zwo",
+       54,
+       42.0,
+       "intervals_steady_71pct_54min.zwo",
        "pending"
       ],
       [
        "2026-10-08",
        "z2",
-       30,
-       24.0,
-       "over_under_ladder4_110pct_30min.zwo",
+       51,
+       40.0,
+       "tempo_3x1min_80pct_51min.zwo",
        "pending"
       ],
       [
@@ -55501,9 +55501,9 @@
       [
        "2026-10-11",
        "z2",
-       30,
-       16.0,
-       "endurance_steady_59pct_28min.zwo",
+       60,
+       35.0,
+       "endurance_steady_62pct_60min.zwo",
        "pending"
       ]
      ]
@@ -55738,9 +55738,9 @@
       [
        "2026-10-07",
        "z2",
-       32,
-       19.0,
-       "endurance_steady_63pct_33min.zwo",
+       99,
+       70.0,
+       "endurance_steady_68pct_100min_v2.zwo",
        "pending"
       ],
       [
@@ -55754,9 +55754,9 @@
       [
        "2026-10-09",
        "z2",
-       88,
-       53.0,
-       "endurance_steady_62pct_90min.zwo",
+       95,
+       58.0,
+       "endurance_steady_62pct_95min.zwo",
        "pending"
       ],
       [
@@ -55781,7 +55781,7 @@
      "2026-10-12",
      "2026-10-18",
      "continuous",
-     363.0,
+     386.0,
      null,
      false,
      [
@@ -55804,9 +55804,9 @@
       [
        "2026-10-14",
        "z2",
-       41,
-       38.0,
-       "tempo_6x40s_76pct_41min.zwo",
+       70,
+       50.0,
+       "endurance_6x1min-1min_85pct_70min.zwo",
        "pending"
       ],
       [

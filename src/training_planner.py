@@ -10681,7 +10681,20 @@ def _ease_one_hard(wk, library: list, in_scope) -> bool:
     return False
 
 
-def _enforce_stepback_is_lightest(weeks: list) -> None:
+_REASONED_REST = ("budget", "readiness")
+
+
+def _holds_reasoned_rest(w) -> bool:
+    """Did the week's budget or the rider's readiness rest one of its days?
+    Such a week reads light because of what happened in it, not because of
+    how it was planned."""
+    return any(s is not None and s.session_type == "rest"
+               and (getattr(s, "rest_reason", "") or "") in _REASONED_REST
+               for s in w.sessions)
+
+
+def _enforce_stepback_is_lightest(weeks: list, goal=None,
+                                  calendar: "dict | None" = None) -> None:
     """B3 — a step-back (deload) week must be the lightest in its block.
 
     plan_week gives step-back weeks FIXED easy durations (recovery / Z2 /
@@ -10728,7 +10741,12 @@ def _enforce_stepback_is_lightest(weeks: list) -> None:
             j -= 1
         if not builds:
             continue
-        target = min(_wk_tss(b) for b in builds) * STEPBACK_BELOW_LIGHTEST
+        # Contract 9.7: a build week the budget or readiness rested is not
+        # the block's lightest -- unless every one was. The 2026-09-25 sync
+        # rested a Friday by the budget after a heavy ride, and the unload
+        # week after it was cut against that week.
+        ref = [b for b in builds if not _holds_reasoned_rest(b)] or builds
+        target = min(_wk_tss(b) for b in ref) * STEPBACK_BELOW_LIGHTEST
         for _ in range(len(wk.sessions) + 1):
             if _wk_tss(wk) <= target:
                 break
@@ -10763,7 +10781,17 @@ def _enforce_stepback_is_lightest(weeks: list) -> None:
         # an ACWR of 1.7 against the week the rider was really given.
         def _rest_count(w):
             return sum(1 for s in w.sessions if s and s.session_type == "rest")
-        build_max_rest = max((_rest_count(b) for b in builds), default=0)
+
+        def _planned_rests(b):
+            # A build week's rest days are the rider's planned pattern (9.7):
+            # the days with no time -- a rest day, a 0 h day, a date the
+            # calendar closes -- not a day the budget or readiness took, or
+            # the unload week had to rest one more ride to out-rest it.
+            if goal is None:
+                return _rest_count(b)
+            return sum(1 for i in range((b.end - b.start).days + 1)
+                       if _date_cap_min(goal, b.start + timedelta(days=i), calendar)[0] <= 0)
+        build_max_rest = max((_planned_rests(b) for b in builds), default=0)
         rest_floor = (wk.tss_target or 0) * STEPBACK_DEEPEST / STEPBACK_LOAD_FACTOR
         for _ in range(len(wk.sessions)):
             if _rest_count(wk) > build_max_rest:
@@ -14742,7 +14770,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         # the loads just set -- on every entry point: it was generate's
         # alone, and a recalculated or extended block left its unload week
         # the heaviest.
-        _enforce_stepback_is_lightest(ahead)
+        _enforce_stepback_is_lightest(ahead, goal, cal)
         _enforce_slot_file_coherence(ahead, lib, plan_start_date=anchor,
                                      seed_salt=seed_salt, today_floor=today,
                                      micro_only=micro)

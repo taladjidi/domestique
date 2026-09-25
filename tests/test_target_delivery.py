@@ -349,3 +349,132 @@ def test_9_4_a_lengthened_ride_serves_a_file_that_fits_it():
         assert s.zwo_file != was[s.day][2]           # the 60-min file does not fit 100+ min
         assert s.tss_estimate >= was[s.day][1]
         assert abs(s.tss_estimate - float(row["TSS"]) * s.duration_min / fd) <= 1
+
+
+# ── 9.7 A reasoned rest does not reshape the next recovery week ──────────
+
+def _rest(s, reason):
+    s.session_type, s.duration_min, s.tss_estimate = "rest", 0, 0
+    s.zwo_file, s.zwo_name, s.rest_reason, s.adapted = "", "", reason, True
+
+
+def _unload_after_a_rested_build_day(reason):
+    """The owner's plan; the first training day after today in the first full
+    load week of the first block is rested with ``reason`` (the ride-sync
+    adaptation writes "budget" after a heavy ride), and the final step runs
+    again as every entry point does. Returns the block's unload week."""
+    g = F.owner("continuous")
+    weeks = F.gen(g)
+    t = F.G0
+    ui = next(i for i, w in enumerate(weeks) if tp._is_unload_week(w) and w.phase != "taper")
+    bi = next(i for i in range(ui) if (weeks[i].end - weeks[i].start).days >= 6)
+    if reason:
+        day = next(s for s in weeks[bi].sessions if s.day > t and s.session_type != "rest")
+        _rest(day, reason)
+    clock.freeze(t)
+    tp.finalize_weeks(weeks, g, normal_week=380)
+    w = weeks[ui]
+    return ([(s.day, s.session_type, s.duration_min, getattr(s, "rest_reason", "")) for s in w.sessions],
+            week_load(w, t))
+
+
+@pytest.mark.parametrize("reason", ["budget", "readiness"])
+def test_9_7_a_reasoned_rest_in_a_build_week_leaves_the_unload_week_alone(reason):
+    """The 2026-09-25 live case: Friday rested by the week's budget after a
+    heavy ride, and at the next sync the unload week 10-05 lost a ride
+    (10-06 rested "unload") and carried 204 of its 244. The build week's rest
+    days are the rider's planned pattern, and a week the budget or readiness
+    rested is not the block's lightest reference."""
+    assert _unload_after_a_rested_build_day(reason) == _unload_after_a_rested_build_day(None)
+
+
+def test_9_7_the_auditor_reads_the_lightest_week_the_same_way():
+    """check_stepback_lightest: a build week holding a budget or readiness
+    rest is not the lightest reference (unless every build week holds one);
+    the control -- the same week without the reason -- is still one."""
+    import plan_invariants as pi
+    mon = _dt.date(2026, 9, 7)
+
+    def wk(i, loads, stepback=False, rest_reason=""):
+        start = mon + _dt.timedelta(weeks=i)
+        ss = []
+        for d, load in enumerate(loads):
+            s = tp.PlannedSession(day=start + _dt.timedelta(days=d), day_name="",
+                                  session_type="rest" if load == 0 else "z2",
+                                  duration_min=0 if load == 0 else 60, tss_estimate=float(load),
+                                  description="x")
+            if load == 0 and d == 2:
+                s.rest_reason = rest_reason
+            ss.append(s)
+        return tp.PlannedWeek(week_num=i + 1, start=start, end=start + _dt.timedelta(days=6),
+                              phase="build1", tss_target=300, is_stepback=stepback, sessions=ss)
+    full = [60, 60, 60, 60, 60, 0, 0]
+    light = [60, 60, 0, 60, 60, 0, 0]            # Wednesday rested
+    for reason, fires in (("budget", False), ("readiness", False), ("", True)):
+        weeks = [wk(0, full), wk(1, light, rest_reason=reason), wk(2, full),
+                 wk(3, [50, 50, 50, 50, 50, 0, 0], stepback=True)]   # 250 > 240
+        got = [v.rule for v in pi.check_stepback_lightest(weeks)]
+        assert ("stepback_lightest" in got) == fires, (reason, got)
+    # ...unless every build week holds one: then they are the block
+    weeks = [wk(0, light, rest_reason="budget"), wk(1, light, rest_reason="budget"),
+             wk(2, [60, 60, 60, 60, 60, 0, 0], stepback=True)]
+    assert "stepback_lightest" in [v.rule for v in pi.check_stepback_lightest(weeks)]
+
+
+def test_9_7_an_unload_week_holding_only_the_test_closes_its_block():
+    """The auditor kept a build week of the block before an unload week that
+    held nothing but the FTP test as the next unload's lightest reference;
+    the planner's block rule (_is_unload_week) had closed it. Control: the
+    same plan with a light week in the second block still fires."""
+    import plan_invariants as pi
+    mon = _dt.date(2026, 9, 7)
+
+    def wk(i, loads, stepback=False, test=False):
+        start = mon + _dt.timedelta(weeks=i)
+        ss = [tp.PlannedSession(day=start + _dt.timedelta(days=d), day_name="",
+                                session_type="rest" if load == 0 else "z2",
+                                duration_min=0 if load == 0 else 60, tss_estimate=float(load),
+                                description="x") for d, load in enumerate(loads)]
+        if test:
+            ss[3].session_type, ss[3].tss_estimate, ss[3].duration_min = "ftp_test", 80.0, 52
+        return tp.PlannedWeek(week_num=i + 1, start=start, end=start + _dt.timedelta(days=6),
+                              phase="build1", tss_target=300, is_stepback=stepback, sessions=ss)
+    full, light, zero = [60] * 5 + [0, 0], [40] * 5 + [0, 0], [0] * 7
+    unload = [50] * 5 + [0, 0]                                   # 250
+    weeks = [wk(0, light), wk(1, full), wk(2, zero, stepback=True, test=True),
+             wk(3, full), wk(4, full), wk(5, unload, stepback=True)]
+    assert "stepback_lightest" not in [v.rule for v in pi.check_stepback_lightest(weeks)]
+    weeks[3] = wk(3, light)
+    assert "stepback_lightest" in [v.rule for v in pi.check_stepback_lightest(weeks)]
+
+
+def test_9_7_a_build_weeks_rest_days_are_the_riders_pattern():
+    """Issue #4's step rests an unload week's shortest ride until it has more
+    rest days than every build week of its block. Counting the day the budget
+    took (rest_reason "budget") as one of them rested one ride more. The
+    rider's pattern here is Friday; the unload week's two rest days already
+    out-rest it."""
+    mon = _dt.date(2026, 9, 7)
+    g = F.owner("continuous")
+
+    def wk(i, rest_days, stepback=False, budget_day=None, load=60):
+        start = mon + _dt.timedelta(weeks=i)
+        ss = []
+        for d in range(7):
+            s = tp.PlannedSession(day=start + _dt.timedelta(days=d), day_name="", session_type="z2",
+                                  duration_min=90, tss_estimate=float(load), description="x",
+                                  zwo_file=F.Z2)
+            if d in rest_days:
+                _rest(s, "")
+            if d == budget_day:
+                _rest(s, "budget")
+            ss.append(s)
+        return tp.PlannedWeek(week_num=i + 1, start=start, end=start + _dt.timedelta(days=6),
+                              phase="build1", tss_target=float(6 * load),
+                              is_stepback=stepback, sessions=ss)
+    clock.freeze(mon)
+    weeks = [wk(0, [4]), wk(1, [4], budget_day=2), wk(2, [4]),
+             wk(3, [4, 6], stepback=True, load=40)]           # 200 TSS, under 0.9 x 300
+    weeks[3].tss_target = 180.0      # its floor (0.6 / 0.72 of it) leaves a ride to rest
+    tp._enforce_stepback_is_lightest(weeks, g, {})
+    assert [s.session_type for s in weeks[3].sessions].count("rest") == 2

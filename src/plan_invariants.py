@@ -739,16 +739,30 @@ def check_stepback_lightest(weeks, today=None) -> list[Violation]:
         # holding nothing but the test read heavier than a light build week
         # (80 against 78, weekend-event8; the evaluation of b7be0395, D-C).
         load = sum(float(s.tss_estimate or 0) for s in _training(w) if _ridden(s))
-        if not full or load <= 0:
+        if not full:
+            continue
+        if load <= 0:
+            # An unload week holding nothing but the test is the lightest of
+            # its block, and closes it, as the planner's own block rule does
+            # (_is_unload_week): skipped, it left a build week of the block
+            # before as the next unload's reference (3day-ftp, 2026-10-02).
+            if w.is_stepback:
+                block = []
             continue
         if w.is_stepback:
-            if block and load > min(block) + 1:
+            # A load week the budget or readiness rested reads light for what
+            # happened in it: it is not the block's lightest unless every one
+            # of them was rested so (contract 9.7).
+            ref = [x for x, rested in block if not rested] or [x for x, _ in block]
+            if ref and load > min(ref) + 1:
                 out.append(Violation("stepback_lightest", w.week_num,
                                      f"unload week {load:.0f} TSS > lightest load week "
-                                     f"{min(block):.0f} of its block"))
+                                     f"{min(ref):.0f} of its block"))
             block = []
         else:
-            block.append(load)
+            block.append((load, any(s is not None and s.session_type == "rest"
+                                    and (getattr(s, "rest_reason", "") or "")
+                                    in ("budget", "readiness") for s in w.sessions)))
     return out
 
 

@@ -177,6 +177,9 @@ class WeekView:
     # block), else "other" -- so no card has to present the planned sum as
     # the target.
     short_of_budget: Optional[dict] = None
+    # Contract 9.11: the 1.3 x guard's lowering of this week's budget, as the
+    # stored week records it ({"from", "to", "when", "carried"}), else None.
+    budget_lowered: Optional[dict] = None
 
     def as_weekly_plan(self) -> dict:
         """The shape /api/weekly-plan serves.
@@ -203,6 +206,7 @@ class WeekView:
             "sessions": [dict(s) for s in self.sessions],
             "exposure_minutes_planned": {k: int(round(v)) for k, v in self.exposure_minutes_planned.items()},
             "short_of_budget": self.short_of_budget,
+            "budget_lowered": self.budget_lowered,
         }
 
 
@@ -322,4 +326,6 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
         planned_tss=planned if on_record else None,
         sessions=sessions, planned_minutes=minutes, exposure_minutes_planned=exposure,
         short_of_budget=short,
+        budget_lowered=(dict(owner["guard_lowered"]) if owner is not None and len(owners) == 1
+                        and isinstance(owner.get("guard_lowered"), dict) else None),
     )

@@ -912,3 +912,57 @@ def test_9_9_the_week_under_way_is_counted_once(monkeypatch):
     tp.finalize_weeks(b, g, rides=rides)
     assert [(w.start, w.tss_target) for w in a if w.start >= mon] == \
            [(w.start, w.tss_target) for w in b if w.start >= mon]
+
+
+# ── 9.11 A guard-lowered budget is visible, with the way back ────────────
+
+def test_9_11_the_stored_week_carries_the_lowering_and_the_api_serves_it():
+    """The guard's lowering is on the stored week (through the codec that
+    writes the plan), and /api/weekly-plan's view serves that record -- served
+    = stored -- until a sync restores the week."""
+    import week_view
+    g, weeks = _owner_weeks()
+    t = _dt.date(2026, 9, 21)
+    clock.freeze(t)
+    tp.finalize_weeks(weeks, g, normal_week=200)
+    plan = stored(weeks, g)
+    low = [w for w in plan["weeks"] if w.get("guard_lowered")]
+    assert low
+    w = low[0]
+    start = _dt.date.fromisoformat(w["start"])
+    view = week_view.build(plan, start, {}, lambda r: "z2").as_weekly_plan()
+    assert view["budget_lowered"] == w["guard_lowered"]
+    assert read_stored(plan)[plan["weeks"].index(w)].guard_lowered == w["guard_lowered"]
+    tp.finalize_weeks(weeks, g, normal_week=900)
+    plan = stored(weeks, g)
+    assert week_view.build(plan, start, {}, lambda r: "z2").as_weekly_plan()["budget_lowered"] is None
+
+
+def test_9_11_the_dashboard_warns_for_every_lowered_week_ahead():
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    from test_333_owner_fixes import DASHBOARD, _extract_js_function
+    src = DASHBOARD.read_text(encoding="utf-8")
+    fn = _extract_js_function(src, "_guardLoweredHtml")
+    harness = "const esc = s => String(s);\n" + fn + """
+const weeks = [
+  {start: '2026-09-21', end: '2026-09-27', tss_target: 300,
+   guard_lowered: {from: 480, to: 300, when: '2026-09-22', carried: 231}},   // under way
+  {start: '2026-09-28', end: '2026-10-04', tss_target: 350,
+   guard_lowered: {from: 520, to: 350, when: '2026-09-22', carried: 231}},
+  {start: '2026-10-05', end: '2026-10-11', tss_target: 400, guard_lowered: null},
+  {start: '2026-09-14', end: '2026-09-20', tss_target: 200,
+   guard_lowered: {from: 300, to: 200, when: '2026-09-15', carried: 150}},    // past
+];
+const h = _guardLoweredHtml(weeks, '2026-09-23');
+for (const want of ['480', '300', '520', '350', '231', 'regeneratePlan()'])
+  if (h.indexOf(want) < 0) throw new Error('missing ' + want + ': ' + h);
+if (h.indexOf('150') >= 0) throw new Error('a past week warned: ' + h);
+if ((h.match(/lowered from/g) || []).length !== 2) throw new Error('two weeks: ' + h);
+if (_guardLoweredHtml([weeks[2]], '2026-09-23') !== '') throw new Error('no warning without a record');
+console.log('OK');
+"""
+    res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0 and "OK" in res.stdout, res.stderr + res.stdout

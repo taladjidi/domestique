@@ -2123,6 +2123,10 @@ window.addEventListener('unhandledrejection', function(e) {
        this chip is render-only and offers the EXISTING Regenerate action —
        no auto-regen. Hidden unless drift.exceeded. -->
   <div id="plan-drift-chip" style="display:none;margin-bottom:12px;padding:6px 12px;background:rgba(234,179,8,0.08);border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:var(--radius);font-size:12px;color:var(--text2);"></div>
+  <!-- Contract 9.11: weeks whose budget the 1.3x guard lowered after a
+       lighter stretch, read from the stored plan, with the replan that
+       resets them. Hidden when no week ahead carries a lowering. -->
+  <div id="plan-guard-chip" style="display:none;margin-bottom:12px;padding:6px 12px;background:rgba(234,179,8,0.08);border:1px solid var(--border);border-left:3px solid var(--yellow);border-radius:var(--radius);font-size:12px;color:var(--text2);"></div>
 
   <!-- v1.0.3 IMPL-UI: collapsed help panel — explains the four ways the plan
        updates (Reforecast / Regenerate / Availability / Rematch). Closed by
@@ -15429,6 +15433,7 @@ async function loadPlan() {
     await renderPlanJSON(d.plan_json);
     try { populatePlanFormFromGoal(d.plan_json.goal); } catch (_) {}
     try { renderPlanDriftChip(d.plan_json.ctl_drift); } catch (_) {}
+    try { renderPlanGuardChip(d.plan_json.weeks); } catch (_) {}
   }
   if (d.plan) {
     // Also render markdown below as fallback/reference
@@ -15461,6 +15466,31 @@ function renderPlanDriftChip(drift) {
     `<a href="javascript:void(0)" onclick="regeneratePlan()" style="color:var(--accent);text-decoration:none;font-weight:600;">Re-plan?</a>` +
     (drift.generated_on ? ` <span style="color:var(--text3);font-size:10px;">(plan anchored ${esc(String(drift.generated_on).slice(0,10))})</span>` : '');
   chip.style.display = 'block';
+}
+
+// Contract 9.11 — one line per week ahead (not yet ended) whose budget the
+// 1.3x guard holds below the budget it was built with, from the stored
+// week's guard_lowered record; the sync restores the week (and the line
+// goes) as the load returns, and a replan resets it now.
+function _guardLoweredHtml(weeks, todayIso) {
+  const fmt = iso => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', {day: 'numeric', month: 'short'});
+  const lines = (weeks || []).filter(w => w && w.guard_lowered && (w.end || '') >= todayIso)
+    .map(w => {
+      const g = w.guard_lowered;
+      return `Week of ${esc(fmt(w.start))}: budget lowered from <b>${Math.round(g.from)}</b> to ` +
+             `<b>${Math.round(g.to)}</b> TSS because your recent load was ${Math.round(g.carried)} TSS a week.`;
+    });
+  if (!lines.length) return '';
+  return `⚠ ${lines.join('<br>')}<br>It comes back by itself as your load returns — ` +
+    `<a href="javascript:void(0)" onclick="regeneratePlan()" style="color:var(--accent);text-decoration:none;font-weight:600;">replan to reset it now</a>.`;
+}
+
+function renderPlanGuardChip(weeks) {
+  const chip = document.getElementById('plan-guard-chip');
+  if (!chip) return;
+  const html = _guardLoweredHtml(weeks, new Date().toISOString().slice(0, 10));
+  chip.innerHTML = html;
+  chip.style.display = html ? 'block' : 'none';
 }
 
 // ═══ PLAN DYNAMIC ADJUSTMENT ═════════════════════════════════════════════

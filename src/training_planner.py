@@ -10421,6 +10421,74 @@ def _enforce_weekly_volume_ceiling(weeks: list, taper_only: bool = False,
             slot.zwo_name = ""
 
 
+def _hours_room(w, goal, today: date) -> "float | None":
+    """The minutes the rider's weekly hours give the row from ``today`` on:
+    ``hours_per_week`` over the row's remaining days (a stub row, and the week
+    under way, get their days' share). None when the goal sets no weekly
+    hours -- 0 included, as the ramp's own cap reads it (_row_budget)."""
+    hpw = float(getattr(goal, "hours_per_week", 0) or 0)
+    if hpw <= 0:
+        return None
+    return hpw * 60 * ((w.end - max(w.start, today)).days + 1) / 7
+
+
+def _row_minutes(w, today: date) -> int:
+    """The row's planned training minutes from ``today`` on; the race is not
+    training."""
+    return sum(int(s.duration_min or 0) for s in w.sessions
+               if s is not None and s.session_type != "rest"
+               and not getattr(s, "is_race", False) and s.day >= today)
+
+
+def _enforce_weekly_hours(weeks: list, goal, today: date, library: list) -> None:
+    """Contract 9.3 (D5): a week's planned minutes never exceed the rider's
+    weekly hours. The day caps alone did not hold it -- the owner's days sum
+    to 13.5 h against 12.5 h a week, and the sweep's event-fixedcore rider
+    was planned 690 minutes of a 600-minute week. Easy volume goes first:
+    every easy ride shortened in proportion down to the floor, then the
+    shortest rested, one ride always kept; a hard session only when nothing
+    easy is left, eased to endurance and then shed like any easy ride (D1:
+    the budget before the session count)."""
+    for w in weeks:
+        room = _hours_room(w, goal, today)
+        if room is None:
+            continue
+        for _ in range(2 * len(w.sessions) + 2):
+            over = _row_minutes(w, today) - room
+            if over <= 0.5:
+                break
+            easy = [s for s in w.sessions
+                    if _pending_ahead(s, today) and not _rider_owned(s)
+                    and not _session_is_hit(s) and not _race_shape_frozen(s)
+                    and not getattr(s, "is_opener", False) and (s.duration_min or 0) > 0]
+            long_ = [s for s in easy if s.duration_min > _VOLUME_MIN_SESSION_MIN]
+            if long_:
+                # Every easy ride gives its share, by its length above the
+                # floor: one ride cut to a 30-minute stub while its neighbours
+                # kept 95 is not a week anyone plans.
+                spare = sum(s.duration_min - _VOLUME_MIN_SESSION_MIN for s in long_)
+                for s in long_:
+                    cut = math.ceil(min(over, spare) * (s.duration_min - _VOLUME_MIN_SESSION_MIN) / spare)
+                    new = max(_VOLUME_MIN_SESSION_MIN, int(s.duration_min) - cut)
+                    s.tss_estimate = round((s.tss_estimate or 0) * new / float(s.duration_min))
+                    s.duration_min = new
+                continue
+            riding = [s for s in w.sessions if s is not None and s.session_type != "rest"]
+            if easy and len(riding) > 1:
+                s = min(easy, key=lambda x: x.duration_min)
+                s.session_type = "rest"
+                s.duration_min = 0
+                s.tss_estimate = 0
+                s.description = "Rest — the week's hours are already planned"
+                s.rest_reason = "hours"
+                s.zwo_file = ""
+                s.zwo_name = ""
+                continue
+            if not _ease_one_hard(w, library, lambda s: s.day >= today and _pending_ahead(s, today)
+                                  and not _rider_owned(s)):
+                break
+
+
 def _ease_one_hard(wk, library: list, in_scope) -> bool:
     """Turn the latest hard session of ``wk`` still ahead into an endurance
     ride of the same length, serving an easy file. False when none can be."""
@@ -14431,6 +14499,10 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                 extra = per_min * (fd - int(s.duration_min or 0))
                 if fd > cap or (w.tss_target and load + extra > room):
                     continue
+                # ...nor past the week's hours (9.3).
+                hours = _hours_room(w, goal, today)
+                if hours is not None and _row_minutes(w, today) + fd - int(s.duration_min or 0) > hours:
+                    continue
                 s.duration_min = fd
                 _restamp(s, rows)
                 load += extra
@@ -14442,6 +14514,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         _was = _state()
         _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=today,
                                        normal_week=normal_week, library=lib)
+        _enforce_weekly_hours(ahead, goal, today, lib)
         # An unload week lighter than its block (Issurin's 3:1), judged on
         # the loads just set -- on every entry point: it was generate's
         # alone, and a recalculated or extended block left its unload week

@@ -7963,7 +7963,8 @@ function _weekLoadText(week) {
   const txt = `planned ${Math.round(week.planned_tss)} TSS`;
   const s = week.short_of_budget;
   if (!s || !s.budget) return txt;
-  const why = s.reason === 'hours' ? 'your weekly hours are full'
+  const why = s.reason === 'ridden' ? `${Math.round(s.ridden || 0)} TSS already ridden this week`
+            : s.reason === 'hours' ? 'your weekly hours are full'
             : s.reason === 'unload' ? 'a recovery week, kept light'
             : 'the plan holds less this week';
   return `${txt} of a ${Math.round(s.budget)} budget — ${why}`;

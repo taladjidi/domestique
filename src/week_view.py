@@ -170,10 +170,12 @@ class WeekView:
     planned_minutes: int = 0
     exposure_minutes_planned: dict = field(default_factory=dict)
     # Contract 9.6: a week planned under its budget by more than the
-    # tolerance says so -- {"budget", "planned", "reason"}: "hours" when the
-    # rider's weekly hours are full, "unload" for a recovery or taper week
-    # (sized against its block, never filled), else "other" -- so no card
-    # has to present the planned sum as the target.
+    # tolerance says so -- {"budget", "planned", "reason"}: "ridden" when the
+    # rides so far and what is still planned reach the budget (then
+    # "ridden" carries the rides' TSS), "hours" when the rider's weekly hours
+    # are full, "unload" for a recovery or taper week (held lighter than its
+    # block), else "other" -- so no card has to present the planned sum as
+    # the target.
     short_of_budget: Optional[dict] = None
 
     def as_weekly_plan(self) -> dict:
@@ -213,8 +215,11 @@ def _placeholder(day: date) -> dict:
 
 
 def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[dict], str],
-          naming: Optional[Callable[[str], tuple]] = None, offset: int = 0) -> WeekView:
-    """The week beginning ``start`` (a Monday) as the stored ``plan`` has it."""
+          naming: Optional[Callable[[str], tuple]] = None, offset: int = 0,
+          rides=None) -> WeekView:
+    """The week beginning ``start`` (a Monday) as the stored ``plan`` has it.
+    ``rides`` (the ride records, as week_done reads them) tell a week whose
+    budget the rider's rides already spent from one the plan left short."""
     end = start + timedelta(days=6)
     s_iso, e_iso = start.isoformat(), end.isoformat()
     # A replaced plan's prescriptions (kept by Generate) are on record too.
@@ -284,13 +289,30 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
         hpw = float(((plan or {}).get("goal") or {}).get("hours_per_week") or 0)
         days = sum(1 for s in sessions if s.get("on_record"))
         phase = str((owner or {}).get("phase") or "").lower()
-        if hpw > 0 and minutes >= hpw * 60 * days / 7 - 15:
+        # What the rider rode this week, and what the plan still asks after
+        # today: when those reach the budget, the planner held the rest of
+        # the week back because the rides spent it (the owner's 09-21 after
+        # the 09-25 sync: 434 planned of 479, 503 ridden, Friday rested by
+        # the budget) -- the evaluation of a73647b3, S3.
+        today = clock.today()
+        ridden = week_done(rides, start, min(end, today)) if rides is not None else 0.0
+        rode_today = rides is not None and week_done(rides, today, today) > 0
+        first = (today + timedelta(days=1) if rode_today else today).isoformat()
+        ahead = sum(float(x.get("tss_estimate") or 0) for x in sessions
+                    if x.get("on_record") and x.get("session_type") != "rest"
+                    and (x.get("status") or "pending") == "pending"
+                    and (x.get("day") or "") >= first)
+        if ridden > 0 and (ridden + ahead) * BUDGET_TOLERANCE >= budget:
+            reason = "ridden"
+        elif hpw > 0 and minutes >= hpw * 60 * days / 7 - 15:
             reason = "hours"
         elif (owner or {}).get("is_stepback") or phase in UNLOAD_PHASES:
-            reason = "unload"           # sized against its block, never filled (9.1)
+            reason = "unload"           # held under its block's lightest week
         else:
             reason = "other"
         short = {"budget": budget, "planned": round(planned, 1), "reason": reason}
+        if reason == "ridden":
+            short["ridden"] = round(ridden, 1)
     return WeekView(
         start=start, end=end, offset=offset, on_record=on_record,
         week_num=int((owner or {}).get("week_num") or 0),

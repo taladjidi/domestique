@@ -8900,7 +8900,7 @@ def _read_stored_plan() -> "dict | None":
         return None
 
 
-def _stored_week_view(plan: "dict | None", week_offset: int = 0):
+def _stored_week_view(plan: "dict | None", week_offset: int = 0, rides=None):
     """The ISO week ``week_offset`` weeks from today's, as ``plan`` stores it:
     the one week_view.WeekView every card reads."""
     import week_view as _wv
@@ -8917,7 +8917,7 @@ def _stored_week_view(plan: "dict | None", week_offset: int = 0):
     return _wv.build(
         plan, start, lib_by_file, tp._session_type_from_row,
         naming=lambda zf: _session_naming_lookup(zf, classifications, lib_by_file),
-        offset=week_offset)
+        offset=week_offset, rides=rides)
 
 
 @app.get("/api/weekly-plan")
@@ -8935,7 +8935,13 @@ def api_weekly_plan(week_offset: int = Query(0)):
     training = cached("training", get_today_metrics)
     current_ctl = _planning_ctl()
     plan = _read_stored_plan()
-    result = _stored_week_view(plan, week_offset).as_weekly_plan()
+    # The rides, so a week whose budget they already spent says so (9.6, the
+    # evaluation of a73647b3, S3): the same records /api/week-summary reads.
+    try:
+        rides = api_activities()
+    except Exception:  # noqa: BLE001 -- the view stands without them
+        rides = None
+    result = _stored_week_view(plan, week_offset, rides=rides).as_weekly_plan()
     try:
         if plan:
             g = plan.get("goal", {})

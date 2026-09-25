@@ -513,6 +513,9 @@ if (!/planned 300 TSS/.test(a) || !/400/.test(a) || !/hours/.test(a) || /target/
 const b = _weekLoadText({planned_tss: 300, tss_budget: 400, short_of_budget:
                          {budget: 400, planned: 300, reason: 'other'}});
 if (!/planned 300 TSS/.test(b) || !/400/.test(b) || /hours/.test(b)) throw new Error('other: ' + b);
+const r = _weekLoadText({planned_tss: 434, tss_budget: 479, short_of_budget:
+                         {budget: 479, planned: 434, reason: 'ridden', ridden: 503}});
+if (!/503 TSS already ridden/.test(r) || /plan holds less/.test(r)) throw new Error('ridden: ' + r);
 const u = _weekLoadText({planned_tss: 261, tss_budget: 387, short_of_budget:
                          {budget: 387, planned: 261, reason: 'unload'}});
 if (!/recovery week/.test(u) || /could not/.test(u)) throw new Error('unload: ' + u);
@@ -730,3 +733,31 @@ def test_9_10_an_unload_week_carries_its_own_budget(kind):
                 assert s.duration_min <= tp.STEPBACK_LONG_RIDE_CAP_MIN
         block = []
     assert seen >= 1
+
+
+def test_9_6_a_week_the_rides_spent_says_so():
+    """The owner's week of 09-21 after the 09-25 sync: 434 planned of a 479
+    budget, 503 ridden, Friday rested by the budget. It read "the plan holds
+    less this week" (the evaluation of a73647b3, S3); the reason is the
+    rides, and the view carries what they came to."""
+    import week_view
+    mon = _dt.date(2026, 9, 21)
+    clock.freeze(_dt.date(2026, 9, 25))
+    load = [(135, "done"), (135, "missed"), (96, "done_partial"), (68, "pending")]
+    ss = [{"day": (mon + _dt.timedelta(days=i)).isoformat(), "session_type": "z2",
+           "duration_min": 90, "tss_estimate": t, "zwo_file": "", "status": st}
+          for i, (t, st) in enumerate(load)]
+    ss += [{"day": (mon + _dt.timedelta(days=4)).isoformat(), "session_type": "rest",
+            "duration_min": 0, "tss_estimate": 0, "rest_reason": "budget"}]
+    plan = {"goal": {"type": "continuous", "hours_per_week": 15.0},
+            "weeks": [{"week_num": 1, "start": mon.isoformat(),
+                       "end": (mon + _dt.timedelta(days=6)).isoformat(), "phase": "continuous",
+                       "tss_target": 479.0, "is_stepback": False, "sessions": ss}]}
+    rides = [{"date": "2026-09-21", "tss": 205.0}, {"date": "2026-09-23", "tss": 18.0},
+             {"date": "2026-09-24", "tss": 280.0}]
+    got = week_view.build(plan, mon, {}, lambda r: "z2", rides=rides).as_weekly_plan()
+    assert got["short_of_budget"] == {"budget": 479.0, "planned": 434.0, "reason": "ridden",
+                                      "ridden": 503.0}
+    # without the rides, as before: no reason to name them
+    got = week_view.build(plan, mon, {}, lambda r: "z2").as_weekly_plan()
+    assert got["short_of_budget"]["reason"] == "other"

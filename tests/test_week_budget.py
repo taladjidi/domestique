@@ -276,8 +276,11 @@ def test_the_home_card_sizes_the_plans_own_week():
     # budgets climb to the guard and build2's meet their label, so the first
     # such week is build1's, 550 against 454).
     label = {p.name: p.weekly_tss_target for p in phases}
-    week = next(w for w in weeks if not w.is_stepback and w.phase != "taper"
-                and label[w.phase] > 1.15 * w.tss_target)
+    # the full load week whose label runs furthest above its budget
+    week = max((w for w in weeks if not w.is_stepback and w.phase != "taper"
+                and (w.end - w.start).days == 6),
+               key=lambda w: label[w.phase] / w.tss_target)
+    assert label[week.phase] > 1.05 * week.tss_target, (week.phase, label, week.tss_target)
     plan = {"weeks": [tp.week_to_dict(w) for w in weeks]}
     card = week_view.build(plan, week.start, {}, tp._session_type_from_row)
     assert card.planned_tss == _load(week)

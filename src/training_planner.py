@@ -10624,8 +10624,11 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
     keeps its file while the file fits the new length, else serves an easy
     file that does (L-4; one not used elsewhere in the week first, then the
     nearest the old file's TSS an hour, never carrying less than the shorter
-    ride did), and carries that file's load (6.8). Unload, taper and race weeks are sized
-    against their block and are left alone.
+    ride did), and carries that file's load (6.8). An unload week grows to its
+    own, lower budget too (9.10), its long ride within the stepback cap; the
+    unload rules (lighter than its block, the rider's rest pattern) run after
+    it in the final step. Taper and race weeks are shaped by their own
+    passes and are left alone.
 
     The row under way is held to what is left of it (_row_net, D2: ``rides``
     through today, else the sessions of ``weeks`` before today), and its
@@ -10641,7 +10644,7 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
     if target is not None:
         budget = min(budget, float(target))
     target = budget
-    if (target <= 0 or not library or _is_unload_week(pw)
+    if (target <= 0 or not library
             or str(getattr(pw, "phase", "")).lower() == "taper" or _race_in_week(pw, goal)):
         return
     first = _ahead_from(today, rides)
@@ -10664,6 +10667,8 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
             continue
         row = rows.get((s.zwo_file or "").strip())
         cap, _ = _date_cap_min(goal, s.day, cal)
+        if getattr(pw, "is_stepback", False):
+            cap = min(cap, STEPBACK_LONG_RIDE_CAP_MIN)     # B4: a deload's long ride
         room = cap - int(s.duration_min)
         if row is None or room <= 0:
             continue
@@ -10807,8 +10812,15 @@ def _enforce_stepback_is_lightest(weeks: list, goal=None,
             # FC1-CLIP (v2.5.0): a clipped short row (<7 days, phase seam) is
             # not a real build week — its tiny TSS would drag the lightest-ref
             # down and force the deload toward zero. Full rows only.
+            # ...and not one begun before today: half ridden, it is history
+            # to the auditor (check_stepback_lightest), which compares an
+            # unload week with nothing that started behind the rider. Read
+            # here, the two disagreed on the block once unload weeks carried
+            # their budgets (9.10): a reforecast's week under way was the
+            # planner's reference and not the auditor's.
             if (getattr(weeks[j], "phase", "") != "taper"
-                    and ((weeks[j].end - weeks[j].start).days + 1) >= 7):
+                    and ((weeks[j].end - weeks[j].start).days + 1) >= 7
+                    and weeks[j].start >= _today):
                 builds.append(weeks[j])
             j -= 1
         if not builds:

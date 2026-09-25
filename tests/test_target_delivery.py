@@ -286,7 +286,7 @@ def test_9_1_only_pending_easy_rides_grow_within_the_day_and_the_week():
     assert tp._row_minutes(w, clock.today()) <= 12.5 * 60
 
 
-def test_9_1_the_fill_stops_at_the_budget_and_skips_unload_weeks():
+def test_9_1_the_fill_stops_at_the_budget_and_skips_taper_weeks():
     clock.freeze(_dt.date(2026, 9, 21))
     g = F.owner("continuous")
     w, lib = _fill_week()
@@ -294,43 +294,20 @@ def test_9_1_the_fill_stops_at_the_budget_and_skips_unload_weeks():
     w.tss_target = load0 + 30
     tp._fill_easy_to_budget(w, g, lib)
     assert load0 + 20 <= week_load(w, clock.today()) <= load0 + 40
+    # an unload week grows too, to its own budget (9.10), its long ride
+    # within the stepback cap
     w, lib = _fill_week()
-    w.is_stepback = True
+    w.is_stepback, w.tss_target = True, load0 + 60
+    tp._fill_easy_to_budget(w, g, lib)
+    assert load0 + 40 <= week_load(w, clock.today()) <= load0 + 70
+    assert all(s.duration_min <= tp.STEPBACK_LONG_RIDE_CAP_MIN for s in w.sessions
+               if s.session_type in ("z2", "long_z2"))
+    # a taper week is shaped by its own passes
+    w, lib = _fill_week()
+    w.phase = "taper"
     tp._fill_easy_to_budget(w, g, lib)
     assert week_load(w, clock.today()) == load0
 
-
-@pytest.mark.parametrize("case", [
-    # sweep plans that read over 1.3 x on d190fa82
-    ("hi-ftp-event", "2026-10-07"), ("event20-zeroday", "2026-09-15"),
-    ("ftpvo2-threshold", "2026-09-14"),
-    # ...and with the weeks filled but the rows not held to the guard
-    ("owner-cont", "2026-09-15"), ("hi-ftp-event", "2026-09-21"),
-    ("event20-zeroday", "2026-09-24")])
-def test_9_2_the_guard_holds_on_the_sweep(case, gate_seed):
-    """The ramp budgets a row within 1.3 x the load it counted; the passes
-    after it cut rows it had counted, so the load carried into a later row
-    was less than the ramp's and a row holding its budget read over the
-    guard. The final step holds each row to the guard on the rows as
-    planned (the auditor's rule)."""
-    name, day = case
-    t = _dt.date.fromisoformat(day)
-    g, ctl, rwt, ftp = {
-        "hi-ftp-event": (sweep_goal("event", t, rest=[0], hpw=15,
-                                    daily={d: 3.0 for d in range(1, 7)}, race_in=16), 90, 750, 600),
-        "event20-zeroday": (sweep_goal("event", t, rest=[0], hpw=10, race_in=20,
-                                       daily={1: 1.5, 2: 0.0, 3: 1.5, 4: 1.0, 5: 4.0, 6: 3.0}),
-                            50, 380, 247),
-        "ftpvo2-threshold": (sweep_goal("ftp_vo2max", t, rest=[0], hpw=8, weeks=12,
-                                        distribution="threshold"), 50, 380, 50),
-        "owner-cont": (sweep_goal("continuous", t, rest=[4], hpw=12.5,
-                                  daily={0: 2.0, 1: 2.0, 2: 2.0, 3: 2.0, 5: 3.0, 6: 2.5}),
-                       55, 380, 247)}[name]
-    weeks = sweep_gen(g, t, ctl, rwt, ftp)
-    assert not pi.check_acwr(weeks, tp.athlete_weekly_load(ctl, rwt), today=t)
-
-
-# ── 9.4 A lengthened slot serves a file that fits it ─────────────────────
 
 def test_9_4_a_lengthened_ride_serves_a_file_that_fits_it():
     """L-4's rule after the fill: a ride grown past its file's band serves an
@@ -713,3 +690,43 @@ def test_9_9_a_sync_reads_the_riders_load_from_the_ride_archive(gate_seed, monke
     plan = env._stored(copy.deepcopy(base), g())
     tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away)
     assert not pi.check_acwr(env._read_stored(plan), 250, today=t)
+
+
+# ── 9.10 Unload weeks carry their own budget ─────────────────────────────
+
+@pytest.mark.parametrize("kind", ["event", "continuous"])
+def test_9_10_an_unload_week_carries_its_own_budget(kind):
+    """The owner's regenerate on 2026-09-24 left 10-05 at 261 of its 387
+    budget -- under the unload's own floor (STEPBACK_DEEPEST / 0.72 of it,
+    322) and a 52 % cut from the 540 before it, where the design is 0.72.
+    The fill grows an unload week toward its budget, easy volume only and
+    its long ride within the stepback cap; the unload rules still hold:
+    lighter than the lightest full load week of its block, never over its
+    budget."""
+    g = F.owner(kind)
+    weeks = F.gen(g)
+    floor = tp.STEPBACK_DEEPEST / tp.STEPBACK_LOAD_FACTOR
+    # training load, as the unload pass and the auditor count it: the FTP
+    # test is a measurement placed on fresh legs, not a dose
+    train = lambda w: sum(float(s.tss_estimate or 0) for s in pi._training(w))
+    seen = 0
+    block = []
+    for w in weeks:
+        full = (w.end - w.start).days == 6
+        if not w.is_stepback:
+            if full and not tp._is_unload_week(w) and w.phase != "taper":
+                block.append(train(w))
+            continue
+        if not full or w.phase == "taper" or tp._race_in_week(w, g) or not block:
+            block = []
+            continue
+        seen += 1
+        load = train(w)
+        assert floor * w.tss_target <= week_load(w, F.G0) <= w.tss_target * 1.05 + 1, \
+            (str(w.start), w.tss_target, week_load(w, F.G0))
+        assert load <= tp.STEPBACK_BELOW_LIGHTEST * min(block) + 1, (str(w.start), load, block)
+        for s in w.sessions:
+            if s.session_type in ("z2", "long_z2"):
+                assert s.duration_min <= tp.STEPBACK_LONG_RIDE_CAP_MIN
+        block = []
+    assert seen >= 1

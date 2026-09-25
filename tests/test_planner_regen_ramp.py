@@ -136,7 +136,13 @@ def test_mid_plan_regen_continues_long_ride_ramp(frozen_today):
     ]
     assert eligible, "no ramp-eligible future weeks after regen"
 
-    first_long = _long_ride_min(eligible[0])
+    # The first two eligible weeks: since the 1.3 x guard holds every week to
+    # the load the rider carries (contract 9.9) and the unload week before
+    # them carries its own budget (9.10), the first week back can be trimmed
+    # by its budget (the Thursday anchor: 296 TSS, the long ride cut to 122
+    # min, the next week 270) -- a budget, not a reset, which would put both
+    # at ~floor.
+    first_long = max(_long_ride_min(w) for w in eligible[:2])
     # If the ramp RESET, the first eligible week would sit at ~floor (one step
     # at most). Continuing the ramp from ~6 elapsed weeks puts it well past
     # floor + a couple of steps. Require a clear margin so this can't pass by a

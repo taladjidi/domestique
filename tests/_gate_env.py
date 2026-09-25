@@ -246,10 +246,16 @@ def _reforecast(days, tsb=None, avail=False):
         series = (None if tsb is None else
                   {t - _dt.timedelta(days=i): float(tsb) for i in range(15)})
         overrides = None
-        if avail:
-            overrides = {(t + _dt.timedelta(days=1)).isoformat(): 0.0,
-                         (t + _dt.timedelta(days=2)).isoformat(): 3.0}
         wk = copy.deepcopy(base)
+        if avail:
+            # The next two TRAINING days after t: a fixed t+1 / t+2 reached
+            # nothing once the unload week rested that Tuesday (event/wkend5h
+            # reforecast@21, since unload weeks carry their budgets: 9.10),
+            # and the self-test flagged the case as exercising nothing.
+            ahead = sorted(s.day for w_ in wk for s in w_.sessions
+                           if s.day > t and s.session_type != "rest")[:2]
+            if len(ahead) == 2:
+                overrides = {ahead[0].isoformat(): 0.0, ahead[1].isoformat(): 3.0}
         if tsb is not None:
             own_some(wk, t)
         at(t)

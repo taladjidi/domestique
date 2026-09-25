@@ -1111,3 +1111,26 @@ def test_mf3_a_monday_sync_reads_the_same_load_as_tuesdays(monkeypatch):
     tp.finalize_weeks(b, g)
     assert [(w.start, w.tss_target) for w in a if w.start > mon] == \
            [(w.start, w.tss_target) for w in b if w.start > mon]
+
+
+def test_mf2_a_restored_week_gets_its_easy_volume_back():
+    """A sync that lowered a week trims its sessions; when the load returns
+    and a sync restores the budget, the easy volume grows back toward it
+    (within the date and week caps, easy only). A sync never topped a week
+    up, so the owner's 09-28 went 485 -> 423 planned with its budget back at
+    469, and a light run's 10-12 went 351 -> 322 -> 295 planned while its
+    budget went 396 -> 361 -> 396 (the evaluation of 3793952c, MF-2)."""
+    g, weeks = _owner_weeks()
+    t = _dt.date(2026, 9, 21)
+    clock.freeze(t)
+    nxt = _dt.date(2026, 9, 28)
+    before = week_load(next(w for w in weeks if w.start == nxt), t)
+    tp.finalize_weeks(weeks, g, normal_week=200)
+    low = week_load(next(w for w in weeks if w.start == nxt), t)
+    assert low < 0.9 * before
+    tp.finalize_weeks(weeks, g, normal_week=900)
+    w = next(w for w in weeks if w.start == nxt)
+    back = week_load(w, t)
+    assert back >= 0.95 * min(before, w.tss_target), (before, low, back, w.tss_target)
+    assert all(s.duration_min <= tp._date_cap_min(g, s.day, {})[0] for s in w.sessions
+               if s.session_type != "rest")

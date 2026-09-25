@@ -10642,7 +10642,7 @@ def _race_in_week(w, goal) -> bool:
 
 def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
                          calendar: "dict | None" = None, rides=None, matched=(),
-                         weeks: "list | None" = None) -> None:
+                         weeks: "list | None" = None, revive: bool = False) -> None:
     """Contract 9.1/9.2 (D2 made real): a load week's easy rides grow until
     the week carries its budget, before the ramp reads the week.
 
@@ -10668,7 +10668,10 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
     through today, else the sessions of ``weeks`` before today), and its
     load is the days still to plan (_ahead_from: tomorrow once a ride is
     dated today). ``target`` caps the budget further (a TrainingWeek row's
-    net).
+    net). ``revive``: a week the guard has just restored to its budget also
+    gets back the easy days a lowering rested (rest_reason "budget" or
+    "hours", written by the planner, not an adaptation), as z2 rides of at
+    least the volume floor (MF-2).
     """
     today = clock.today()
     budget = float(pw.tss_target or 0)
@@ -10707,6 +10710,20 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
         if row is None or room <= 0:
             continue
         cand.append((s, room, float(row["TSS"]) / float(row["Duration(min)"])))
+    if revive:
+        easy_rate = served_band_tss_per_hour(library)["z1z2"] / 60.0
+        for s in pw.sessions:
+            if (s is None or s.session_type != "rest" or s.day < first
+                    or (getattr(s, "rest_reason", "") or "") not in ("budget", "hours")
+                    or getattr(s, "adapted", False) or _rider_owned(s)
+                    or getattr(s, "status", "pending") != "pending"
+                    or getattr(s, "is_race", False)):
+                continue
+            cap, _ = _date_cap_min(goal, s.day, cal)
+            if getattr(pw, "is_stepback", False):
+                cap = min(cap, STEPBACK_LONG_RIDE_CAP_MIN)
+            if cap >= _VOLUME_MIN_SESSION_MIN:
+                cand.append((s, cap, easy_rate))
     hours = _hours_room(pw, goal, today)
     if hours is not None:
         left = hours - _row_minutes(pw, today)
@@ -10722,16 +10739,17 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
     used = {(s.zwo_file or "").strip() for s in pw.sessions if s is not None}
     for s, room, rate in cand:
         add = int(room * grow)
-        if add < _FILL_MIN_ADD_MIN:
+        rested = s.session_type == "rest"
+        if add < (_VOLUME_MIN_SESSION_MIN if rested else _FILL_MIN_ADD_MIN):
             continue
-        slot = int(s.duration_min) + add
-        row = rows[(s.zwo_file or "").strip()]
+        slot = int(s.duration_min or 0) + add
+        row = rows.get((s.zwo_file or "").strip()) or {}
         band = _slot_file_band_min(slot)
-        if abs(float(row["Duration(min)"]) - slot) > band:
+        if rested or abs(float(row["Duration(min)"]) - slot) > band:
             # A file that fits the new length (L-4), no lighter an hour than
             # the old one's nearest: a longer ride that carries less than
             # the shorter one did is not growth.
-            cc = _content_class_for_row(row)
+            cc = _content_class_for_row(row) if row else "endurance"
             fits = [x for x in _served_pool(library)
                     if x[2] in (cc, "endurance") and abs(x[0] - slot) <= band
                     and float(x[3].get("IF") or 0) <= _EASY_SLOT_IF_CEILING   # B5
@@ -10742,6 +10760,10 @@ def _fill_easy_to_budget(pw, goal, library, target: "float | None" = None,
                 (x[3].get("File") or "") in used, abs(x[1] - rate), abs(x[0] - slot),
                 x[3].get("File") or ""))
         used.add(row.get("File") or "")
+        if rested:
+            s.session_type = "z2"
+            s.rest_reason = ""
+            s.description = f"z2 ({slot}min) — back with the week's budget"
         s.zwo_file = row.get("File") or ""
         s.zwo_name = row.get("Name") or ""
         s.duration_min = slot
@@ -14759,6 +14781,7 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
     # lowers a budget (a sync never tops a week up: only the rows an entry
     # point built are filled, below).
     fresh = {id(w) for w in built or []}
+    restored: set = set()
 
     def _guard():
         if not normal_week or float(normal_week) <= 0:
@@ -14822,7 +14845,12 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
                         w.tss_target = new
                     else:
                         # 9.9 amended: the load came back; the week goes back
-                        # to its budget, never above it.
+                        # to its budget, never above it -- and its easy
+                        # volume with it (MF-2): the sessions a lowering
+                        # trimmed come back, or the budget tracked and the
+                        # planned load ratcheted down.
+                        if built > float(w.tss_target or 0):
+                            restored.add(id(w))
                         w.tss_target = built
                         w.guard_lowered = None
             # ...as the ramp follows a row: its load, capped at its budget
@@ -14952,12 +14980,13 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         # step widened it back to Monday the stub's share is no longer
         # visible here -- a top-up to the whole week's remainder filled the
         # owner's Friday on 2026-09-24 (M1).
-        for w in (x for x in ahead if id(x) in fresh and x.start >= today):
+        for w in (x for x in ahead if (id(x) in fresh or id(x) in restored)
+                  and x.start >= today):
             # The week owner's net, where it wrote one (TrainingWeek), bounds
             # the fill: it reads a stub row's target as the gross.
             _t = getattr(w, "net_tss_target", None)
             _fill_easy_to_budget(w, goal, lib, _t, calendar=cal, rides=rides,
-                                 matched=matched, weeks=weeks)
+                                 matched=matched, weeks=weeks, revive=id(w) in restored)
         _guard()
         _enforce_weekly_volume_ceiling(ahead, ceiling_of=net, from_day=first,
                                        normal_week=normal_week, library=lib)

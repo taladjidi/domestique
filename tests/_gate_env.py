@@ -31,7 +31,12 @@ import sys
 import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-os.environ["DOMESTIQUE_HOME"] = tempfile.mkdtemp(prefix="domestique-gate-")
+_HOME = tempfile.mkdtemp(prefix="domestique-gate-")
+os.environ["DOMESTIQUE_HOME"] = _HOME
+# ...and gone when the process ends: every run left one behind in /tmp.
+import atexit  # noqa: E402
+import shutil  # noqa: E402
+atexit.register(shutil.rmtree, _HOME, True)
 os.environ["DOMESTIQUE_NO_NET"] = "1"
 sys.path.insert(0, str(HERE.parent / "src"))
 

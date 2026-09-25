@@ -31,6 +31,7 @@ export PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0
 # before running anything. The gate wants the ephemeral layering it has always
 # used: the existing .venv, plus the test-only packages named here.
 PYT=(uv run --no-project --quiet --with pytest --with pytest-timeout --with pytest-xdist
+     --with pytest-subtests
      --with fitparse --with Pillow
      --python .venv/bin/python -m pytest -p no:cacheprovider)
 

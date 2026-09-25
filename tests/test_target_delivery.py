@@ -635,6 +635,16 @@ def test_9_3_the_fill_itself_stays_within_the_weekly_hours():
 
 # ── 9.9 The 1.3 x guard runs on every sync ───────────────────────────────
 
+def stored(weeks, goal):
+    """The plan as the app keeps it on disk, through the planner's codec
+    (not tests/_gate_env: importing it pins the process's clock for good)."""
+    return {"goal": tp.goal_to_dict(goal), "weeks": [tp.week_to_dict(w) for w in weeks]}
+
+
+def read_stored(plan):
+    return [tp.week_from_dict(w) for w in plan["weeks"]]
+
+
 def _weekend_away(gate_seed_unused=None):
     t0, t = _dt.date(2026, 9, 14), _dt.date(2026, 9, 17)
     g = lambda: sweep_goal("event", t0, rest=[0, 1, 2, 3, 4], daily={5: 4.0, 6: 4.0},
@@ -662,12 +672,11 @@ def test_9_9_a_sync_brings_the_weeks_after_a_lighter_stretch_down(gate_seed):
 
 def test_9_9_every_sync_holds_the_guard(gate_seed):
     """reforecast_dict (what every sync runs) and refit hold it too."""
-    import _gate_env as env
     g, base, t, away = _weekend_away()
-    plan = env._stored(copy.deepcopy(base), g())
+    plan = stored(copy.deepcopy(base), g())
     tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away,
                        recent_weekly_tss=250)
-    assert not pi.check_acwr(env._read_stored(plan), 250, today=t)
+    assert not pi.check_acwr(read_stored(plan), 250, today=t)
 
 
 @pytest.mark.parametrize("kind", ["event", "continuous"])
@@ -687,12 +696,11 @@ def test_9_9_a_sync_reads_the_riders_load_from_the_ride_archive(gate_seed, monke
     """The app hands a sync no load: the final step reads the archive
     (ride_storage.chronic_weekly_tss, each ride once, cycling only)."""
     import ride_storage
-    import _gate_env as env
     g, base, t, away = _weekend_away()
     monkeypatch.setattr(ride_storage, "chronic_weekly_tss", lambda *a, **k: 250.0)
-    plan = env._stored(copy.deepcopy(base), g())
+    plan = stored(copy.deepcopy(base), g())
     tp.reforecast_dict(plan, recent_activities=[], availability_overrides=away)
-    assert not pi.check_acwr(env._read_stored(plan), 250, today=t)
+    assert not pi.check_acwr(read_stored(plan), 250, today=t)
 
 
 # ── 9.10 Unload weeks carry their own budget ─────────────────────────────
@@ -761,3 +769,41 @@ def test_9_6_a_week_the_rides_spent_says_so():
     # without the rides, as before: no reason to name them
     got = week_view.build(plan, mon, {}, lambda r: "z2").as_weekly_plan()
     assert got["short_of_budget"]["reason"] == "other"
+
+
+# ── MF-A (evaluation of f59ccdee): a gate that pollutes is not a gate ────
+
+def test_no_test_module_imports_the_gate_env_in_process():
+    """tests/_gate_env.py freezes the planner's clock at 2026-09-14 for good,
+    repoints DOMESTIQUE_HOME and pins the athlete id, for the rest of the
+    process: imported by two tests here it failed test_v175_apply_tier_down
+    serially ("No session at 2026-09-14") and whatever shared an xdist
+    worker. Only the characterization and parity scripts, which run in their
+    own process, may import it."""
+    import ast
+    bad = []
+    for f in sorted((ROOT / "tests").glob("test_*.py")):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            if "_gate_env" in names:
+                bad.append(f"{f.name}:{node.lineno}")
+    assert not bad, bad
+
+
+def test_the_gate_env_removes_its_data_home():
+    """Each import made a /tmp/domestique-gate-* directory and left it."""
+    import os
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, "-c", "import os, sys; sys.path.insert(0, 'tests'); import _gate_env; "
+                               "print(os.environ['DOMESTIQUE_HOME'])"],
+        cwd=ROOT, capture_output=True, text=True, timeout=300,
+        env={**os.environ, "DOMESTIQUE_NO_NET": "1"})
+    home = out.stdout.strip().splitlines()[-1]
+    assert home.startswith("/") and "domestique-gate-" in home, out.stdout + out.stderr
+    left = os.path.exists(home)
+    if left:
+        import shutil
+        shutil.rmtree(home, ignore_errors=True)
+    assert not left, home

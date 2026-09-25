@@ -91,3 +91,18 @@ fractions; hard-session counts.
   the date and week hours, never above the unload budget; the unload rules
   (lighter than the builds, rest pattern per 9.7) still hold after the fill.
   Owner case: 10-05 must no longer sit at 261 of a 387 budget.
+
+## Owner's decision, third round (2026-09-25 evening)
+- **9.11 A guard-lowered budget is visible, with the way back.** When the
+  1.3 × guard lowers a week's budget on a sync (9.9), the stored plan records
+  it on that week — from, to, when, and the carried load it used — written by
+  the plan's one writer, never kept elsewhere. The dashboard shows a warning
+  for every such week ahead: the budget was lowered from X to Y because the
+  recent load was Z, and a replan resets it, with the replan action right
+  there (the regenerate the Plan tab already offers). The API serves the same
+  record (served = stored). A replan clears the records it supersedes. The
+  warning disappears when no stored week carries one.
+- **Where the guard's load comes from (checked 2026-09-25):** no app call
+  site passes `recent_weekly_tss`; `athlete_weekly_load(None, None)` reads the
+  ride archive itself (ride_storage.chronic_weekly_tss, 28-day EWMA, rides
+  counted once, cycling only), else CTL × 7. That is the one reader; keep it so.

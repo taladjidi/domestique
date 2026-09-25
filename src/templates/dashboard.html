@@ -7955,6 +7955,18 @@ function _renderDfaPerRide(d) {
 // "score is 4.7 because last week was a 70% TSS overreach with 150min
 // unplanned tempo — apply the tier-down button above to drop today's
 // vo2max session by one tier."
+// The This Week badge's load line (contract 9.6). The sessions' sum is what
+// is planned, never "the target"; a week the planner could not fill to its
+// budget shows the budget and why (/api/weekly-plan short_of_budget).
+function _weekLoadText(week) {
+  if (!week || week.planned_tss == null) return 'no plan on record';
+  const txt = `planned ${Math.round(week.planned_tss)} TSS`;
+  const s = week.short_of_budget;
+  if (!s) return txt;
+  return `${txt} of a ${Math.round(s.budget)} budget — ` +
+    (s.reason === 'hours' ? 'your weekly hours are full' : 'the week could not hold more');
+}
+
 async function loadLastWeekFeedback() {
   const card = document.getElementById('last-week-feedback-card');
   const host = document.getElementById('last-week-feedback-content');
@@ -17251,8 +17263,7 @@ async function loadWeeklyCalendar() {
     // Phase badge
     const phaseBadge = week.phase ? `<span class="badge b-good">${week.phase.toUpperCase()}</span>` : '';
     const stepback = week.is_stepback ? '<span class="badge b-med" style="margin-left:4px;">RECOVERY WEEK</span>' : '';
-    const _tgt = week.planned_tss == null ? 'no plan on record' : `TSS target: ${Math.round(week.planned_tss)}`;
-    $('week-phase-badge').innerHTML = `${phaseBadge}${stepback} <span style="font-size:9px;color:var(--text3);">${_tgt}</span>`;
+    $('week-phase-badge').innerHTML = `${phaseBadge}${stepback} <span style="font-size:9px;color:var(--text3);">${esc(_weekLoadText(week))}</span>`;
 
     // Event countdown card
     const er = week.event_readiness;
@@ -17407,9 +17418,9 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
   const overshoot = done > target && target > 0;
 
   const tssCopy =
-    target === 0                             ? 'No TSS target set this week.' :
+    target === 0                             ? 'Nothing planned this week.' :
     done === 0 && weekElapsed === 0          ? 'Week just started — plan ahead.' :
-    done >= target                           ? 'On target. Hold the line.' :
+    done >= target                           ? 'On plan. Hold the line.' :
     pct >= 80                                ? 'Close to plan.' :
     pct < 50                                 ? 'Behind plan — one solid session closes it.' :
                                                'Under plan, but climbing.';
@@ -17421,7 +17432,7 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
       <div class="wr-tss-bar" role="progressbar"
            aria-valuenow="${done}" aria-valuemin="0"
            aria-valuemax="${Math.max(target, done)}"
-           aria-label="TSS ridden on planned days, ${done} of ${target || 'no target'}${partialWeek ? ', ' + spanNote : ''}"
+           aria-label="TSS ridden on planned days, ${done} of ${target || 'nothing planned'}${partialWeek ? ', ' + spanNote : ''}"
            title="${done} / ${target || '—'} TSS on the days the plan covers${partialWeek ? ' · ' + spanNote : ''}">
         <div class="wr-tss-fill" style="width:${fillPct}%;background:${tssColor};"></div>
         ${overshoot ? `<div class="wr-tss-over" style="left:${targetPct}%;width:${fillPct - targetPct}%;background:${tssColor};filter:brightness(0.65);"></div>` : ''}

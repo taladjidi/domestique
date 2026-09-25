@@ -25,6 +25,10 @@ import clock
 
 BANDS = ("low_aerobic", "mid_aerobic", "high_aerobic", "anaerobic")
 
+# A week within this of its budget holds it: the planner's volume pass trims
+# and fills to the same band (training_planner._VOLUME_CEILING_TOLERANCE).
+BUDGET_TOLERANCE = 1.05
+
 # Coggan zones to the four exposure bands, the same table the actual side
 # (app._exposure_split_from_tiz) uses for a ride's measured time in zone.
 ZONE_BAND = {"z1": "low_aerobic", "z2": "low_aerobic", "z3": "mid_aerobic",
@@ -163,6 +167,11 @@ class WeekView:
     sessions: list = field(default_factory=list)   # one per day, Monday first
     planned_minutes: int = 0
     exposure_minutes_planned: dict = field(default_factory=dict)
+    # Contract 9.6: a week planned under its budget by more than the
+    # tolerance says so -- {"budget", "planned", "reason"}, the reason "hours"
+    # when the rider's weekly hours are full, else "other" -- so no card has
+    # to present the planned sum as the target.
+    short_of_budget: Optional[dict] = None
 
     def as_weekly_plan(self) -> dict:
         """The shape /api/weekly-plan serves.
@@ -188,6 +197,7 @@ class WeekView:
             "is_stepback": self.is_stepback,
             "sessions": [dict(s) for s in self.sessions],
             "exposure_minutes_planned": {k: int(round(v)) for k, v in self.exposure_minutes_planned.items()},
+            "short_of_budget": self.short_of_budget,
         }
 
 
@@ -266,6 +276,13 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
     budget = None
     if owner is not None and len(owners) == 1 and owner.get("tss_target") not in (None, ""):
         budget = float(owner["tss_target"])
+    short = None
+    if on_record and budget and planned * BUDGET_TOLERANCE < budget:
+        hpw = float(((plan or {}).get("goal") or {}).get("hours_per_week") or 0)
+        days = sum(1 for s in sessions if s.get("on_record"))
+        full = hpw > 0 and minutes >= hpw * 60 * days / 7 - 15
+        short = {"budget": budget, "planned": round(planned, 1),
+                 "reason": "hours" if full else "other"}
     return WeekView(
         start=start, end=end, offset=offset, on_record=on_record,
         week_num=int((owner or {}).get("week_num") or 0),
@@ -274,4 +291,5 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
         budget=budget,
         planned_tss=planned if on_record else None,
         sessions=sessions, planned_minutes=minutes, exposure_minutes_planned=exposure,
+        short_of_budget=short,
     )

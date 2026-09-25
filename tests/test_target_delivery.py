@@ -478,3 +478,63 @@ def test_9_7_a_build_weeks_rest_days_are_the_riders_pattern():
     weeks[3].tss_target = 180.0      # its floor (0.6 / 0.72 of it) leaves a ride to rest
     tp._enforce_stepback_is_lightest(weeks, g, {})
     assert [s.session_type for s in weeks[3].sessions].count("rest") == 2
+
+
+# ── 9.6 The rider sees the truth ─────────────────────────────────────────
+
+def _stored_week(minutes, tss, budget, hpw):
+    mon = _dt.date(2026, 9, 21)
+    ss = [{"day": (mon + _dt.timedelta(days=i)).isoformat(), "session_type": "z2",
+           "duration_min": minutes, "tss_estimate": tss, "zwo_file": "", "status": "pending"}
+          for i in range(6)] + [{"day": (mon + _dt.timedelta(days=6)).isoformat(),
+                                 "session_type": "rest", "duration_min": 0, "tss_estimate": 0}]
+    return mon, {"goal": {"type": "continuous", "hours_per_week": hpw},
+                 "weeks": [{"week_num": 2, "start": mon.isoformat(),
+                            "end": (mon + _dt.timedelta(days=6)).isoformat(), "phase": "build1",
+                            "tss_target": budget, "is_stepback": False, "sessions": ss}]}
+
+
+@pytest.mark.parametrize("minutes, hpw, reason", [(80, 8.0, "hours"), (60, 8.0, "other")])
+def test_9_6_the_week_view_carries_budget_planned_and_why(minutes, hpw, reason):
+    """A week planned under its budget by more than the tolerance says so,
+    with both numbers and the reason: the rider's weekly hours are full, or
+    something else held it (the week's days, the guard, the structure)."""
+    import week_view
+    mon, plan = _stored_week(minutes, 50, 400.0, hpw)
+    got = week_view.build(plan, mon, {}, lambda r: "z2").as_weekly_plan()
+    assert got["tss_budget"] == 400.0 and got["planned_tss"] == 300.0
+    assert got["short_of_budget"] == {"budget": 400.0, "planned": 300.0, "reason": reason}
+
+
+def test_9_6_a_week_within_the_tolerance_is_not_short():
+    import week_view
+    mon, plan = _stored_week(80, 50, 312.0, 8.0)                  # 300 of 312: 4 % under
+    assert week_view.build(plan, mon, {}, lambda r: "z2").as_weekly_plan()["short_of_budget"] is None
+    assert week_view.BUDGET_TOLERANCE == tp._VOLUME_CEILING_TOLERANCE
+
+
+def test_9_6_the_dashboard_names_the_planned_load_and_the_budget():
+    """The This Week badge read "TSS target: <planned sum>". It names the
+    planned load as planned, and a week short of its budget shows the budget
+    and the reason."""
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    from test_333_owner_fixes import DASHBOARD, _extract_js_function
+    fn = _extract_js_function(DASHBOARD.read_text(encoding="utf-8"), "_weekLoadText")
+    harness = fn + """
+const a = _weekLoadText({planned_tss: 300.4, tss_budget: 400, short_of_budget:
+                         {budget: 400, planned: 300.4, reason: 'hours'}});
+if (!/planned 300 TSS/.test(a) || !/400/.test(a) || !/hours/.test(a) || /target/i.test(a))
+  throw new Error('short week: ' + a);
+const b = _weekLoadText({planned_tss: 300, tss_budget: 400, short_of_budget:
+                         {budget: 400, planned: 300, reason: 'other'}});
+if (!/planned 300 TSS/.test(b) || !/400/.test(b) || /hours/.test(b)) throw new Error('other: ' + b);
+const c = _weekLoadText({planned_tss: 305, tss_budget: 310, short_of_budget: null});
+if (c !== 'planned 305 TSS') throw new Error('held week: ' + c);
+if (_weekLoadText({planned_tss: null}) !== 'no plan on record') throw new Error('no plan');
+console.log('OK');
+"""
+    res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0 and "OK" in res.stdout, res.stderr + res.stdout

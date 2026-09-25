@@ -1088,3 +1088,26 @@ def test_mf1_the_weekly_recalc_reads_the_rides_not_the_plan(tmp_path, monkeypatc
     w = got["2026-09-28"]
     assert w["tss_target"] == built["2026-09-28"] and not w.get("guard_lowered"), \
         (r.json().get("action"), built["2026-09-28"], w["tss_target"], w.get("guard_lowered"))
+
+
+def test_mf3_a_monday_sync_reads_the_same_load_as_tuesdays(monkeypatch):
+    """On a Monday the week ahead starts today and the guard read today's
+    archive: its 7-day window counts the unridden Monday as a zero (Sunday
+    343.5, Monday 299.4 on the owner's light run), and 10-12 dropped 396 ->
+    361 every Monday, back on Tuesday. The load carried in is always the
+    eve of the first week ahead."""
+    import ride_storage
+    g, weeks = _owner_weeks()
+    mon = _dt.date(2026, 9, 28)
+    readings = {mon - _dt.timedelta(days=1): 300.0, mon: 260.0}
+    monkeypatch.setattr(ride_storage, "chronic_weekly_tss",
+                        lambda rides=None, today=None: readings.get(today, 300.0))
+    monkeypatch.setattr(ride_storage, "load_all_rides", lambda: [
+        {"ride_id": "icu_x", "sport": "Ride", "started_at": "2026-09-27T10:00:00", "tss": 60.0}])
+    a, b = copy.deepcopy(weeks), copy.deepcopy(weeks)
+    clock.freeze(mon)
+    tp.finalize_weeks(a, g)
+    clock.freeze(mon + _dt.timedelta(days=1))
+    tp.finalize_weeks(b, g)
+    assert [(w.start, w.tss_target) for w in a if w.start > mon] == \
+           [(w.start, w.tss_target) for w in b if w.start > mon]

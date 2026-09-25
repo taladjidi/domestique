@@ -14770,12 +14770,19 @@ def finalize_weeks(weeks: list, goal, *, old_weeks: "list | None" = None,
         # horizon (the evaluation of f59ccdee). The archive's reading on the
         # eve of that week is the load it started from (the one reader,
         # ride_storage.chronic_weekly_tss); without an archive, today's.
+        # Always from the eve of the first week ahead -- on a Monday too:
+        # today's reading counts the unridden Monday as a zero in its 7-day
+        # window (the owner's Sunday 343.5 against Monday 299.4), and every
+        # Monday lowered 10-12 (396 -> 361) for a day (the evaluation of
+        # 3793952c, MF-3).
         carried = float(normal_week)
-        cur = next((w for w in ahead if w.start < today <= w.end), None)
-        if cur is not None and rides:
+        w0 = ahead[0] if ahead else None
+        cur = w0 if w0 is not None and w0.start <= today else None
+        if w0 is not None and rides:
             import ride_storage as _rs
             try:
-                eve = _rs.chronic_weekly_tss(rides, today=cur.start - timedelta(days=1))
+                eve = _rs.chronic_weekly_tss(
+                    rides, today=min(w0.start, today) - timedelta(days=1))
             except Exception:  # noqa: BLE001 -- the archive is a best reading
                 eve = None
             if eve:

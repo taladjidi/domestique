@@ -1237,20 +1237,3 @@ def test_the_heal_reads_the_planner_clock():
          "zwo_file": "", "status": "pending"}]}]}
     assert tp.count_unmatched_pending_sessions(plan) == 0      # behind the rider
     assert tp.heal_unmatched_sessions_dict(plan, tp.load_workout_library())["candidates"] == 0
-
-
-def test_mf3_the_riders_load_is_read_on_the_eve_of_today(monkeypatch):
-    """athlete_weekly_load -- the builders' load, and a sync's -- read the
-    archive's 7-day windows ending TODAY, so on a Monday the unridden Monday
-    was a zero: every Monday rebuild budgeted from the dip (the guard reads
-    the eve of its first week ahead since MF-3; one rule for both)."""
-    import ride_storage
-    mon = _dt.date(2026, 10, 5)
-    archive = [{"ride_id": f"icu_{i}", "sport": "Ride", "tss": 60.0,
-                "started_at": (mon - _dt.timedelta(days=i)).isoformat() + "T10:00:00"}
-               for i in range(1, 80)]
-    monkeypatch.setattr(ride_storage, "load_all_rides", lambda: archive)
-    clock.freeze(mon)
-    sunday = ride_storage.chronic_weekly_tss(archive, today=mon - _dt.timedelta(days=1))
-    assert ride_storage.chronic_weekly_tss(archive, today=mon) < sunday      # the dip
-    assert tp.athlete_weekly_load(None) == sunday

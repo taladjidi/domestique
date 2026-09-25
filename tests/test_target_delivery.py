@@ -1134,3 +1134,25 @@ def test_mf2_a_restored_week_gets_its_easy_volume_back():
     assert back >= 0.95 * min(before, w.tss_target), (before, low, back, w.tss_target)
     assert all(s.duration_min <= tp._date_cap_min(g, s.day, {})[0] for s in w.sessions
                if s.session_type != "rest")
+
+
+def test_9_9_a_sync_never_raises_a_week_above_its_built_budget():
+    """The guard tracks down and back up, never above the budget a week was
+    built with -- not when the load would allow more, not when it allows a
+    little more (the evaluator's mutant max(built, cap) passed every test)."""
+    g, weeks = _owner_weeks()
+    t = _dt.date(2026, 9, 21)
+    clock.freeze(t)
+    built = {w.start: w.tss_target for w in weeks}
+    tp.finalize_weeks(weeks, g, normal_week=900)                      # cap far above
+    assert all(w.tss_target <= built[w.start] for w in weeks), \
+        [(w.start, built[w.start], w.tss_target) for w in weeks]
+    # a lowered week whose cap now sits just above its built budget
+    w = next(w for w in weeks if w.start == _dt.date(2026, 9, 28) and not w.is_stepback)
+    b = built[w.start]
+    w.tss_target, w.guard_lowered = b - 40, {"from": b, "to": b - 40, "when": "2026-09-20",
+                                            "carried": 300}
+    clock.freeze(w.start)               # its Monday: the load carried in is the one handed
+    carried = b * 1.03 / 1.3            # the cap: 3 % over the built budget
+    tp.finalize_weeks(weeks, g, normal_week=carried)
+    assert w.tss_target == b and not w.guard_lowered, (b, w.tss_target, w.guard_lowered)

@@ -3587,13 +3587,20 @@ def athlete_weekly_load(current_ctl, recent_weekly_tss=None, rides=None):
     22 weeks over the ACWR-safe load, and the preview showed 1.8x the load
     Generate then built (notes/review/dupes.md DUP-1, DUP-14).
     """
+    # Read on the eve of today -- the load carried INTO the first row a plan
+    # lays from today. Today's reading counts today, not yet ridden, as a
+    # zero in its trailing week: on a Monday the owner's load read 299 where
+    # Sunday's was 343, and every Monday rebuild budgeted from the dip (the
+    # evaluation of 3793952c, MF-3: the guard reads the eve of its first
+    # week ahead for the same reason).
+    eve = clock.today() - timedelta(days=1)
     if recent_weekly_tss is None:
         import ride_storage as _rs
         if rides is not None:
-            recent_weekly_tss = _rs.chronic_weekly_tss(rides, today=clock.today())
+            recent_weekly_tss = _rs.chronic_weekly_tss(rides, today=eve)
         else:
             try:
-                recent_weekly_tss = _rs.chronic_weekly_tss(today=clock.today())
+                recent_weekly_tss = _rs.chronic_weekly_tss(today=eve)
             except Exception as _e:  # noqa: BLE001
                 log.debug(f"chronic_weekly_tss fetch failed: {_e}")
     if recent_weekly_tss is None and current_ctl and current_ctl > 0:

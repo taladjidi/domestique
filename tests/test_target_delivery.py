@@ -634,3 +634,20 @@ def test_m1_a_regenerate_counts_the_ride_done_today(kind, monkeypatch):
     # ramp's budget for the week -- not the old plan's asks, missed ones
     # included, on top of the stub's (the owner's week read 670 for 532)
     assert (wk.end - wk.start).days == 6 and abs(wk.tss_target - budget) <= 1, (wk.tss_target, budget)
+
+
+# ── S4 (evaluation of a73647b3): the fill's own hours limit ─────────────
+
+def test_9_3_the_fill_itself_stays_within_the_weekly_hours():
+    """The final step's hours trim would mask a fill that ignored the week's
+    hours (the evaluator's mutant fill_ignores_hours passed every test), so
+    the fill is held to them on its own: a 600-TSS budget, days that could
+    hold far more, and 7 h a week."""
+    clock.freeze(_dt.date(2026, 9, 21))
+    g = F.owner("continuous", hours_per_week=7.0)
+    w, lib = _fill_week()
+    was = tp._row_minutes(w, clock.today())
+    assert was < 7 * 60
+    tp._fill_easy_to_budget(w, g, lib)
+    grown = tp._row_minutes(w, clock.today())
+    assert was < grown <= 7 * 60 + 1, (was, grown)

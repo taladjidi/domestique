@@ -106,3 +106,14 @@ fractions; hard-session counts.
   site passes `recent_weekly_tss`; `athlete_weekly_load(None, None)` reads the
   ride archive itself (ride_storage.chronic_weekly_tss, 28-day EWMA, rides
   counted once, cycling only), else CTL × 7. That is the one reader; keep it so.
+
+## Owner's decision, fourth round (2026-09-25 evening) — amends 9.9
+- **9.9 (amended) The guard tracks, it does not ratchet.** Each sync caps a
+  coming week at min(its budget as built, 1.3 × the load carried in): it
+  lowers after a light stretch and climbs back by itself as the load returns,
+  never above the budget the plan was built with. The carried load does not
+  count days of the week under way that are already ridden twice (the
+  evaluator's measured ratchet: a rider riding the plan exactly was locked
+  6–11 % low for the whole horizon). 9.11's warning shows while a week sits
+  below its built budget, with the replan for an immediate reset; it clears
+  itself when the sync restores the week.

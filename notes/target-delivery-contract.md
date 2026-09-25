@@ -77,3 +77,17 @@ week's hours.
 ## Out of scope
 Changing the 1.3 × guard or the Couzens k; TrainingWeek mode; unload/taper
 fractions; hard-session counts.
+
+## Owner's decisions, second round (2026-09-25 afternoon)
+- **9.9 The 1.3 × guard runs on every sync.** Each daily sync / update /
+  reforecast caps the budgets of the weeks from today on at 1.3 × the load the
+  rider actually carries into them (the rides, counted once, cycling only), so
+  after a lighter stretch the coming targets come down instead of asking for a
+  jump. No stored week reads over 1.3 × against the rider's real load after a
+  sync (evaluator's sweep today: reforecast 52→82, reforecast_dict 58→88,
+  refit 33→44 hits — these must fall to ≤ base). Past days stay a record.
+- **9.10 Unload weeks carry their own budget too.** The easy-volume fill
+  applies to unload weeks toward their own (lower) budget — easy-only, within
+  the date and week hours, never above the unload budget; the unload rules
+  (lighter than the builds, rest pattern per 9.7) still hold after the fill.
+  Owner case: 10-05 must no longer sit at 261 of a 387 budget.

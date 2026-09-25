@@ -46,6 +46,7 @@ import math
 import os
 import re
 import shutil
+import statistics
 import sys
 import threading
 import xml.etree.ElementTree as ET
@@ -3051,7 +3052,59 @@ LOAD_K_DEFAULT = 30                               # TSS a day over CTL, Couzens
 LOAD_K_BUILD = 40
 CONSOLIDATION_LOAD_FACTOR = 0.5
 _CTL_WEEK_DECAY = (41 / 42) ** 7                  # of CTL, what a week leaves
-_TSS_PER_AVAILABLE_HOUR = 65                      # the planner's hours-to-load rate
+
+# The content classes whose files serve each band of scale_budget_to_week.
+_BAND_CLASSES = {
+    "z1z2": ("endurance",),
+    "z3": ("tempo", "sweet_spot", "tempo_intervals"),
+    "z4": ("threshold", "over_under"),
+    "z5plus": ("vo2max", "vo2_short", "anaerobic", "neuromuscular"),
+}
+_SERVED_RATE_CACHE: dict = {}
+
+
+def served_band_tss_per_hour(library: "list | None" = None) -> dict:
+    """TSS an hour of each band carries at the files the planner serves: the
+    median of file TSS over file hours, among the files of the band's classes
+    that clear their score floor. The builders' type table (TSS_PER_HOUR:
+    z2 45, threshold 90) sized slots, not files; the files served ride about
+    42 for endurance and 73 for threshold (research of 2026-09-25). A band
+    with no file keeps the type table's figure."""
+    lib = library if library is not None else load_workout_library()
+    key = (id(lib), len(lib))
+    if key not in _SERVED_RATE_CACHE:
+        per = {b: [] for b in _BAND_CLASSES}
+        band_of = {c: b for b, cs in _BAND_CLASSES.items() for c in cs}
+        for r in lib or []:
+            cc = _content_class_for_row(r)
+            try:
+                fd, ft = float(r.get("Duration(min)") or 0), float(r.get("TSS") or 0)
+                ok = float(r.get("Score") or 0) >= _class_aware_score_floor(cc)
+            except (TypeError, ValueError):
+                continue
+            if cc in band_of and fd > 0 and ft > 0 and ok:
+                per[band_of[cc]].append(ft / fd * 60)
+        _SERVED_RATE_CACHE.clear()
+        _SERVED_RATE_CACHE[key] = {b: (statistics.median(v) if v else _BAND_TSS_PER_HOUR[b])
+                                   for b, v in per.items()}
+    return _SERVED_RATE_CACHE[key]
+
+
+def holdable_tss(goal, phase_name: str, minutes: float) -> float:
+    """The most load ``minutes`` of riding can carry in this phase (contract
+    9.5; D5): the phase's intensity mix for a week of that length
+    (scale_budget_to_week), each band at the rate its served files carry.
+    The ramp's hours cap was hours x 65, a rate no mix of the library's files
+    reaches (the base mix holds about 47 an hour), so a rider short of time
+    was set a target no week could deliver."""
+    if not minutes or minutes <= 0:
+        return 0.0
+    b = scale_budget_to_week(get_budget_for_phase(phase_name, goal), 1e9, minutes,
+                             model=active_model_for_phase(phase_name, goal),
+                             phase_name=phase_name)
+    r = served_band_tss_per_hour()
+    return (b.z1z2_minutes_per_week * r["z1z2"] + b.z3_minutes_per_week * r["z3"]
+            + b.z4_minutes_per_week * r["z4"] + b.z5plus_minutes_per_week * r["z5plus"]) / 60
 
 
 class LoadRamp:
@@ -3162,7 +3215,7 @@ def _row_budget(ramp, goal, phase, cursor, is_stepback: bool) -> float:
     if phase.name == "taper":
         left = -(-((phase.end - cursor).days + 1) // 7)
         frac = TAPER_FRACS[max(0, len(TAPER_FRACS) - left)]
-    return ramp.budget(phase.name, is_stepback, hours * _TSS_PER_AVAILABLE_HOUR, frac)
+    return ramp.budget(phase.name, is_stepback, holdable_tss(goal, phase.name, hours * 60), frac)
 
 
 def _row_load(pw, budget=None) -> float:
@@ -3475,7 +3528,7 @@ def _continuous_weekly_tss(goal: "Goal", current_ctl: float,
     It was one ramp step of CTL a week (x7), which lifts CTL by a sixth of
     that step."""
     return LoadRamp(current_ctl, recent_weekly_tss).budget(
-        "continuous", avail_tss=goal.hours_per_week * _TSS_PER_AVAILABLE_HOUR)
+        "continuous", avail_tss=holdable_tss(goal, "continuous", goal.hours_per_week * 60))
 
 
 def _continuous_phases(goal: "Goal", current_ctl: float,
@@ -8692,7 +8745,7 @@ def generate_plan(
         recent_weekly_tss: v2.1.0 (E1) — rider's recent mean weekly TSS, used
             as the LOAD-based weekly volume ceiling (see generate_phases). When
             None, self-fetches from the local archive; if still None, the
-            legacy availability cap (hours_per_week×65) applies.
+            availability cap (holdable_tss of the hours) applies.
     """
     # F4b (v2.5.0, D1): a target date today-or-earlier silently produced a
     # degenerate backward taper + an EMPTY plan (weeks_available clamps to ≥1,

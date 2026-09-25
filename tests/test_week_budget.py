@@ -270,7 +270,9 @@ def test_the_home_card_sizes_the_plans_own_week():
                                      recent_weekly_tss=300.0, athlete=ATHLETE)
     week = next(w for w in weeks if w.phase == "build2" and not w.is_stepback)
     phase = next(p for p in phases if p.name == "build2")
-    assert phase.weekly_tss_target > 1.15 * week.tss_target      # the label runs above
+    # the label runs above (588 against 525 since the hours cap reads the
+    # served files' rate, contract 9.5; it was 694 against 540)
+    assert phase.weekly_tss_target > 1.1 * week.tss_target
     plan = {"weeks": [tp.week_to_dict(w) for w in weeks]}
     card = week_view.build(plan, week.start, {}, tp._session_type_from_row)
     assert card.planned_tss == _load(week)

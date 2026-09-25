@@ -1224,3 +1224,16 @@ def test_a_thin_week_under_way_is_not_an_unload_reference():
     assert pi_.thin_week_under_way(thin[0], t) and not pi_.thin_week_under_way(weeks[0], t)
     assert not pi_.check_stepback_lightest(thin, t)
     assert "stepback_lightest" in [v.rule for v in pi_.check_stepback_lightest(weeks, t)]
+
+
+def test_the_heal_reads_the_planner_clock():
+    """count_unmatched_pending_sessions / heal_unmatched_sessions_dict read
+    the wall clock (date.today()), not the planner's: under a frozen clock
+    they judged which sessions are ahead by the machine's date -- a source
+    of runs that differ with nothing but the day they ran on (6.11)."""
+    clock.freeze(_dt.date(2099, 1, 10))
+    plan = {"weeks": [{"start": "2099-01-05", "end": "2099-01-11", "sessions": [
+        {"day": "2099-01-06", "session_type": "z2", "duration_min": 60, "tss_estimate": 40,
+         "zwo_file": "", "status": "pending"}]}]}
+    assert tp.count_unmatched_pending_sessions(plan) == 0      # behind the rider
+    assert tp.heal_unmatched_sessions_dict(plan, tp.load_workout_library())["candidates"] == 0

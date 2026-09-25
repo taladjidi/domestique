@@ -13176,7 +13176,7 @@ def count_unmatched_pending_sessions(plan_dict: dict, today: "date | None" = Non
     """How many upcoming pending sessions carry no workout file (diagnostics)."""
     if not isinstance(plan_dict, dict):
         return 0
-    return sum(1 for _ in _iter_pending_unmatched(plan_dict, today or date.today()))
+    return sum(1 for _ in _iter_pending_unmatched(plan_dict, today or clock.today()))
 
 
 def heal_unmatched_sessions_dict(plan_dict: dict, library: list,
@@ -13201,7 +13201,7 @@ def heal_unmatched_sessions_dict(plan_dict: dict, library: list,
     stats = {"candidates": 0, "healed": 0, "still_unmatched": 0}
     if not isinstance(plan_dict, dict) or not library:
         return stats
-    today = today or date.today()
+    today = today or clock.today()
     # Plan-wide uniqueness, as generate_plan's sweep (used_names_set).
     used: set = set()
     for w in plan_dict.get("weeks", []) or []:

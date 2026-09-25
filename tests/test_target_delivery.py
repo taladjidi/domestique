@@ -1156,3 +1156,46 @@ def test_9_9_a_sync_never_raises_a_week_above_its_built_budget():
     carried = b * 1.03 / 1.3            # the cap: 3 % over the built budget
     tp.finalize_weeks(weeks, g, normal_week=carried)
     assert w.tss_target == b and not w.guard_lowered, (b, w.tss_target, w.guard_lowered)
+
+
+def test_9_11_the_replan_link_clears_the_warning_at_once():
+    """"replan to reset it now" regenerated the plan and left the warning on
+    screen until a reload: regeneratePlan() never re-rendered the chip (the
+    evaluation of 3793952c, in a real browser)."""
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    from test_333_owner_fixes import DASHBOARD, _extract_js_function
+    src = DASHBOARD.read_text(encoding="utf-8")
+    fns = "\n".join(_extract_js_function(src, n) for n in
+                    ("_guardLoweredHtml", "renderPlanGuardChip", "regeneratePlan"))
+    harness = """
+const esc = s => String(s);
+const els = {};
+const el = id => (els[id] = els[id] || {id, style: {}, textContent: '', innerHTML: ''});
+const $ = el;
+const document = {getElementById: el};
+let rendered = 0;
+async function renderPlanJSON(p) { rendered++; }
+async function loadCalendar() {}
+const lowered = [{start: '2099-09-28', end: '2099-10-04', tss_target: 321,
+                  guard_lowered: {from: 469, to: 321, when: '2099-09-25', carried: 247}}];
+async function fetch(url) {
+  return {json: async () => ({plan_json: {weeks: [{start: '2099-09-28', end: '2099-10-04',
+                                                    tss_target: 469, guard_lowered: null}]},
+                              regen_info: {}})};
+}
+""" + fns + """
+(async () => {
+  renderPlanGuardChip(lowered);
+  if (el('plan-guard-chip').style.display !== 'block') throw new Error('chip not shown');
+  await regeneratePlan();
+  if (rendered !== 1) throw new Error('plan not rendered');
+  if (el('plan-guard-chip').style.display !== 'none' || el('plan-guard-chip').innerHTML !== '')
+    throw new Error('chip still shown after the replan: ' + el('plan-guard-chip').innerHTML);
+  console.log('OK');
+})().catch(e => { console.error(e.message); process.exit(1); });
+"""
+    res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
+    assert res.returncode == 0 and "OK" in res.stdout, res.stderr + res.stdout

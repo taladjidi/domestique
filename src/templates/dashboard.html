@@ -15814,6 +15814,9 @@ async function regeneratePlan() {
     $('plan-status').style.color = 'var(--green)';
     $('plan-gap-alert').style.display = 'none';
     await renderPlanJSON(d.plan_json);
+    // 9.11: the replan wrote its weeks without the guard's records -- the
+    // warning goes with them now, not at the next reload.
+    try { renderPlanGuardChip((d.plan_json || {}).weeks); } catch (_) {}
     // v1.4.0 — mandatory loadCalendar() after every plan mutation.
     try { await loadCalendar(); } catch(_) {}
   } catch(e) {

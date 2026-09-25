@@ -28,6 +28,8 @@ BANDS = ("low_aerobic", "mid_aerobic", "high_aerobic", "anaerobic")
 # A week within this of its budget holds it: the planner's volume pass trims
 # and fills to the same band (training_planner._VOLUME_CEILING_TOLERANCE).
 BUDGET_TOLERANCE = 1.05
+# The weeks that unload a block (plan_invariants.UNLOAD_PHASES).
+UNLOAD_PHASES = ("taper", "recon", "recovery_ramp", "consolidation")
 
 # Coggan zones to the four exposure bands, the same table the actual side
 # (app._exposure_split_from_tiz) uses for a ride's measured time in zone.
@@ -168,9 +170,10 @@ class WeekView:
     planned_minutes: int = 0
     exposure_minutes_planned: dict = field(default_factory=dict)
     # Contract 9.6: a week planned under its budget by more than the
-    # tolerance says so -- {"budget", "planned", "reason"}, the reason "hours"
-    # when the rider's weekly hours are full, else "other" -- so no card has
-    # to present the planned sum as the target.
+    # tolerance says so -- {"budget", "planned", "reason"}: "hours" when the
+    # rider's weekly hours are full, "unload" for a recovery or taper week
+    # (sized against its block, never filled), else "other" -- so no card
+    # has to present the planned sum as the target.
     short_of_budget: Optional[dict] = None
 
     def as_weekly_plan(self) -> dict:
@@ -280,9 +283,14 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
     if on_record and budget and planned * BUDGET_TOLERANCE < budget:
         hpw = float(((plan or {}).get("goal") or {}).get("hours_per_week") or 0)
         days = sum(1 for s in sessions if s.get("on_record"))
-        full = hpw > 0 and minutes >= hpw * 60 * days / 7 - 15
-        short = {"budget": budget, "planned": round(planned, 1),
-                 "reason": "hours" if full else "other"}
+        phase = str((owner or {}).get("phase") or "").lower()
+        if hpw > 0 and minutes >= hpw * 60 * days / 7 - 15:
+            reason = "hours"
+        elif (owner or {}).get("is_stepback") or phase in UNLOAD_PHASES:
+            reason = "unload"           # sized against its block, never filled (9.1)
+        else:
+            reason = "other"
+        short = {"budget": budget, "planned": round(planned, 1), "reason": reason}
     return WeekView(
         start=start, end=end, offset=offset, on_record=on_record,
         week_num=int((owner or {}).get("week_num") or 0),

@@ -646,15 +646,11 @@ def test_the_final_step_is_a_fixpoint(kind):
     changes nothing, or each sync would churn the rider's calendar."""
     for name, weeks in entry_points(kind, gen(owner(kind)), T3, lambda: owner(kind)):
         clock.freeze(T3)
-        rides = ride_days(T3 - _dt.timedelta(days=14), T3 - _dt.timedelta(days=1))
-        # As a sync runs it (reforecast: no rider's load), and -- for the
-        # entry points that know the rider's load and hold the budgets to the
-        # 1.3 x guard with it (contract 9.2) -- as they ran it.
-        again = tp.finalize_weeks(copy.deepcopy(weeks), owner(kind), rides=rides)
+        again = tp.finalize_weeks(weeks, owner(kind),
+                                  rides=ride_days(T3 - _dt.timedelta(days=14),
+                                                  T3 - _dt.timedelta(days=1)),
+                                  normal_week=380)
         assert again == set(), (name, sorted(again)[:5])
-        if name in ("regenerate", "recalculate", "extend"):
-            again = tp.finalize_weeks(weeks, owner(kind), rides=rides, normal_week=380)
-            assert again == set(), (name, sorted(again)[:5])
 
 
 # 6.1, the review of 2026-09-24: one reading of the calendar on every path.

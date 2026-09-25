@@ -58,15 +58,17 @@ def sweep_gen(goal, t, ctl, rwt, ftp=247):
 # ── 9.3 Weekly hours are a ceiling ───────────────────────────────────────
 
 def over_hours(weeks, goal, t):
-    """Rows whose minutes from ``t`` on exceed the rider's weekly hours over
-    the row's remaining days."""
+    """Rows ahead whose minutes -- the days already behind the rider as they
+    were given, the rest as planned -- exceed the rider's weekly hours over
+    the row's days (a stub row gets its share)."""
     out = []
     for w in weeks:
         if w.end < t:
             continue
-        room = goal.hours_per_week * 60 * ((w.end - max(w.start, t)).days + 1) / 7
+        room = goal.hours_per_week * 60 * ((w.end - w.start).days + 1) / 7
         mins = sum(s.duration_min or 0 for s in w.sessions
-                   if s.day >= t and s.session_type != "rest" and not s.is_race)
+                   if s.session_type != "rest" and not s.is_race
+                   and s.status not in ("missed", "dismissed"))
         if mins > room + 1:
             out.append((str(w.start), mins, round(room)))
     return out
@@ -494,13 +496,16 @@ def _stored_week(minutes, tss, budget, hpw):
                             "tss_target": budget, "is_stepback": False, "sessions": ss}]}
 
 
-@pytest.mark.parametrize("minutes, hpw, reason", [(80, 8.0, "hours"), (60, 8.0, "other")])
-def test_9_6_the_week_view_carries_budget_planned_and_why(minutes, hpw, reason):
+@pytest.mark.parametrize("minutes, hpw, reason, stepback", [
+    (80, 8.0, "hours", False), (60, 8.0, "other", False), (60, 8.0, "unload", True)])
+def test_9_6_the_week_view_carries_budget_planned_and_why(minutes, hpw, reason, stepback):
     """A week planned under its budget by more than the tolerance says so,
-    with both numbers and the reason: the rider's weekly hours are full, or
-    something else held it (the week's days, the guard, the structure)."""
+    with both numbers and the reason: the rider's weekly hours are full, a
+    recovery week kept light (never filled), or something else held it (the
+    week's days, the guard, the structure)."""
     import week_view
     mon, plan = _stored_week(minutes, 50, 400.0, hpw)
+    plan["weeks"][0]["is_stepback"] = stepback
     got = week_view.build(plan, mon, {}, lambda r: "z2").as_weekly_plan()
     assert got["tss_budget"] == 400.0 and got["planned_tss"] == 300.0
     assert got["short_of_budget"] == {"budget": 400.0, "planned": 300.0, "reason": reason}
@@ -531,6 +536,11 @@ if (!/planned 300 TSS/.test(a) || !/400/.test(a) || !/hours/.test(a) || /target/
 const b = _weekLoadText({planned_tss: 300, tss_budget: 400, short_of_budget:
                          {budget: 400, planned: 300, reason: 'other'}});
 if (!/planned 300 TSS/.test(b) || !/400/.test(b) || /hours/.test(b)) throw new Error('other: ' + b);
+const u = _weekLoadText({planned_tss: 261, tss_budget: 387, short_of_budget:
+                         {budget: 387, planned: 261, reason: 'unload'}});
+if (!/recovery week/.test(u) || /could not/.test(u)) throw new Error('unload: ' + u);
+if (_weekLoadText({planned_tss: 5, short_of_budget: {budget: null, planned: 5, reason: 'other'}})
+    !== 'planned 5 TSS') throw new Error('no budget');
 const c = _weekLoadText({planned_tss: 305, tss_budget: 310, short_of_budget: null});
 if (c !== 'planned 305 TSS') throw new Error('held week: ' + c);
 if (_weekLoadText({planned_tss: null}) !== 'no plan on record') throw new Error('no plan');
@@ -538,3 +548,16 @@ console.log('OK');
 """
     res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0 and "OK" in res.stdout, res.stderr + res.stdout
+
+
+def test_9_1_the_week_under_way_is_filled_against_what_is_left():
+    """The final step hands the fill the week under way's net budget (what
+    is left of it, D2); the load held against it is the days from today, not
+    the days behind the rider too (the review of 254d54eb: a target of 349
+    against a load of 414 of which 269 lay ahead, and no growth)."""
+    g = F.owner("continuous")
+    w, lib = _fill_week()
+    clock.freeze(_dt.date(2026, 9, 23))                  # Wednesday: Mon, Tue behind
+    ahead = week_load(w, clock.today())
+    tp._fill_easy_to_budget(w, g, lib, target=ahead + 40)
+    assert ahead + 30 <= week_load(w, clock.today()) <= ahead + 50

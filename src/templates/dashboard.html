@@ -7962,9 +7962,11 @@ function _weekLoadText(week) {
   if (!week || week.planned_tss == null) return 'no plan on record';
   const txt = `planned ${Math.round(week.planned_tss)} TSS`;
   const s = week.short_of_budget;
-  if (!s) return txt;
-  return `${txt} of a ${Math.round(s.budget)} budget — ` +
-    (s.reason === 'hours' ? 'your weekly hours are full' : 'the week could not hold more');
+  if (!s || !s.budget) return txt;
+  const why = s.reason === 'hours' ? 'your weekly hours are full'
+            : s.reason === 'unload' ? 'a recovery week, kept light'
+            : 'the plan holds less this week';
+  return `${txt} of a ${Math.round(s.budget)} budget — ${why}`;
 }
 
 async function loadLastWeekFeedback() {

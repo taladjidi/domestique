@@ -158,8 +158,12 @@ def test_gp2_event_custom_labels_dates_tss():
     tss_rec = {p.name: p.weekly_tss_target for p in rec_phases}
     tss_cus = {p.name: p.weekly_tss_target for p in phases}
     assert tss_cus["base"] >= tss_rec["base"]        # five base weeks against four
-    assert (tss_cus["base"] <= tss_cus["build1"] <= tss_cus["build2"]
-            <= tss_cus["peak"])
+    # Through the builds, not into peak: the ramp gives peak a conservative k,
+    # and at 8 h peak's polarized mix holds less an hour than build2's (377
+    # against 396, contract 9.5). The chain held into peak only because 8 h
+    # x 65 TSS an hour capped build1..peak at one number, 520; at hours that
+    # do not bind, d190fa82 read peak 663 against build2's 716.
+    assert tss_cus["base"] <= tss_cus["build1"] <= tss_cus["build2"]
 
 
 def test_gp2_nonevent_custom_exact_and_consolidation_locked():

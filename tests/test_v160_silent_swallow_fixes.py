@@ -49,7 +49,9 @@ _MINIMAL_PLAN = json.dumps({
 
 class CorruptPlanCalendarFixTests(unittest.TestCase):
     """Wave 1 §C culprit #1: /api/calendar swallowed corrupt plan and
-    returned 12 history-only weeks. v1.6.0 surfaces the error code."""
+    returned 12 history-only weeks. v1.6.0 surfaced the error code in a 200;
+    since the one-plan round (10.2) a corrupt plan is one answer on every
+    route: 409 with the same code."""
 
     def setUp(self):
         self.client = TestClient(app_module.app)
@@ -59,10 +61,8 @@ class CorruptPlanCalendarFixTests(unittest.TestCase):
     def test_corrupt_plan_returns_E_PLAN_PARSE_CORRUPT_in_response(self):
         with _corrupt_plan("{this is not json{"):
             r = self.client.get("/api/calendar")
-            self.assertEqual(r.status_code, 200)
-            body = r.json()
-            self.assertEqual(body.get("error"), ec.Codes.PLAN_PARSE_CORRUPT)
-            self.assertEqual(body.get("weeks"), [])
+            self.assertEqual(r.status_code, 409)
+            self.assertEqual(r.json().get("code"), ec.Codes.PLAN_PARSE_CORRUPT)
 
     def test_corrupt_plan_logs_to_ring_buffer(self):
         with _corrupt_plan("{not json{"):

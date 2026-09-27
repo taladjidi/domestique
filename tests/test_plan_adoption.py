@@ -1,8 +1,9 @@
 """PART A (IP_PLAN_CONTINUITY, v3.1.0) — one-time root→profile plan adoption.
 
 Contract tests GA1-GA6 + the A-LOCKED-1 discriminator cases, against
-``app._adopt_legacy_root_plan`` with explicit tmp dirs (hermetic — no HOME,
-no network; conftest's urlopen block stays king).
+``plan_store.adopt_legacy_root`` (app._adopt_legacy_root_plan until the
+one-plan round) with explicit tmp dirs (hermetic — no HOME, no network;
+conftest's urlopen block stays king).
 
   GA1  root=EVENT / prof=STALE → adopted; STALE among prof .bak*; root
        retired to .pre-v3; /api/plan serves EVENT
@@ -11,8 +12,8 @@ no network; conftest's urlopen block stays king).
   GA3  fresh install (no root) and already-adopted (.pre-v3) → zero
        filesystem writes by the adoption step
   GA4  corrupt root → skip + root intact (evidence), prof untouched
-  GA5  multi-profile → writes land in the ACTIVE profile dir only; equal
-       stamps in a multi-profile home → skip
+  GA5  multi-profile → refused, nothing written: the root plan has no known
+       owner (contract 10.3; it used to adopt into the active profile)
   GA6  idempotent across 3 consecutive boots (adopt → no-op → no-op)
   +    stamp-beats-mtime (restamped-prof cohort case), equal-stamp
        single-profile adopts, zero-byte prof = missing, byte-identical →
@@ -31,7 +32,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+import plan_store as ps
 import training_planner as tp
+
+
+def _adopt(root: Path, prof: Path, multi_profile: bool = False) -> str:
+    """Adopt ``root``'s plan into the profile whose plans are ``prof``."""
+    ps.bind("adoptee", prof)
+    return ps.adopt_legacy_root("adoptee", profiles=2 if multi_profile else 1, root_dir=root)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -86,7 +94,7 @@ def test_ga1_adopts_newer_root_over_stale_profile(tmp_path, monkeypatch):
     _write(root / "current_plan.json", event)
     _write(prof / "current_plan.json", stale)
 
-    status = app_module._adopt_legacy_root_plan(root, prof, multi_profile=False)
+    status = _adopt(root, prof, multi_profile=False)
     assert status == "adopted"
 
     # Profile live file IS the event plan (byte-for-byte copy).
@@ -108,8 +116,18 @@ def test_ga1_adopts_newer_root_over_stale_profile(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert r.json()["plan_json"]["goal"]["event_name"] == "EVENT"
 
-    # Plan-alert channel: the adoption landed in the diag ring (the
-    # PLAN_AUTO_RESTORED precedent) so the dashboard can toast it once.
+
+
+def test_ga1_boot_puts_an_adoption_in_the_diag_ring(monkeypatch):
+    """Plan-alert channel: an adoption at boot lands in the diag ring (the
+    PLAN_AUTO_RESTORED precedent) so the dashboard can toast it once. The
+    store adopts; the boot that asked for it reports it."""
+    asked = []
+    monkeypatch.setattr(ps, "adopt_legacy_root",
+                        lambda pid, profiles: asked.append((pid, profiles)) or "adopted")
+    with TestClient(app_module.app):
+        pass
+    assert asked and asked[0][0] == app_module._pid()
     codes = [e.get("code") for e in app_module._diag_ring_snapshot(limit=50)]
     assert "E_PLAN_ADOPTED_FROM_ROOT" in codes
 
@@ -122,13 +140,13 @@ def test_ga2_profile_newer_skips_and_leaves_root(tmp_path):
     _write(prof / "current_plan.json", _plan("PROF", NEW_STAMP))
 
     before = _snapshot(root, prof)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "skipped"
+    assert _adopt(root, prof, False) == "skipped"
     assert _snapshot(root, prof) == before, "skip must be write-free"
     assert (root / "current_plan.json").exists(), "GA2 DECIDED: leave skipped root"
     assert not (root / "current_plan.json.pre-v3").exists()
 
     # Second boot: same stable skip.
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "skipped"
+    assert _adopt(root, prof, False) == "skipped"
     assert _snapshot(root, prof) == before
 
 
@@ -139,14 +157,14 @@ def test_ga3_no_root_and_latch_are_write_free(tmp_path):
     _write(prof / "current_plan.json", _plan("PROF", NEW_STAMP))
 
     before = _snapshot(root, prof)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "no-root"
+    assert _adopt(root, prof, False) == "no-root"
     assert _snapshot(root, prof) == before
 
     # Already adopted: latch present — hard no-op even with a fresh root file.
     _write(root / "current_plan.json.pre-v3", _plan("ADOPTED-EARLIER", OLD_STAMP))
     _write(root / "current_plan.json", _plan("DOWNGRADE-ERA", NEW_STAMP))
     before = _snapshot(root, prof)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "latched"
+    assert _adopt(root, prof, False) == "latched"
     assert _snapshot(root, prof) == before
 
 
@@ -158,7 +176,7 @@ def test_ga4_corrupt_root_left_in_place(tmp_path):
     _write(prof / "current_plan.json", _plan("PROF", OLD_STAMP))
 
     before = _snapshot(root, prof)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "corrupt-root"
+    assert _adopt(root, prof, False) == "corrupt-root"
     assert _snapshot(root, prof) == before
     assert (root / "current_plan.json").read_bytes() == b"{ not json !!!"
     assert not (root / "current_plan.json.pre-v3").exists()
@@ -166,25 +184,21 @@ def test_ga4_corrupt_root_left_in_place(tmp_path):
 
 # ── GA5 — multi-profile: active-only writes + equal-stamp skip ──────────────
 
-def test_ga5_multi_profile_active_only_and_equal_stamp_skip(tmp_path):
+def test_ga5_multi_profile_refuses_and_writes_nothing(tmp_path):
+    """10.3: in a home of several profiles the legacy root plan has no known
+    owner. It used to land in whichever profile was active at boot (the
+    audit's boot2: rider B's plan replaced by the root); now it is refused
+    and left in place, whatever the stamps say."""
     root, prof = _mk_dirs(tmp_path)
     other = tmp_path / "dot" / "profiles" / "second" / "plans"
     other.mkdir(parents=True)
     _write(other / "current_plan.json", _plan("OTHER", OLD_STAMP))
-
-    # Equal stamps in a multi-profile home → skip.
-    _write(root / "current_plan.json", _plan("ROOT", NEW_STAMP))
-    _write(prof / "current_plan.json", _plan("PROF", NEW_STAMP))
-    before = _snapshot(root, prof, other)
-    assert app_module._adopt_legacy_root_plan(root, prof, multi_profile=True) == "skipped"
-    assert _snapshot(root, prof, other) == before
-
-    # Root stamp strictly newer → adopt, but ONLY the active profile dir moves.
-    _write(root / "current_plan.json", _plan("ROOT2", "2026-07-02T08:00:00"))
-    other_before = _snapshot(other)
-    assert app_module._adopt_legacy_root_plan(root, prof, multi_profile=True) == "adopted"
-    assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "ROOT2"
-    assert _snapshot(other) == other_before, "inactive profile dirs must be untouched"
+    for root_stamp in (NEW_STAMP, "2026-07-02T08:00:00"):     # equal, then newer
+        _write(root / "current_plan.json", _plan("ROOT", root_stamp))
+        _write(prof / "current_plan.json", _plan("PROF", NEW_STAMP))
+        before = _snapshot(root, prof, other)
+        assert _adopt(root, prof, multi_profile=True) == "refused-multi-profile"
+        assert _snapshot(root, prof, other) == before
 
 
 # ── GA6 — idempotent across 3 boots ──────────────────────────────────────────
@@ -194,11 +208,11 @@ def test_ga6_three_boot_idempotency(tmp_path):
     _write(root / "current_plan.json", _plan("EVENT", NEW_STAMP))
     _write(prof / "current_plan.json", _plan("STALE", OLD_STAMP))
 
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     after_first = _snapshot(root, prof)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "latched"
+    assert _adopt(root, prof, False) == "latched"
     assert _snapshot(root, prof) == after_first
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "latched"
+    assert _adopt(root, prof, False) == "latched"
     assert _snapshot(root, prof) == after_first
 
 
@@ -214,7 +228,7 @@ def test_stamp_beats_mtime_restamped_prof_cohort(tmp_path):
     _set_mtime(root / "current_plan.json", NOW - 3600 * 24 * 30)  # a month old
     _set_mtime(prof / "current_plan.json", NOW)                   # restamped today
 
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "EVENT"
 
 
@@ -222,7 +236,7 @@ def test_equal_stamps_single_profile_adopts(tmp_path):
     root, prof = _mk_dirs(tmp_path)
     _write(root / "current_plan.json", _plan("ROOT", NEW_STAMP))
     _write(prof / "current_plan.json", _plan("PROF", NEW_STAMP))
-    assert app_module._adopt_legacy_root_plan(root, prof, multi_profile=False) == "adopted"
+    assert _adopt(root, prof, multi_profile=False) == "adopted"
     assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "ROOT"
 
 
@@ -233,7 +247,7 @@ def test_mtime_fallback_only_when_stamp_missing(tmp_path):
     _write(prof / "current_plan.json", _plan("PROF", "not-a-date"))  # unparseable
     _set_mtime(root / "current_plan.json", NOW - 100)
     _set_mtime(prof / "current_plan.json", NOW - 200)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
 
     # Tie (== to the second) → skip, prof wins (conservative).
     (root / "current_plan.json.pre-v3").unlink()  # clear the latch from the adopt above
@@ -241,7 +255,7 @@ def test_mtime_fallback_only_when_stamp_missing(tmp_path):
     _write(prof / "current_plan.json", _plan("PROF2", None))
     _set_mtime(root / "current_plan.json", int(NOW))
     _set_mtime(prof / "current_plan.json", int(NOW))
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "skipped"
+    assert _adopt(root, prof, False) == "skipped"
 
 
 def test_zero_byte_prof_treated_as_missing(tmp_path):
@@ -250,7 +264,7 @@ def test_zero_byte_prof_treated_as_missing(tmp_path):
     root, prof = _mk_dirs(tmp_path)
     _write(root / "current_plan.json", _plan("ROOT", OLD_STAMP))  # even an OLD stamp
     (prof / "current_plan.json").write_bytes(b"")
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "ROOT"
 
 
@@ -260,7 +274,7 @@ def test_byte_identical_retires_without_copy_or_rotation(tmp_path):
     _write(root / "current_plan.json", plan)
     _write(prof / "current_plan.json", plan)
 
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "retired-identical"
+    assert _adopt(root, prof, False) == "retired-identical"
     assert not (root / "current_plan.json").exists()
     assert (root / "current_plan.json.pre-v3").exists()
     assert list(prof.glob("current_plan.json.bak*")) == [], "no rotation on retire-only"
@@ -286,7 +300,7 @@ def test_retire_failure_no_rotation_loop(tmp_path, monkeypatch):
         return real_replace(self, target)
 
     monkeypatch.setattr(Path, "replace", _flaky_replace)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
 
     assert (root / "current_plan.json").exists(), "retire failed → root remains"
     prof_latch = prof / "current_plan.json.adopted-from-root"
@@ -304,7 +318,7 @@ def test_retire_failure_no_rotation_loop(tmp_path, monkeypatch):
     # Boots 2 + 3 with retire STILL failing: the profile-side latch must
     # short-circuit — user edits preserved, zero rotation, zero re-adopt.
     for _boot in (2, 3):
-        assert app_module._adopt_legacy_root_plan(root, prof, False) == "latched-prof"
+        assert _adopt(root, prof, False) == "latched-prof"
         assert (prof / "current_plan.json").read_bytes() == edited_bytes, \
             "re-adopt reverted the user's edits (H2 regression)"
         assert sorted(p.name for p in prof.glob("current_plan.json.bak*")) == baks_after_first
@@ -314,7 +328,7 @@ def test_retire_failure_no_rotation_loop(tmp_path, monkeypatch):
     # A genuinely NEW root plan (different stamp) must still adopt normally.
     monkeypatch.undo()
     _write(root / "current_plan.json", _plan("EVENT2", "2026-07-02T09:00:00"))
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "EVENT2"
     assert (root / "current_plan.json.pre-v3").exists()  # retire works now
 
@@ -340,7 +354,7 @@ def test_copy2_failure_total_abort(tmp_path, monkeypatch):
         return real_copy2(src, dst, *a, **k)
 
     monkeypatch.setattr(_shutil, "copy2", _flaky_copy2)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "error"
+    assert _adopt(root, prof, False) == "error"
     monkeypatch.undo()
 
     # Prof live plan intact; rotation (a safe prefix step) put a recoverable
@@ -351,7 +365,7 @@ def test_copy2_failure_total_abort(tmp_path, monkeypatch):
     assert not (root / "current_plan.json.pre-v3").exists()
 
     # Next boot retries cleanly.
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert (prof / "current_plan.json").read_bytes() == root_bytes
     assert (root / "current_plan.json.pre-v3").exists()
 
@@ -364,7 +378,7 @@ def test_root_bak_collision_noop_and_foreign_names_untouched(tmp_path):
     _write(root / "current_plan.json.bak2", _plan("HIST2", OLD_STAMP))
     _write(root / "current_plan.json.bak-v206", _plan("FOREIGN", OLD_STAMP))
 
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
 
     # Rotation put STALE at prof/.bak → root's .bak collides → no-op (never
     # clobber profile-side history). .bak2 was free → copied. Foreign name
@@ -378,16 +392,16 @@ def test_root_bak_collision_noop_and_foreign_names_untouched(tmp_path):
 
 
 def test_stamp_parser_reads_both_keys():
-    assert app_module._plan_generated_stamp({"generated": "2026-07-01T18:30:00"}) \
+    assert ps._stamp({"generated": "2026-07-01T18:30:00"}) \
         == datetime(2026, 7, 1, 18, 30)
-    assert app_module._plan_generated_stamp({"generated_at": "2026-07-01"}) \
+    assert ps._stamp({"generated_at": "2026-07-01"}) \
         == datetime(2026, 7, 1)
     # tp:523 pattern: 'generated' wins over legacy 'generated_at'.
-    assert app_module._plan_generated_stamp(
+    assert ps._stamp(
         {"generated": "2026-07-02T00:00:00", "generated_at": "2020-01-01"}
     ) == datetime(2026, 7, 2)
-    assert app_module._plan_generated_stamp({"generated": "garbage"}) is None
-    assert app_module._plan_generated_stamp({}) is None
+    assert ps._stamp({"generated": "garbage"}) is None
+    assert ps._stamp({}) is None
 
 
 # ── OWNER HARDENING — exhaustive state matrix ────────────────────────────────
@@ -423,6 +437,8 @@ def _expected(root_state: str, prof_state: str, latch: bool,
         return "latched"
     if root_state == "missing":
         return "no-root"
+    if multi:
+        return "refused-multi-profile"  # 10.3: no known owner
     if root_state in ("corrupt", "zero"):
         return "corrupt-root"          # unparseable root: skip + leave evidence
     if prof_state in ("missing", "corrupt", "zero"):
@@ -434,7 +450,7 @@ def _expected(root_state: str, prof_state: str, latch: bool,
             return "adopted"
         if order[root_state] < order[prof_state]:
             return "skipped"
-        return "skipped" if multi else "adopted"   # equal stamps
+        return "adopted"               # equal stamps, single profile
     return "adopted"                   # mtime fallback, root mtime newer
 
 
@@ -457,13 +473,14 @@ def test_state_matrix_exhaustive(tmp_path):
                     before = _snapshot(case)
 
                     want = _expected(rs, ps, latch, multi)
-                    got = app_module._adopt_legacy_root_plan(root, prof, multi_profile=multi)
+                    got = _adopt(root, prof, multi_profile=multi)
                     assert got == want, (
                         f"root={rs} prof={ps} latch={latch} multi={multi}: "
                         f"want {want}, got {got}")
 
                     after = _snapshot(case)
-                    if want in ("latched", "no-root", "corrupt-root", "skipped"):
+                    if want in ("latched", "no-root", "corrupt-root", "skipped",
+                                "refused-multi-profile"):
                         # Skip family: byte-for-byte ZERO filesystem changes.
                         assert after == before, (
                             f"skip-family case mutated fs: root={rs} prof={ps} "
@@ -519,10 +536,11 @@ def test_real_home_dry_run(tmp_path):
     multi = len([d for d in profiles_dir.iterdir() if d.is_dir()]) > 1
 
     before = _snapshot(root, prof)
-    status = app_module._adopt_legacy_root_plan(root, prof, multi_profile=multi)
+    status = _adopt(root, prof, multi_profile=multi)
     after = _snapshot(root, prof)
 
-    if status in ("latched", "no-root", "corrupt-root", "skipped", "error"):
+    if status in ("latched", "no-root", "corrupt-root", "skipped", "error",
+                  "refused-multi-profile"):
         assert after == before, f"dry-run status={status} but fs changed"
     else:
         surviving = {b for b, _ in after.values()}
@@ -539,10 +557,10 @@ def test_adopt_with_full_prof_bak_chain_ages_out_oldest(tmp_path):
     _write(root / "current_plan.json", _plan("EVENT", NEW_STAMP))
     _write(prof / "current_plan.json", _plan("STALE", OLD_STAMP))
     _write(prof / "current_plan.json.bak", _plan("B1", OLD_STAMP))
-    for n in range(2, tp.PLAN_BACKUP_DEPTH + 1):
+    for n in range(2, ps.BACKUP_DEPTH + 1):
         _write(prof / f"current_plan.json.bak{n}", _plan(f"B{n}", OLD_STAMP))
 
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
 
     live = json.loads((prof / "current_plan.json").read_text())
     assert live["goal"]["event_name"] == "EVENT"
@@ -551,8 +569,8 @@ def test_adopt_with_full_prof_bak_chain_ages_out_oldest(tmp_path):
     assert json.loads((prof / "current_plan.json.bak").read_text())["goal"]["event_name"] == "STALE"
     assert json.loads((prof / "current_plan.json.bak2").read_text())["goal"]["event_name"] == "B1"
     assert json.loads(
-        (prof / f"current_plan.json.bak{tp.PLAN_BACKUP_DEPTH}").read_text()
-    )["goal"]["event_name"] == f"B{tp.PLAN_BACKUP_DEPTH - 1}"
+        (prof / f"current_plan.json.bak{ps.BACKUP_DEPTH}").read_text()
+    )["goal"]["event_name"] == f"B{ps.BACKUP_DEPTH - 1}"
 
 
 def test_prof_latch_stampless_hash_no_collision(tmp_path, monkeypatch):
@@ -572,17 +590,17 @@ def test_prof_latch_stampless_hash_no_collision(tmp_path, monkeypatch):
         return real_replace(self, target)
 
     monkeypatch.setattr(Path, "replace", _no_retire)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     latch_txt = (prof / "current_plan.json.adopted-from-root").read_text()
     assert latch_txt.startswith("sha256:"), "stampless latch must be a content hash"
 
     # Same stampless root again → latched (hash matches).
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "latched-prof"
+    assert _adopt(root, prof, False) == "latched-prof"
 
     # A DIFFERENT stampless root → must adopt, not wrong-skip.
     _write(root / "current_plan.json", _plan("STAMPLESS-B", None))
     _set_mtime(root / "current_plan.json", NOW - 5)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "STAMPLESS-B"
 
 
@@ -601,11 +619,11 @@ def test_prof_latch_ignored_when_prof_plan_missing(tmp_path, monkeypatch):
         return real_replace(self, target)
 
     monkeypatch.setattr(Path, "replace", _no_retire)
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert (prof / "current_plan.json.adopted-from-root").exists()
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "latched-prof"
+    assert _adopt(root, prof, False) == "latched-prof"
 
     # Support lever: profile plan removed (user/support) → latch is moot.
     (prof / "current_plan.json").unlink()
-    assert app_module._adopt_legacy_root_plan(root, prof, False) == "adopted"
+    assert _adopt(root, prof, False) == "adopted"
     assert json.loads((prof / "current_plan.json").read_text())["goal"]["event_name"] == "EVENT"

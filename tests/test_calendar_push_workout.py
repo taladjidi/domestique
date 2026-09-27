@@ -41,6 +41,7 @@ import config  # noqa: E402
 import db as db_module  # noqa: E402
 import app as app_module  # noqa: E402
 import training_planner as tp  # noqa: E402
+import plan_store  # noqa: E402
 import icu_calendar_push as icp  # noqa: E402
 from profile_manager import ProfileManager  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -128,7 +129,7 @@ def stub(tmp_path):
         if t is not None:
             t.cancel()
         app_module._icu_push_timer = None
-        tp.post_write_callback = None
+        plan_store.post_write_callback = None
         ProfileManager._instance = old_instance
         app_module.DATA_DIR = old_data_dir
         app_module.tp.WORKOUT_DIR = old_workout_dir
@@ -381,7 +382,7 @@ class TestGA5BuildEventByteIdentical:
         cls = icp._load_classifications(wd)
 
         desired, _, _ = icp._desired_events(
-            stub.pm, icp._load_plan(), TODAY, 14, stub.pid)
+            stub.pm, icp._load_plan(stub.pid), TODAY, 14, stub.pid)
         assert len(desired) == 1
 
         ev, reason = icp._build_event(

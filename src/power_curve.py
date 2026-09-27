@@ -758,12 +758,13 @@ def _planned_ftp_test_hint(day_iso: str) -> str:
     look when the activity name says nothing, but never force-classifies the
     ride (the rider may have skipped the test and spun easy instead)."""
     try:
-        from training_planner import PLAN_DIR
-        p = PLAN_DIR / "current_plan.json"
-        if not p.exists():
-            return ""
-        plan = json.loads(p.read_text(encoding="utf-8"))
-        for w in plan.get("weeks", []):
+        # The ride being synced is the active rider's (as is the FTP prior
+        # the caller reads); their plan comes from its owner.
+        import plan_store
+        from profile_manager import ProfileManager
+        pid = ProfileManager.get().active_id
+        plan = plan_store.read(pid) if pid else None
+        for w in (plan or {}).get("weeks", []):
             for s in w.get("sessions", []):
                 if (s.get("day") == day_iso
                         and s.get("session_type") == "ftp_test"):

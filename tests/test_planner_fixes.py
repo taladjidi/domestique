@@ -243,7 +243,8 @@ class TestFix3ThreeDayWeekHITScaling(unittest.TestCase):
 
 
 class TestFix4AtomicWrites(unittest.TestCase):
-    """All plan-mutation sites in app.py go through ``tp.atomic_write_plan``.
+    """All plan-mutation sites in app.py go through the plan store
+    (``tp.atomic_write_plan`` then; ``plan_store.update`` since 10.1).
 
     fix26 §6 added 3 new plan-write endpoints (move-session, rematch-apply,
     dismiss-session) and removed 1 legacy write path (daily-adapt's in-place
@@ -265,60 +266,43 @@ class TestFix4AtomicWrites(unittest.TestCase):
     """
 
     def test_every_plan_read_modify_write_goes_through_the_store(self):
-        """Contracts 4.1 / 4.2 (2026-09-23). The count this replaced (22
-        ``tp.atomic_write_plan(json_path, plan)`` sites) was the problem: 24
-        read-modify-writes, 6 of them locked, so a move-session and an
-        auto-recalc racing each other lost one write. Every writer now calls
-        ``tp.update_plan`` (read -> mutate -> write under the plan lock), and
-        no ``async def`` waits on that lock itself -- it calls the store
-        through ``run_in_threadpool``, or a slow writer stalls the event loop.
-
-        What is left of the old primitives in app.py, and why:
-          - the boot-time adoption of the legacy root plan (whole-file copy,
-            before the server serves) takes ``plan_write_lock()``;
-          - ``_generate_into_store`` replaces an UNREADABLE plan (generate is
-            the action that repairs it), under the lock, from a sync def."""
+        """Contracts 4.1 / 4.2 (2026-09-23), 10.1 (2026-09-27). Every writer
+        calls ``plan_store.update`` (read -> mutate -> write under the plan
+        lock; ``tp.update_plan`` before the one-plan round), and no ``async
+        def`` waits on that lock itself -- it calls the store through
+        ``run_in_threadpool``. The retired primitives are gone from app.py:
+        boot adoption and generate-on-a-corrupt-plan are store operations
+        now. (The full rule, every module, is G4:
+        tests/test_one_plan_static.py.)"""
         import ast
         src = APP_PY.read_text()
         tree = ast.parse(src)
-        lock_or_write = {"atomic_write_plan", "plan_write_lock", "update_plan"}
+        blocking = {"update", "restore_from_backup", "adopt_legacy_root",
+                    "copy_legacy_plans", "drop"}
 
-        def _tp_calls(node):
-            for n in ast.walk(node):
-                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                        and isinstance(n.func.value, ast.Name) and n.func.value.id == "tp"
-                        and n.func.attr in lock_or_write):
-                    yield n.func.attr, n.lineno
-
-        # 1. No async def (nested defs included) calls the blocking primitives.
+        # 1. No async def (nested defs included) calls the store directly.
         on_the_loop = []
         for fn in ast.walk(tree):
             if isinstance(fn, ast.AsyncFunctionDef):
-                # the coroutine's own statements; nested defs run elsewhere
                 stack = list(fn.body)
                 while stack:
                     n = stack.pop()
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                         continue
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                            and isinstance(n.func.value, ast.Name) and n.func.value.id == "tp"
-                            and n.func.attr in lock_or_write):
-                        on_the_loop.append(f"{fn.name}:{n.lineno} tp.{n.func.attr}")
+                            and isinstance(n.func.value, ast.Name)
+                            and n.func.value.id == "plan_store"
+                            and n.func.attr in blocking):
+                        on_the_loop.append(f"{fn.name}:{n.lineno} plan_store.{n.func.attr}")
                     stack.extend(ast.iter_child_nodes(n))
         self.assertEqual(on_the_loop, [], "blocking plan-store call on the event loop")
 
-        # 2. atomic_write_plan / plan_write_lock survive only where named above.
-        allowed = {"_adopt_legacy_root_plan", "_generate_into_store"}
-        stray = []
-        for fn in tree.body:
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name not in allowed:
-                for name, line in _tp_calls(fn):
-                    if name in ("atomic_write_plan", "plan_write_lock"):
-                        stray.append(f"{fn.name}:{line} tp.{name}")
-        self.assertEqual(stray, [], "a plan write outside the store")
+        # 2. The retired primitives are gone.
+        for retired in ("atomic_write_plan", "plan_write_lock", "update_plan"):
+            self.assertNotIn(f"tp.{retired}", src)
 
         # 3. ...and the store is what the writers use.
-        store_calls = len(re.findall(r"tp\.update_plan\b", src))
+        store_calls = len(re.findall(r"plan_store\.update\b", src))
         self.assertGreaterEqual(store_calls, 20, store_calls)
 
     def test_no_inline_tmp_rename_pattern(self):
@@ -332,8 +316,8 @@ class TestFix4AtomicWrites(unittest.TestCase):
         )
         self.assertEqual(
             leftovers, [],
-            f"Inline tmp+rename plan-write blocks must be migrated to "
-            f"tp.atomic_write_plan; found {len(leftovers)}",
+            f"Inline tmp+rename plan-write blocks must go through "
+            f"plan_store.update; found {len(leftovers)}",
         )
 
     def test_no_direct_json_dump_to_final_path(self):

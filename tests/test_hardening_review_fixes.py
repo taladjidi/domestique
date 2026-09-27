@@ -30,6 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import clock
+import plan_store
 import training_planner as tp
 from test_hardening_plan_store import _week
 from test_hardening_ride_writers_app import EXT, ride  # noqa: F401 (fixture)
@@ -78,8 +79,9 @@ def test_a_fresh_auto_recalc_survives_a_metrics_failure(fresh_plan, monkeypatch)
 def test_no_async_handler_reaches_the_plan_lock_through_a_sync_helper():
     """The call-graph half of the 4.2 invariant (test_planner_fixes checks
     the direct calls): no coroutine calls, directly, a module-level sync
-    function that reaches tp.update_plan / atomic_write_plan /
-    plan_write_lock. lifespan runs before the server serves."""
+    function that reaches the plan store (plan_store.update or one of its
+    named operations; tp.update_plan / atomic_write_plan / plan_write_lock
+    before the one-plan round). lifespan runs before the server serves."""
     import ast
     import app as A
     tree = ast.parse(Path(A.__file__).read_text(encoding="utf-8"))
@@ -91,8 +93,9 @@ def test_no_async_handler_reaches_the_plan_lock_through_a_sync_helper():
             if isinstance(n, ast.Call):
                 f = n.func
                 if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
-                        and f.value.id == "tp"
-                        and f.attr in ("update_plan", "atomic_write_plan", "plan_write_lock")):
+                        and f.value.id == "plan_store"
+                        and f.attr in ("update", "restore_from_backup", "adopt_legacy_root",
+                                       "copy_legacy_plans", "drop")):
                     store = True
                 if isinstance(f, ast.Name):
                     names.add(f.id)
@@ -133,7 +136,7 @@ def test_a_ride_import_does_not_stall_the_event_loop(fresh_plan, monkeypatch):
         held, done = threading.Event(), threading.Event()
 
         def slow_writer():
-            with tp.plan_write_lock():
+            with plan_store._LOCK:
                 held.set()
                 done.wait(3)
         tw = threading.Thread(target=slow_writer)
@@ -220,7 +223,7 @@ def test_an_unreadable_rpe_body_is_400_and_keeps_the_rating(ride, body):  # noqa
 def test_a_refused_host_reaches_no_other_middleware(monkeypatch):
     import app as A
     calls = []
-    monkeypatch.setattr(A, "_heal_plan_on_disk", lambda: calls.append(1))
+    monkeypatch.setattr(A, "_heal_plan_on_disk", lambda pid: calls.append(1))
     monkeypatch.setenv("DOMESTIQUE_ALLOWED_HOSTS", "testserver")
     c = TestClient(A.app, raise_server_exceptions=False)
     r = c.post("/api/profiles/switch", json={"id": "x"},

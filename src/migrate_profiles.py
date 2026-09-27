@@ -210,7 +210,6 @@ def migrate_to_profiles() -> None:
 
     default_dir = base / "profiles" / "default"
     default_dir.mkdir(parents=True, exist_ok=True)
-    (default_dir / "plans").mkdir(exist_ok=True)
 
     # ── 1. COPY files (originals stay until registry is written) ────────
     for f in [".env", "user_prefs.json", "user_paths.json",
@@ -220,11 +219,10 @@ def migrate_to_profiles() -> None:
         if src.exists():
             shutil.copy2(str(src), str(default_dir / f))
 
-    # Copy plans directory
-    old_plans = base / "plans"
-    if old_plans.exists():
-        for item in old_plans.iterdir():
-            shutil.copy2(str(item), str(default_dir / "plans" / item.name))
+    # Copy the plans, through their owner (contract 10.1).
+    import plan_store
+    plan_store.use_profiles_root(base / "profiles")
+    plan_store.copy_legacy_plans("default")
 
     # ── 2. Known-devices shim: drop every legacy BLE field, do not seed
     # device_prefs.json with anything. v4 profiles have an empty device_prefs.

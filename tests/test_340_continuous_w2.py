@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 import app as app_module
 import continuous_policy as cpol
 import training_planner as tp
+import plan_store
 
 _LIB_INDEX = Path(__file__).resolve().parent.parent / "src" / "workouts" / ".library_index.json"
 
@@ -308,11 +309,11 @@ class DeloadAdvanceBase(unittest.TestCase):
         def _m(p):
             before = p.get("deload_advance")
             out["chip"] = app_module._maybe_advance_continuous_deload(
-                p, path, today=self.today)
+                p, today=self.today)
             return p if p.get("deload_advance") is not before else None
 
         with patch.object(app_module, "_load_all_rides_safe", return_value=rides):
-            tp.update_plan(path, _m)
+            plan_store.update(app_module._pid(), _m, reason="test")
         plan.clear()
         plan.update(json.loads(path.read_text()))
         return out["chip"], path
@@ -437,7 +438,7 @@ class TestDeloadAdvance(DeloadAdvanceBase):
         plan2 = json.loads(saved1)
         with patch.object(app_module, "_load_all_rides_safe", return_value=rides):
             chip2 = app_module._maybe_advance_continuous_deload(
-                plan2, path, today=self.today)
+                plan2, today=self.today)
         self.assertEqual(chip2, chip1)
         self.assertEqual(path.read_text(), saved1)
 
@@ -489,7 +490,7 @@ class TestDeloadRevert(DeloadAdvanceBase):
         with patch.object(app_module, "_load_all_rides_safe",
                           return_value=_monotone_rides(self.today)):
             chip = app_module._maybe_advance_continuous_deload(
-                saved, path, today=self.today)
+                saved, today=self.today)
         self.assertIsNone(chip)
 
         # Second revert is a clean no-op.

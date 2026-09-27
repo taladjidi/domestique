@@ -73,10 +73,8 @@ CENSUS = {
         "facts.py",                 # names the store in the registry
     },
     "plan:current_plan.json": {
-        "app.py",                   # ~20 write sites; the plan-transaction work
-        "training_planner.py",      # atomic_write_plan lives here
-        "icu_calendar_push.py",     # reads the plan to build events
-        "power_curve.py",           # reads PLAN_DIR/current_plan.json directly
+        "plan_store.py",            # the owner (contract 10.1): every read and write
+        "app.py",                   # the Raw-plan markdown beside it (10.4)
         "facts.py",
     },
     "profile:rides/": {

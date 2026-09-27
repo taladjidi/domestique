@@ -1,7 +1,7 @@
 """Push planned workouts to the intervals.icu calendar (v3.0.1, IP_ICU_PUSH).
 
 ONE reconcile engine, two triggers (the plan-tab button and the debounced
-``atomic_write_plan`` post-write hook — app.py wires both). Garmin and
+plan store's post-write callback — app.py wires both). Garmin and
 MyWhoosh pull structured workouts from the ICU calendar, so mirroring the
 plan there removes the manual ZWO-upload friction.
 
@@ -44,7 +44,6 @@ from pathlib import Path
 
 import config
 import training as _training
-from user_home import domestique_home
 
 _log = logging.getLogger("domestique.icu_push")
 
@@ -148,12 +147,13 @@ def _http_error_detail(step: str, status: int, body: bytes) -> str:
 
 # ── plan → desired events ────────────────────────────────────────────────────
 
-def _load_plan() -> dict | None:
-    import training_planner as tp
-    p = Path(getattr(tp, "PLAN_DIR", domestique_home() / "plans")) / "current_plan.json"
+def _load_plan(profile_id: str) -> dict | None:
+    """``profile_id``'s stored plan (from its owner, plan_store), None when
+    there is none, it does not parse, or it has no weeks."""
+    import plan_store
     try:
-        plan = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
+        plan = plan_store.read(profile_id)
+    except plan_store.PlanCorrupt:
         return None
     return plan if isinstance(plan, dict) and plan.get("weeks") else None
 
@@ -451,7 +451,7 @@ def reconcile(horizon_days: int = HORIZON_DAYS) -> dict:
             return _result(error=err)
         if not write_ok(pm):
             return _result(needs_reconnect=True)
-        plan = _load_plan()
+        plan = _load_plan(profile_id)
         if plan is None:
             return _result(error="no_plan")
         today = clock.today()

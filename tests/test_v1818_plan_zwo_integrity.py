@@ -10,8 +10,9 @@ invariants:
     days, yields identical output (the seed anchor is the plan's stable
     ``generated`` date, not ``date.today()``).
   - Resolves-on-disk staleness, not session_type↔prefix.
-  - A one-time ``.premigration-v1818`` snapshot is written before the first
-    mutation.
+  - The pre-heal plan is kept: a ``.premigration-v1818`` copy until the
+    one-plan round, the store's newest backup (``.bak``) since (10.4: no
+    derived copy beside the plan).
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import plan_store  # noqa: E402
 import training_planner as tp  # noqa: E402
 
 
@@ -48,6 +50,10 @@ class TestPlanZwoIntegrity(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="plan_int_"))
         self.plan_p = self.tmp / "current_plan.json"
+        plan_store.bind("v1818", self.tmp)
+
+    def tearDown(self):
+        plan_store._dirs.pop("v1818", None)
 
     def _write(self, plan):
         self.plan_p.write_text(json.dumps(plan), encoding="utf-8")
@@ -57,7 +63,7 @@ class TestPlanZwoIntegrity(unittest.TestCase):
         ghost_future = "zwift-academy/month-2-session-10.zwo"
         plan = _plan_with([(-3, "z2", ghost_past), (3, "z2", ghost_future)])
         self._write(plan)
-        n = tp.rewrite_stale_plan_classifications(self.plan_p)
+        n = tp.rewrite_stale_plan_classifications("v1818")
         out = json.loads(self.plan_p.read_text())
         sess = out["weeks"][0]["sessions"]
         # Past session: untouched (frozen history).
@@ -74,22 +80,23 @@ class TestPlanZwoIntegrity(unittest.TestCase):
         plan = _plan_with([(5, "tempo", "external/foo/bar.zwo")])
         self._write(plan)
         # Heal "today".
-        n1 = tp.rewrite_stale_plan_classifications(self.plan_p)
+        n1 = tp.rewrite_stale_plan_classifications("v1818")
         first = json.loads(self.plan_p.read_text())["weeks"][0]["sessions"][0]["zwo_file"]
         # Heal again same day → no-op.
-        n2 = tp.rewrite_stale_plan_classifications(self.plan_p)
+        n2 = tp.rewrite_stale_plan_classifications("v1818")
         self.assertEqual(n2, 0, "second heal must be a no-op (idempotent)")
         # Simulate a launch on a LATER calendar day: seed anchor is the plan's
         # stable `generated` date, so the result must not drift.
         again = json.loads(self.plan_p.read_text())["weeks"][0]["sessions"][0]["zwo_file"]
         self.assertEqual(first, again, "healed file must be stable across days")
 
-    def test_premigration_snapshot_written_once(self):
+    def test_the_pre_heal_plan_is_the_stores_newest_backup(self):
         plan = _plan_with([(2, "z2", "ext/ghost.zwo")])
         self._write(plan)
-        tp.rewrite_stale_plan_classifications(self.plan_p)
-        snap = self.plan_p.with_suffix(self.plan_p.suffix + ".premigration-v1818")
-        self.assertTrue(snap.exists(), "one-time pre-migration snapshot missing")
+        tp.rewrite_stale_plan_classifications("v1818")
+        snap = self.plan_p.with_suffix(self.plan_p.suffix + ".bak")
+        self.assertTrue(snap.exists(), "the pre-heal plan was not kept")
+        self.assertFalse(self.plan_p.with_suffix(".json.premigration-v1818").exists())
         # Snapshot preserves the ORIGINAL ghost (pre-heal state).
         orig = json.loads(snap.read_text())
         self.assertEqual(orig["weeks"][0]["sessions"][0]["zwo_file"], "ext/ghost.zwo")
@@ -102,7 +109,7 @@ class TestPlanZwoIntegrity(unittest.TestCase):
             self.skipTest("no library files")
         plan = _plan_with([(4, "z2", real)])
         self._write(plan)
-        n = tp.rewrite_stale_plan_classifications(self.plan_p)
+        n = tp.rewrite_stale_plan_classifications("v1818")
         out = json.loads(self.plan_p.read_text())
         self.assertEqual(out["weeks"][0]["sessions"][0]["zwo_file"], real)
         self.assertEqual(n, 0)

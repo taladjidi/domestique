@@ -2,7 +2,8 @@
 
 If ``current_plan.json`` is missing or zero-bytes on app startup but at
 least one ``current_plan.json.bak*`` snapshot is present and parseable,
-``_maybe_restore_plan_from_backup`` copies the newest valid snapshot
+``plan_store.restore_from_backup`` (app._maybe_restore_plan_from_backup
+until the one-plan round) copies the newest valid snapshot
 back into place. Closes the failure mode where a release-time mutation
 nuked the live file but the rotated backups survived.
 """
@@ -11,7 +12,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import app
+import plan_store
+
+
+def _restore(plan_path: Path):
+    """Restore the plan of a profile whose plans live in plan_path's dir."""
+    plan_store.bind("r", plan_path.parent)
+    return plan_store.restore_from_backup("r")
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -22,7 +29,7 @@ def test_auto_restore_no_op_when_live_present(tmp_path: Path) -> None:
     plan_path = tmp_path / "current_plan.json"
     _write_json(plan_path, {"goal": "x", "weeks": []})
 
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
     assert result is None
     assert plan_path.exists()
 
@@ -30,7 +37,7 @@ def test_auto_restore_no_op_when_live_present(tmp_path: Path) -> None:
 def test_auto_restore_no_op_when_no_backups(tmp_path: Path) -> None:
     plan_path = tmp_path / "current_plan.json"
     # Live missing, no .bak files at all.
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
     assert result is None
     assert not plan_path.exists()
 
@@ -43,7 +50,7 @@ def test_auto_restore_picks_newest_bak(tmp_path: Path) -> None:
     _write_json(tmp_path / "current_plan.json.bak2", {"marker": "older"})
     _write_json(tmp_path / "current_plan.json.bak3", {"marker": "oldest"})
 
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
 
     assert result == "current_plan.json.bak"
     assert plan_path.exists()
@@ -56,7 +63,7 @@ def test_auto_restore_skips_empty_bak(tmp_path: Path) -> None:
     (tmp_path / "current_plan.json.bak").write_text("")  # 0 bytes
     _write_json(tmp_path / "current_plan.json.bak2", {"marker": "valid"})
 
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
 
     assert result == "current_plan.json.bak2"
     assert json.loads(plan_path.read_text())["marker"] == "valid"
@@ -68,7 +75,7 @@ def test_auto_restore_skips_unparseable_bak(tmp_path: Path) -> None:
     (tmp_path / "current_plan.json.bak").write_text("{ not json }")
     _write_json(tmp_path / "current_plan.json.bak2", {"marker": "valid"})
 
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
 
     assert result == "current_plan.json.bak2"
     assert json.loads(plan_path.read_text())["marker"] == "valid"
@@ -81,7 +88,7 @@ def test_auto_restore_skips_empty_dict_bak(tmp_path: Path) -> None:
     _write_json(tmp_path / "current_plan.json.bak", {})  # The very bug
     _write_json(tmp_path / "current_plan.json.bak2", {"marker": "valid"})
 
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
 
     assert result == "current_plan.json.bak2"
     assert json.loads(plan_path.read_text())["marker"] == "valid"
@@ -94,7 +101,7 @@ def test_auto_restore_treats_zero_byte_live_as_missing(tmp_path: Path) -> None:
     plan_path.write_text("")  # 0 bytes
     _write_json(tmp_path / "current_plan.json.bak", {"marker": "rescue"})
 
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
 
     assert result == "current_plan.json.bak"
     assert json.loads(plan_path.read_text())["marker"] == "rescue"
@@ -108,7 +115,7 @@ def test_auto_restore_does_not_consume_bak(tmp_path: Path) -> None:
     bak = tmp_path / "current_plan.json.bak"
     _write_json(bak, {"marker": "preserved"})
 
-    app._maybe_restore_plan_from_backup(plan_path)
+    _restore(plan_path)
 
     assert bak.exists()
     assert json.loads(bak.read_text())["marker"] == "preserved"
@@ -120,5 +127,5 @@ def test_auto_restore_never_raises_on_unreadable_dir(tmp_path: Path) -> None:
     # Pass a non-existent path that also can't be created (parent exists,
     # so a missing live + no baks just yields None).
     plan_path = tmp_path / "nonexistent" / "current_plan.json"
-    result = app._maybe_restore_plan_from_backup(plan_path)
+    result = _restore(plan_path)
     assert result is None

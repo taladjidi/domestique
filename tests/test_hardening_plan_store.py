@@ -1,7 +1,7 @@
 """Contracts 4.1 / 4.2: one plan store.
 
-tp.update_plan(json_path, mutate) holds the plan-write lock across read ->
-mutate -> write. Before it existed, every writer read the plan with no lock
+plan_store.update(profile_id, mutate, reason=) (tp.update_plan until the
+one-plan round) holds the plan-write lock across read -> mutate -> write. Before it existed, every writer read the plan with no lock
 (or with the lock but racing an unlocked writer) and wrote its copy back: a
 write that landed in between was overwritten with the stale copy (audit
 2026-09-23, rv-data #3: a move-session lost to auto-recalc; the locked
@@ -24,7 +24,18 @@ from pathlib import Path
 import pytest
 
 import clock
+import plan_store as ps
 import training_planner as tp
+
+
+def _at(tmp_path: Path) -> str:
+    """Point profile "t" at tmp_path; its plan is tmp_path/current_plan.json."""
+    ps.bind("t", tmp_path)
+    return "t"
+
+
+def _put(tmp_path: Path, plan: dict) -> None:
+    ps.update(_at(tmp_path), lambda _p: plan, reason="test seed")
 
 
 def _read(p: Path) -> dict:
@@ -36,7 +47,7 @@ def _read(p: Path) -> dict:
 def test_two_racing_read_modify_writes_both_persist(tmp_path: Path) -> None:
     """A holds the store mid-mutation; B's update waits and applies on top."""
     p = tmp_path / "current_plan.json"
-    tp.atomic_write_plan(p, {"weeks": [], "n": 0})
+    _put(tmp_path, {"weeks": [], "n": 0})
     a_inside = threading.Event()
     b_done = threading.Event()
 
@@ -50,10 +61,10 @@ def test_two_racing_read_modify_writes_both_persist(tmp_path: Path) -> None:
         plan["b"] = True
         return plan
 
-    ta = threading.Thread(target=tp.update_plan, args=(p, slow_a))
+    ta = threading.Thread(target=ps.update, args=("t", slow_a), kwargs={"reason": "a"})
     ta.start()
     assert a_inside.wait(5)
-    tb = threading.Thread(target=lambda: (tp.update_plan(p, b), b_done.set()))
+    tb = threading.Thread(target=lambda: (ps.update("t", b, reason="b"), b_done.set()))
     tb.start()
     ta.join(10)
     tb.join(10)
@@ -63,40 +74,41 @@ def test_two_racing_read_modify_writes_both_persist(tmp_path: Path) -> None:
 
 def test_mutate_sees_the_file_and_none_writes_nothing(tmp_path: Path) -> None:
     p = tmp_path / "current_plan.json"
-    assert tp.update_plan(p, lambda plan: None) is None      # missing file
+    pid = _at(tmp_path)
+    assert ps.update(pid, lambda plan: None, reason="t") is None      # missing file
     seen = []
-    assert tp.update_plan(p, lambda plan: seen.append(plan)) is None
+    assert ps.update(pid, lambda plan: seen.append(plan), reason="t") is None
     assert seen == [None] and not p.exists()
 
-    tp.atomic_write_plan(p, {"v": 1})
+    _put(tmp_path, {"v": 1})
     before = p.stat().st_mtime_ns
-    assert tp.update_plan(p, lambda plan: None) is None
+    assert ps.update(pid, lambda plan: None, reason="t") is None
     assert p.stat().st_mtime_ns == before
     assert not p.with_suffix(".json.bak").exists()           # nothing rotated
 
-    out = tp.update_plan(p, lambda plan: {**plan, "v": plan["v"] + 1})
+    out = ps.update(pid, lambda plan: {**plan, "v": plan["v"] + 1}, reason="t")
     assert out == {"v": 2} and _read(p) == {"v": 2}
 
 
 def test_mutate_raising_writes_nothing_and_releases_the_lock(tmp_path: Path) -> None:
     p = tmp_path / "current_plan.json"
-    tp.atomic_write_plan(p, {"v": 1})
+    _put(tmp_path, {"v": 1})
 
     def boom(plan):
         plan["v"] = 99
         raise LookupError("no session at that date")
 
     with pytest.raises(LookupError):
-        tp.update_plan(p, boom)
+        ps.update("t", boom, reason="t")
     assert _read(p) == {"v": 1}
     # the lock is free again: another thread can take it at once
     got = []
 
     def take():
-        ok = tp._plan_write_lock.acquire(timeout=1)
+        ok = ps._LOCK.acquire(timeout=1)
         got.append(ok)
         if ok:
-            tp._plan_write_lock.release()
+            ps._LOCK.release()
     t = threading.Thread(target=take)
     t.start()
     t.join(5)
@@ -111,7 +123,7 @@ def test_rewrite_stale_does_not_overwrite_a_concurrent_write(tmp_path, monkeypat
     lost. Now its read, heal and write are one store call."""
     p = tmp_path / "current_plan.json"
     future = (clock.today() + timedelta(days=3)).isoformat()
-    tp.atomic_write_plan(p, {
+    _put(tmp_path, {
         "generated": clock.today().isoformat(),
         "weeks": [{"week_num": 1, "sessions": [
             {"day": future, "session_type": "z2", "zwo_file": "gone_z2.zwo",
@@ -127,14 +139,14 @@ def test_rewrite_stale_does_not_overwrite_a_concurrent_write(tmp_path, monkeypat
     monkeypatch.setattr(tp, "match_zwo", slow_match)
 
     counts = []
-    t1 = threading.Thread(target=lambda: counts.append(tp.rewrite_stale_plan_classifications(p)))
+    t1 = threading.Thread(target=lambda: counts.append(tp.rewrite_stale_plan_classifications("t")))
     t1.start()
     assert in_match.wait(5)
 
     def other(plan):
         plan["moved_by_rider"] = True
         return plan
-    t2 = threading.Thread(target=lambda: (tp.update_plan(p, other), other_done.set()))
+    t2 = threading.Thread(target=lambda: (ps.update("t", other, reason="t"), other_done.set()))
     t2.start()
     t1.join(10)
     t2.join(10)
@@ -231,7 +243,7 @@ def test_event_loop_answers_while_a_slow_writer_holds_the_plan(app_plan) -> None
         held, done = threading.Event(), threading.Event()
 
         def slow_writer():
-            with tp.plan_write_lock():
+            with ps._LOCK:
                 held.set()
                 done.wait(3)
         tw = threading.Thread(target=slow_writer)
@@ -361,25 +373,25 @@ def test_an_outage_neither_stalls_the_loop_nor_asks_per_request(app_plan, monkey
 
 # ── fix-forward F6: the rule is enforced at runtime, not by pattern ─────────
 
-@pytest.mark.parametrize("how", ["update_plan", "atomic_write_plan",
-                                 "plan_write_lock", "raw_lock"])
+@pytest.mark.parametrize("how", ["update", "held", "raw_lock", "restore"])
 def test_the_plan_store_refuses_the_event_loop_and_names_the_caller(tmp_path, how) -> None:
     """The AST guard missed 7 of 12 planted violations (an alias, a nested
     def, a helper in another module, a from-import, a method, the raw lock
-    attribute...; two of them stalled the loop 2.6 s). The store itself now
+    attribute...; two of them stalled the loop 2.6 s). The store itself
     refuses to be entered from a thread running an event loop, whoever the
     caller is, and says who called it."""
     import asyncio
     p = tmp_path / "current_plan.json"
-    tp.atomic_write_plan(p, {"weeks": [], "v": 1})
+    _put(tmp_path, {"weeks": [], "v": 1})
+
     def with_lock(lock):
         with lock:
             pass
     calls = {
-        "update_plan": lambda: tp.update_plan(p, lambda plan: {**plan, "v": 2}),
-        "atomic_write_plan": lambda: tp.atomic_write_plan(p, {"weeks": [], "v": 2}),
-        "plan_write_lock": lambda: with_lock(tp.plan_write_lock()),
-        "raw_lock": lambda: with_lock(tp._plan_write_lock),
+        "update": lambda: ps.update("t", lambda plan: {**plan, "v": 2}, reason="t"),
+        "held": lambda: with_lock(ps._held(ps._paths("t"))),
+        "raw_lock": lambda: with_lock(ps._LOCK),
+        "restore": lambda: ps.restore_from_backup("t"),
     }
 
     async def planted_handler():
@@ -389,7 +401,7 @@ def test_the_plan_store_refuses_the_event_loop_and_names_the_caller(tmp_path, ho
     assert _read(p) == {"weeks": [], "v": 1}
 
     async def control():                   # the sanctioned way still works
-        return await asyncio.to_thread(tp.update_plan, p, lambda plan: {**plan, "v": 3})
+        return await asyncio.to_thread(ps.update, "t", lambda plan: {**plan, "v": 3}, reason="t")
     assert asyncio.run(control())["v"] == 3
 
 
@@ -436,17 +448,17 @@ def test_every_plan_writer_route_waits_off_the_event_loop(app_plan, monkeypatch)
     from fastapi.testclient import TestClient
     A, jp, src, dst, _ = app_plan
     routes = _plan_writer_routes(src, dst)
-    entered, real = [], tp.update_plan
+    entered, real = [], ps.update
 
-    def spy(p, mutate):
+    def spy(pid, mutate, **kw):
         try:
             asyncio.get_running_loop()
             on_loop = True
         except RuntimeError:
             on_loop = False
         entered.append((mutate.__qualname__.split(".")[0], on_loop))
-        return real(p, mutate)
-    monkeypatch.setattr(tp, "update_plan", spy)
+        return real(pid, mutate, **kw)
+    monkeypatch.setattr(ps, "update", spy)
     c = TestClient(A.app, base_url="http://127.0.0.1")
     res, lat = {}, []
     with anyio.from_thread.start_blocking_portal() as portal:
@@ -454,7 +466,7 @@ def test_every_plan_writer_route_waits_off_the_event_loop(app_plan, monkeypatch)
         held, done = threading.Event(), threading.Event()
 
         def slow_writer():
-            with tp.plan_write_lock():
+            with ps._LOCK:
                 held.set()
                 done.wait(30)
         tw = threading.Thread(target=slow_writer)
@@ -497,13 +509,14 @@ def test_the_boot_passes_still_heal_the_plan_under_the_guard() -> None:
     pm = ProfileManager.get()
     if pm.active_id is None:
         pm.switch(pm.create_profile("Boot"))
-    jp = Path(pm.plan_dir) / "current_plan.json"      # what lifespan points the app at
-    jp.parent.mkdir(parents=True, exist_ok=True)
+    pm.apply_training_dirs()                          # what lifespan points the app at
+    jp = ps._paths(pm.active_id).live
     today = clock.today()
     mon = today - timedelta(days=today.weekday())
-    tp.atomic_write_plan(jp, {"goal": {"type": "general", "hours_per_week": 8.0},
+    ps.update(pm.active_id, lambda _p: {"goal": {"type": "general", "hours_per_week": 8.0},
                               "phases": [], "generated": clock.now().isoformat(),
-                              "weeks": [_week(mon + timedelta(weeks=k), k + 1) for k in range(3)]})
+                              "weeks": [_week(mon + timedelta(weeks=k), k + 1) for k in range(3)]},
+              reason="test seed")
     with TestClient(A.app, base_url="http://127.0.0.1"):
         pass
     future = [s for w in _read(jp)["weeks"] for s in w["sessions"]
@@ -512,25 +525,32 @@ def test_the_boot_passes_still_heal_the_plan_under_the_guard() -> None:
         [s["day"] for s in future if not s["zwo_file"]]
 
 
-def test_the_post_write_callback_runs_inside_update_plans_lock(tmp_path, monkeypatch) -> None:
-    """Fix-forward F8 pins what the comment on post_write_callback says: a
-    write through the store calls it while the plan lock is still held (it
-    read "OUTSIDE the write lock"); a bare atomic_write_plan does not."""
-    p = tmp_path / "current_plan.json"
+def test_the_post_write_callback_follows_every_write_outside_the_lock(tmp_path, monkeypatch) -> None:
+    """Contract 10 (known limits): the store fires the post-write callback
+    after EVERY write -- an update, a boot restore, a migration copy -- with
+    the profile written, and after it has released the plan lock, so a slow
+    callback holds no writer (F8 pinned the opposite for update_plan)."""
+    pid = _at(tmp_path)
     held = []
 
-    def probe(_path):
+    def probe(who):
         got = []
 
         def try_take():
-            got.append(tp._plan_write_lock.acquire(timeout=0.2))
+            got.append(ps._LOCK.acquire(timeout=0.2))
             if got[0]:
-                tp._plan_write_lock.release()
+                ps._LOCK.release()
         t = threading.Thread(target=try_take)
         t.start()
         t.join(5)
-        held.append(not got[0])
-    monkeypatch.setattr(tp, "post_write_callback", probe)
-    tp.atomic_write_plan(p, {"v": 1})
-    tp.update_plan(p, lambda plan: {**plan, "v": 2})
-    assert held == [False, True]
+        held.append((who, not got[0]))
+    monkeypatch.setattr(ps, "post_write_callback", probe)
+    ps.update(pid, lambda plan: {"v": 1}, reason="t")
+    ps.update(pid, lambda plan: {**plan, "v": 2}, reason="t")
+    ps._paths(pid).live.write_bytes(b"")
+    assert ps.restore_from_backup(pid) == "current_plan.json.bak"
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "current_plan.json").write_text('{"v": 9}')
+    ps.copy_legacy_plans(pid, legacy)
+    assert held == [(pid, False)] * 4

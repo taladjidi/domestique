@@ -78,8 +78,10 @@ def test_snapshot_shape():
 
 def test_snapshot_survives_json_round_trip(tmp_path):
     plan = {"weeks": [], "ctl_snapshot": tp.plan_ctl_snapshot(50.0, 400.0)}
+    import plan_store
+    plan_store.bind("drift", tmp_path)
+    plan_store.update("drift", lambda _p: plan, reason="test")
     p = tmp_path / "current_plan.json"
-    tp.atomic_write_plan(p, plan)
     back = json.loads(p.read_text(encoding="utf-8"))
     assert back["ctl_snapshot"]["current_ctl"] == 50.0
     assert back["ctl_snapshot"]["recent_weekly_tss"] == 400.0

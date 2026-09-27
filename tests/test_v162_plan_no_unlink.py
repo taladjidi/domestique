@@ -1,18 +1,12 @@
 """v1.6.2 — delete-protection guard.
 
-After v1.6.2 every write to ``current_plan.json`` MUST go through
-``training_planner.atomic_write_plan`` (which rotates backups and only
-performs an atomic ``Path.replace``). No source file outside the
-sanctioned helpers may call ``.unlink()`` or ``os.remove()`` on a path
-referencing the live plan file.
-
-Allowed sites:
-
-* ``training_planner._rotate_plan_backups`` — drops the oldest .bak
-  during rotation. Sanctioned by design.
-* (No other call site is allowed to call unlink/remove on the plan
-  path. The boot-time auto-restore writes through tmp + replace, never
-  unlink-then-write.)
+After v1.6.2 every write to ``current_plan.json`` goes through the plan
+store (``plan_store.update`` since the one-plan round; it rotates backups
+and only performs an atomic ``Path.replace``). No source file outside it
+may call ``.unlink()`` or ``os.remove()`` on a path referencing the live
+plan file. (plan_store is the one place that may: its rotation drops the
+oldest .bak by design. The G4 scan, tests/test_one_plan_static.py, is the
+full rule; this regex is the v1.6.2 original.)
 
 This test scans the source. It is intentionally strict: any new direct
 ``.unlink()`` on a plan-path variable will fail it.
@@ -31,7 +25,7 @@ PLAN_VAR_RE = re.compile(
 )
 UNLINK_RE = re.compile(r"\.unlink\s*\(\s*\)")
 REMOVE_RE = re.compile(r"os\.remove\s*\(")
-ALLOWED_HELPERS = {"_rotate_plan_backups"}
+ALLOWED_HELPERS: set = set()
 
 
 def _function_at_line(lines: list[str], lineno: int) -> str:
@@ -73,26 +67,20 @@ def test_no_unlink_on_plan_path_outside_sanctioned_helpers() -> None:
 
     assert not bad, (
         "v1.6.2 forbids direct .unlink()/os.remove() on the plan path "
-        "outside the sanctioned helpers (_rotate_plan_backups). All plan "
-        "writes must go through training_planner.atomic_write_plan. "
+        "outside plan_store. All plan writes go through plan_store.update. "
         "Offending sites:\n  " + "\n  ".join(bad)
     )
 
 
-def test_atomic_write_plan_helper_is_used() -> None:
-    """app.py should call ``tp.atomic_write_plan`` directly — the inline
-    tmp+rename pattern is gone."""
+def test_app_writes_the_plan_through_the_store_only() -> None:
+    """app.py writes the plan through plan_store.update -- no retired
+    primitive, no inline tmp+rename plan-write block."""
     app_src = (REPO_ROOT / "src" / "app.py").read_text(encoding="utf-8")
-    assert "tp.atomic_write_plan" in app_src, (
-        "app.py must call tp.atomic_write_plan after v1.6.2 migration"
-    )
-    # Stricter: no inline tmp_path = json_path.with_suffix('.tmp') pattern
-    # remains. (One per legacy site; the regex catches them all.)
+    assert "plan_store.update" in app_src
+    for retired in ("tp.atomic_write_plan", "tp.update_plan", "tp.plan_write_lock",
+                    "_rotate_plan_backups"):
+        assert retired not in app_src, retired
     inline_pat = re.compile(
         r"tmp_path\s*=\s*json_path\.with_suffix\(['\"]\.tmp['\"]\)"
     )
-    leftover = inline_pat.findall(app_src)
-    assert not leftover, (
-        f"app.py still has {len(leftover)} inline tmp+rename plan-write "
-        "blocks; replace each with tp.atomic_write_plan(json_path, plan)."
-    )
+    assert not inline_pat.findall(app_src)

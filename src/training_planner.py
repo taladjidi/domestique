@@ -36,19 +36,14 @@ Usage:
 import availability  # the one per-day training cap (see src/availability.py)
 import clock  # the one clock every module reads (see src/clock.py)
 import argparse
-import asyncio
 import copy
 import hashlib
-import inspect
 import json
 import logging
 import math
-import os
 import re
-import shutil
 import statistics
 import sys
-import threading
 import xml.etree.ElementTree as ET
 
 log = logging.getLogger(__name__)
@@ -106,7 +101,6 @@ def _tp_log_error(code: str, exc: Exception | None = None, **context) -> None:
         pass
 
 
-from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -425,235 +419,9 @@ def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None
         log.debug("library_index write skipped (%s)", e)
 
 
-# ── Plan-write serialization (PL3) ───────────────────────────────────────────
-# Six FastAPI endpoints in app.py all write current_plan.json via the
-# `tmp_path = json_path.with_suffix('.tmp')` → `tmp_path.rename(json_path)`
-# pattern. Without serialization, concurrent daily-adapt + auto-recalc can
-# silently drop adaptations (the last rename wins). Endpoints use
-# `with training_planner.plan_write_lock(): ...` around the tmp-write + rename.
-# Helper `atomic_write_plan(json_path, plan)` wraps the full write for callers
-# who don't want to manage the tmp path themselves.
-#
-# v1.6.2 — ``_plan_write_lock`` is an ``RLock`` so callers already inside
-# ``plan_write_lock()`` can safely call ``atomic_write_plan`` without
-# deadlocking.
-def _refuse_on_event_loop() -> None:
-    """Contract 4.2, enforced at the lock instead of by pattern-matching the
-    callers: waiting on this threading lock from a thread that runs an
-    asyncio event loop stalls every request on the server (1.8-2.7 s behind
-    a slow writer). The AST guard in the tests missed 7 of 12 planted
-    violations -- aliases, nested defs, helpers in other modules, methods,
-    the raw lock (fix-forward F6); this refuses them all the first time they
-    run, and names who called. Async code calls the store through
-    ``run_in_threadpool`` / ``asyncio.to_thread``."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return                      # a worker thread, a background thread, the CLI
-    f, caller, handler = sys._getframe(1), None, None
-    while f is not None:
-        if caller is None and f.f_globals.get("__name__") not in (__name__, "contextlib"):
-            caller = f
-        if f.f_code.co_flags & (inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR):
-            handler = f
-            break
-        f = f.f_back
-    where = (f"{caller.f_code.co_name} ({Path(caller.f_code.co_filename).name}:"
-             f"{caller.f_lineno})" if caller else "?")
-    if handler is not None and handler is not caller:
-        where += f" in async {handler.f_code.co_name}"
-    raise RuntimeError(
-        f"the plan store was entered on the event loop by {where}: call it "
-        "through run_in_threadpool (contract 4.2)")
-
-
-class _PlanLock:
-    """The plan-write RLock, refusing to be taken on an event loop's thread."""
-
-    def __init__(self):
-        self._lock = threading.RLock()
-
-    def acquire(self, blocking=True, timeout=-1):
-        _refuse_on_event_loop()
-        return self._lock.acquire(blocking, timeout)
-
-    def release(self):
-        self._lock.release()
-
-    def __enter__(self):
-        self.acquire()
-        return self
-
-    def __exit__(self, *exc):
-        self.release()
-
-
-_plan_write_lock = _PlanLock()
-
-PLAN_BACKUP_DEPTH = 7  # v1.6.2: keep .bak through .bak7 (7 snapshots).
-
-
-@contextmanager
-def plan_write_lock():
-    """Context manager over the module-level plan-write lock.
-
-    Use around paired tmp-write + rename (or any atomic plan mutation) to
-    serialize writes across the plan endpoints in app.py.
-    """
-    with _plan_write_lock:
-        yield
-
-
-def _rotate_plan_backups(plan_path: "Path", snapshot: "Path | None" = None) -> None:
-    """v1.6.2 — shift backups down: .bak6→.bak7, ..., .bak→.bak2, then live→.bak.
-
-    Best-effort: per-file failures (perm, disk) are logged and swallowed so
-    the upcoming write still proceeds. The live file is COPIED (not moved)
-    to .bak so the about-to-be-replaced file stays intact until the atomic
-    rename swaps it. Caller MUST hold ``_plan_write_lock``.
-
-    ``snapshot``: a copy of the previous live file taken earlier; it becomes
-    .bak instead of copying the live file now (atomic_write_plan rotates
-    only AFTER its rename succeeded, when live is already the new plan).
-    """
-    p = Path(plan_path)
-    # Drop the oldest if at depth (unlink only used here — guarded by tests).
-    oldest = p.with_suffix(p.suffix + f".bak{PLAN_BACKUP_DEPTH}")
-    if oldest.exists():
-        try:
-            oldest.unlink()
-        except OSError as e:
-            log.debug(f"_rotate_plan_backups: drop oldest failed: {e}")
-    # Shift bak{n} → bak{n+1}, downward from N-1 to 1.
-    for n in range(PLAN_BACKUP_DEPTH - 1, 0, -1):
-        src = p.with_suffix(p.suffix + (f".bak{n}" if n > 1 else ".bak"))
-        dst = p.with_suffix(p.suffix + f".bak{n+1}")
-        if src.exists():
-            try:
-                src.replace(dst)
-            except OSError as e:
-                log.debug(f"_rotate_plan_backups: shift {src.name}→{dst.name} failed: {e}")
-    # Snapshot live → .bak (copy so the original remains for the atomic
-    # rename of the new tmp file to overwrite).
-    bak = p.with_suffix(p.suffix + ".bak")
-    try:
-        if snapshot is not None:
-            Path(snapshot).replace(bak)
-        else:
-            shutil.copy2(p, bak)
-    except OSError as e:
-        log.debug(f"_rotate_plan_backups: copy live→.bak failed: {e}")
-
-
-# v3.0.1 (IP_ICU_PUSH): optional post-write hook. app.py registers its
-# debounced ICU-calendar push scheduler here at boot (AFTER the boot-time
-# restore/rewrite writes); the CLI path never registers, so plain
-# `python training_planner.py` stays network-silent. Called with the plan
-# Path AFTER the atomic rename, past atomic_write_plan's own hold of the
-# write lock -- but a write through update_plan (every read-modify-write)
-# runs it while update_plan still holds the lock, so it must stay quick and
-# must never wait on another thread that writes the plan (app's callback
-# only re-arms a timer). Failures are logged and swallowed — a broken
-# callback must never break a plan write.
-post_write_callback = None
-
-
-def atomic_write_plan(json_path: "Path | str", plan: dict) -> None:
-    """Atomically write ``plan`` to ``json_path`` under the plan-write lock.
-
-    v1.6.2:
-      - Refuses to write an empty / non-dict plan (guards the bug where a
-        mutation produced ``{}`` or ``None`` and silently nuked the live file).
-      - Writes and fsyncs `<json_path>.tmp`, copies the live file aside,
-        atomic-renames, and only then rotates → .bak → .bak2 ... → .bak7.
-        A write that fails anywhere up to and including the rename (disk
-        full, unserialisable plan, unwritable temp, a busy target) raises
-        with the live file AND the backup chain untouched and no temp left
-        (contract 3.3: rotating first let seven failed writes turn the chain
-        into eight copies of one generation).
-    """
-    if not isinstance(plan, dict) or not plan:
-        raise ValueError(
-            "atomic_write_plan: refusing to write empty / non-dict plan "
-            f"(got {type(plan).__name__})"
-        )
-    p = Path(json_path)
-    tmp = p.with_suffix('.tmp')
-    with _plan_write_lock:
-        f = open(tmp, "w", encoding="utf-8")
-        try:
-            with f:
-                json.dump(plan, f, indent=2, default=str)
-                f.flush()
-                os.fsync(f.fileno())
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
-        # The previous generation is copied aside, and the chain shifted only
-        # once the rename has succeeded: a rename that fails (EBUSY, ...)
-        # leaves the chain and the live file exactly as they were.
-        snap = None
-        if p.exists():
-            snap = p.with_suffix(p.suffix + ".bak.new")
-            try:
-                shutil.copy2(p, snap)
-            except OSError as e:
-                log.debug(f"atomic_write_plan: snapshot of live failed: {e}")
-                snap = None
-        try:
-            tmp.replace(p)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            if snap is not None:
-                snap.unlink(missing_ok=True)
-            raise
-        if snap is not None:
-            _rotate_plan_backups(p, snapshot=snap)
-    cb = post_write_callback
-    if cb is not None:
-        try:
-            cb(p)
-        except Exception as e:
-            log.debug(f"atomic_write_plan: post-write callback failed: {e}")
-
-
-def update_plan(json_path: "Path | str", mutate):
-    """The plan store's one read-modify-write (contracts 4.1 / 4.2).
-
-    Holds the plan-write lock across read -> ``mutate(plan)`` -> write, so a
-    writer can no longer read, lose the lock to another writer, and then
-    write its stale copy over that writer's change (audit 2026-09-23: 24
-    atomic_write_plan sites, 6 locked, a move lost to auto-recalc).
-
-    ``mutate`` receives the plan as it is on disk now (``None`` when the file
-    does not exist) and returns the dict to write -- the same one mutated in
-    place, or a new one -- or ``None`` to write nothing. An exception from
-    ``mutate`` writes nothing and propagates. Returns what was written, or
-    ``None``. Anything a caller needs back from inside travels by closure.
-
-    Blocking: it waits on a threading lock. An ``async def`` handler must
-    call it as ``await run_in_threadpool(tp.update_plan, json_path, mutate)``
-    (starlette.concurrency), never directly -- directly, a slow writer
-    holding the lock stalls the whole event loop. Sync code (a ``def``
-    route, a background thread) calls it as is. Fetch plan-independent
-    inputs (metrics, activities, the library) BEFORE the call: whatever runs
-    inside ``mutate`` holds every other plan writer.
-
-    ponytail: one process-wide lock, no version check -- every writer is in
-    this process, so a lock held across the whole read-modify-write is
-    enough. A second writing process would need a file lock here.
-    """
-    p = Path(json_path)
-    with _plan_write_lock:
-        try:
-            with open(p, encoding="utf-8") as f:
-                plan = json.load(f)
-        except FileNotFoundError:
-            plan = None
-        new = mutate(plan)
-        if new is not None:
-            atomic_write_plan(p, new)
-        return new
+# ── The plan store ───────────────────────────────────────────────────────────
+# The plan's reads and writes live in plan_store.py, its one owner (contract
+# 10.1): this module builds and changes plans, and never opens one.
 
 
 def plan_ctl_snapshot(current_ctl, recent_weekly_tss,
@@ -735,8 +503,9 @@ def _session_is_stale(session_type: str, zwo_file: str,
     return _os.path.basename(zwo_file) not in library_files
 
 
-def rewrite_stale_plan_classifications(plan_path: "Path | str") -> int:
-    """Rewrite stale classifications in an existing stored plan (best-effort).
+def rewrite_stale_plan_classifications(profile_id: str) -> int:
+    """Rewrite stale classifications in ``profile_id``'s stored plan
+    (best-effort).
 
     Returns the count of sessions rewritten. No-ops if the plan is absent or
     malformed. On any exception, logs and returns 0 — never raises. Only
@@ -744,8 +513,8 @@ def rewrite_stale_plan_classifications(plan_path: "Path | str") -> int:
     done/dismissed flags are preserved.
     """
     try:
-        p = Path(plan_path)
-        if not p.exists():
+        import plan_store
+        if plan_store.version(profile_id) is None:
             return 0
         # The library does not depend on the plan: load it before taking the
         # plan lock, so a cold parse never holds the other plan writers.
@@ -756,20 +525,20 @@ def rewrite_stale_plan_classifications(plan_path: "Path | str") -> int:
 
         def _rewrite(plan):
             nonlocal rewritten
-            rewritten = _rewrite_stale_sessions(plan, p, library)
+            rewritten = _rewrite_stale_sessions(plan, library)
             return plan if rewritten else None
 
         # One store call: read, heal and write under one hold of the plan
         # lock (contract 4.1) -- a write landing between an unlocked read and
         # this write used to be overwritten with the stale copy.
-        update_plan(p, _rewrite)
+        plan_store.update(profile_id, _rewrite, reason="stale classification rewrite")
         return rewritten
     except Exception:
         log.debug("rewrite_stale_plan_classifications failed", exc_info=True)
         return 0
 
 
-def _rewrite_stale_sessions(plan, p: Path, library: list[dict]) -> int:
+def _rewrite_stale_sessions(plan, library: list[dict]) -> int:
     """rewrite_stale_plan_classifications' mutation: heal ``plan`` in place
     and return how many sessions it rewrote. Runs under the plan lock."""
     if not isinstance(plan, dict):
@@ -805,7 +574,6 @@ def _rewrite_stale_sessions(plan, p: Path, library: list[dict]) -> int:
     # Rolling used_names window — mirrors generate_plan's sliding-window
     # dedupe so re-matches don't collide on a workout already placed.
     used_names: set[str] = set()
-    wrote_backup = False
     for w_json in weeks:
         week_num = w_json.get("week_num", 1)
         for idx, s_json in enumerate(w_json.get("sessions", [])):
@@ -843,17 +611,8 @@ def _rewrite_stale_sessions(plan, p: Path, library: list[dict]) -> int:
                     plan_start_date=plan_start,
                  micro_only=bool((plan.get("goal") or {}).get("vo2_microintervals_only", False)),)
                 new_zwo = getattr(ps, "zwo_file", "") or ""
-                # One-time pre-migration snapshot before the FIRST mutation,
-                # named so it survives the 7-deep .bak rotation (grill B5).
-                if not wrote_backup:
-                    snap = p.with_suffix(p.suffix + ".premigration-v1818")
-                    if not snap.exists():
-                        try:
-                            import shutil as _sh
-                            _sh.copy2(p, snap)
-                        except Exception:
-                            log.debug("premigration snapshot failed", exc_info=True)
-                    wrote_backup = True
+                # The plan before the rewrite is kept by the store's write,
+                # as its newest backup (contract 10.4: no second copy).
                 if new_zwo and new_zwo in library_files and new_zwo != zwo:
                     s_json["zwo_file"] = new_zwo
                     s_json["zwo_name"] = getattr(ps, "zwo_name", "") or s_json.get("zwo_name", "")

@@ -203,7 +203,7 @@ def test_startup_heal_heals_and_persists_with_a_backup(monkeypatch, tmp_path, li
     json_path = tmp_path / "current_plan.json"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))
     app_module._PLAN_HEAL_SEEN.clear()
-    app_module._heal_plan_on_disk()                                  # what lifespan calls
+    app_module._heal_plan_on_disk(app_module._pid())                                  # what lifespan calls
     on_disk = json.loads(json_path.read_text())["weeks"][0]["sessions"][:7]
     assert all(s["zwo_file"] for s in on_disk), [s.get("zwo_file") for s in on_disk]
     assert (tmp_path / "current_plan.json.bak").exists()
@@ -221,12 +221,12 @@ def test_heal_runs_once_per_file_version(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(tp, "heal_unmatched_sessions_dict",
                         lambda *a, **k: (calls.append(1), {"candidates": 5, "healed": 0, "still_unmatched": 5})[1])
-    app_module._heal_plan_on_disk(); app_module._heal_plan_on_disk(); app_module._heal_plan_on_disk()
+    app_module._heal_plan_on_disk(app_module._pid()); app_module._heal_plan_on_disk(app_module._pid()); app_module._heal_plan_on_disk(app_module._pid())
     assert calls == [1], "same file version must not be healed again"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))   # rewrite = new mtime = new version
     import os, time
     os.utime(json_path, ns=(time.time_ns(), time.time_ns()))
-    app_module._heal_plan_on_disk()
+    app_module._heal_plan_on_disk(app_module._pid())
     assert calls == [1, 1]
 
 
@@ -256,7 +256,7 @@ def test_the_heal_follows_a_plan_write_not_a_read_and_not_a_preview(monkeypatch,
     import os, time
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))    # simulate a POST that wrote the plan
     os.utime(json_path, ns=(time.time_ns(), time.time_ns()))
-    app_module._heal_plan_on_disk()
+    app_module._heal_plan_on_disk(app_module._pid())
     assert calls == [1, 1]
 
 
@@ -278,7 +278,7 @@ def test_heal_never_overwrites_a_plan_written_in_between(monkeypatch, tmp_path, 
         json_path.write_text(json.dumps(fresh_plan))               # ...and meanwhile someone else wrote the file
         return n
     monkeypatch.setattr(tp, "count_unmatched_pending_sessions", count_then_swap)
-    app_module._heal_plan_on_disk()
+    app_module._heal_plan_on_disk(app_module._pid())
     on_disk = json.loads(json_path.read_text())
     assert on_disk.get("marker") == "written-by-regenerate"        # the concurrent write survived
     assert [s["zwo_file"] for s in on_disk["weeks"][0]["sessions"]] == [f"keep_{i}.zwo" for i in range(7)]

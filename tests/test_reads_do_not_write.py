@@ -35,6 +35,7 @@ import app as app_module
 import cache
 import clock
 import training_planner as tp
+import plan_store
 from test_340_continuous_w2 import _mk_continuous_plan, _monotone_rides
 
 TODAY = date(2026, 9, 15)   # a Tuesday
@@ -62,15 +63,15 @@ class ReadsDoNotWrite(unittest.TestCase):
         self.pp.write_text(json.dumps(plan))
         self.original = self.pp.read_bytes()
         self.writes: list[str] = []
-        real_write = tp.atomic_write_plan
+        real_write = plan_store._commit          # the plan's one writer
 
-        def _recording_write(path, data, *a, **k):
-            self.writes.append(str(path))
-            return real_write(path, data, *a, **k)
+        def _recording_write(paths, data, *a, **k):
+            self.writes.append(str(paths.live))
+            return real_write(paths, data, *a, **k)
 
         self._patches = [
             patch.object(app_module, "_plan_dir", return_value=self.tmp),
-            patch.object(tp, "atomic_write_plan", _recording_write),
+            patch.object(plan_store, "_commit", _recording_write),
             patch.object(app_module, "_load_all_rides_safe", return_value=_monotone_rides(TODAY)),
             patch.object(app_module, "get_today_metrics", lambda: {"ctl": 50.0, "atl": 60.0, "tsb": -10.0}),
             patch.object(tp, "check_and_auto_apply_eftp",
@@ -102,7 +103,7 @@ class ReadsDoNotWrite(unittest.TestCase):
     def test_the_fixture_trips_the_writers(self):
         """A control: each writer, called directly, does write on this fixture,
         so a clean run of the GETs is evidence, not an idle fixture."""
-        chip = app_module._maybe_advance_continuous_deload(json.loads(self.pp.read_text()), self.pp)
+        chip = app_module._maybe_advance_continuous_deload(json.loads(self.pp.read_text()))
         self.assertTrue(chip, "the monotone rides must trip the deload advance")
         self.writes.clear()
         out = app_module.api_plan_auto_recalc()

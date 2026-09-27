@@ -71,7 +71,7 @@ class PlanCorrupt(Exception):
     code = "E_PLAN_PARSE_CORRUPT"
 
 
-class PlanStoreError(PermissionError):
+class PlanStoreError(PermissionError, RuntimeError):
     """A plan access refused by the store's guards."""
 
 
@@ -91,6 +91,74 @@ def use_profiles_root(root) -> None:
 def bind(profile_id: str, plan_dir) -> None:
     """Keep ``profile_id``'s plans in ``plan_dir`` (tests; a relocated home)."""
     _dirs[_check_id(profile_id)] = Path(plan_dir)
+
+
+_GENERATION = 0            # bumped by every profile switch (profile_manager)
+
+
+class Captured(str):
+    """A profile id captured when a request or job started, with the switch
+    generation it saw. A store write for it refuses once a profile switch has
+    landed since the capture: its inputs (rides, metrics, preferences) may be
+    the next rider's (the audit's D8: A's plan written with B's activities).
+    A plain str id (boot, a test) is not checked."""
+    generation: int
+
+
+def capture(profile_id: str) -> Captured:
+    c = Captured(_check_id(profile_id))
+    c.generation = _GENERATION
+    return c
+
+
+class ProfileSwitched(RuntimeError):
+    """A write for a profile captured before a switch that has since landed."""
+
+
+class _StoreLock:
+    """The store's in-process lock: an RLock that refuses to be taken on a
+    thread running an event loop (contract 4.2), whoever takes it."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+
+    def acquire(self, blocking=True, timeout=-1):
+        _refuse_on_event_loop()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        self._lock.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+_LOCK = _StoreLock()
+
+
+_GEN_LOCK = threading.Lock()
+
+
+def spend_captures() -> None:
+    """profile_manager calls this when a switch's identity change starts and
+    again when it ends: every capture taken before either is spent. It never
+    waits for a writer (a switch runs on the event loop); instead a write
+    checks its capture both when it takes the plan lock and again just
+    before it commits, so a switch that lands while ``mutate`` runs (and may
+    read the next rider's inputs) still writes nothing."""
+    global _GENERATION
+    with _GEN_LOCK:
+        _GENERATION += 1
+
+
+def _still_captured(paths: "_Paths") -> None:
+    pid = paths.pid
+    if isinstance(pid, Captured) and pid.generation != _GENERATION:
+        log.warning("EVENT=plan_write_aborted reason=profile_switch profile=%s", pid)
+        raise ProfileSwitched(f"profile {pid!r}: a profile switch landed since this "
+                              "operation started; nothing written")
 
 
 def _check_id(profile_id) -> str:
@@ -119,9 +187,16 @@ class _Paths:
         return self.dir / (PLAN + (".bak" if n == 1 else f".bak{n}"))
 
 
+# BRIDGE (removed with 10.3): the app's legacy plan-dir seam for the active
+# profile, which the tests still patch (app._plan_dir, tp.PLAN_DIR).
+_BRIDGE = None
+
+
 def _paths(profile_id: str) -> _Paths:
     pid = _check_id(profile_id)
     d = _dirs.get(pid)
+    if d is None and _BRIDGE is not None:
+        d = _BRIDGE(pid)
     if d is None:
         root = _profiles_root if _profiles_root is not None else domestique_home() / "profiles"
         d = root / pid / "plans"
@@ -131,7 +206,6 @@ def _paths(profile_id: str) -> _Paths:
 # ── G1: the token ────────────────────────────────────────────────────────────
 _TOKEN: contextvars.ContextVar = contextvars.ContextVar("plan_store_token", default=frozenset())
 _IN_MUTATE: contextvars.ContextVar = contextvars.ContextVar("plan_store_in_mutate", default=False)
-_LOCK = threading.RLock()
 
 
 def _key(p) -> str:
@@ -206,6 +280,8 @@ def _held(*paths_list: _Paths):
     if _IN_MUTATE.get():
         _refuse(f"G1: a plan store call from inside a mutator ({_caller()})")
     with _LOCK, _granted(*(p.dir for p in paths_list)):
+        for p in paths_list:
+            _still_captured(p)
         fds = []
         try:
             for p in sorted(paths_list, key=lambda p: _key(p.dir)):
@@ -223,19 +299,49 @@ def _held(*paths_list: _Paths):
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
-def _load(path: Path) -> "dict | None":
+_CORRUPT_SEEN: contextvars.ContextVar = contextvars.ContextVar("plan_store_corrupt", default=None)
+
+
+def watch_corrupt() -> list:
+    """For the app's request middleware: a list that collects every profile
+    whose corrupt plan this request (or a thread it spawned) ran into."""
+    seen: list = []
+    _CORRUPT_SEEN.set(seen)
+    return seen
+
+
+def _corrupt(paths: _Paths, why: str) -> PlanCorrupt:
+    seen = _CORRUPT_SEEN.get()
+    if seen is not None:
+        seen.append(paths.pid)
+    log.error("E_PLAN_PARSE_CORRUPT profile=%s %s", paths.pid, why)
+    return PlanCorrupt(f"profile {paths.pid}: {why}")
+
+
+def _load(paths: _Paths, path: "Path | None" = None) -> "dict | None":
+    path = path or paths.live
     try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
+        with open(path, "rb") as f:
+            raw = f.read()
     except FileNotFoundError:
         return None
     try:
-        plan = json.loads(text)
-    except ValueError as e:
-        raise PlanCorrupt(f"{path.name}: {e}") from None
+        plan = json.loads(raw.decode("utf-8"))
+    except ValueError as e:                 # JSONDecodeError and UnicodeDecodeError
+        raise _corrupt(paths, f"{path.name}: {e}") from None
     if not isinstance(plan, dict) or not plan:
-        raise PlanCorrupt(f"{path.name}: not a non-empty JSON object")
+        raise _corrupt(paths, f"{path.name}: not a non-empty JSON object")
     return plan
+
+
+def _load_quiet(paths: _Paths, path: "Path | None" = None) -> "dict | None":
+    """_load for an operation that handles a corrupt file itself (generate
+    replaces it, restore skips a bad backup): not reported to the request."""
+    tok = _CORRUPT_SEEN.set(None)
+    try:
+        return _load(paths, path)
+    finally:
+        _CORRUPT_SEEN.reset(tok)
 
 
 def read(profile_id: str) -> "dict | None":
@@ -244,15 +350,17 @@ def read(profile_id: str) -> "dict | None":
     (the write replaces the file by rename, so a read sees a whole plan)."""
     paths = _paths(profile_id)
     with _granted(paths.dir):
-        return _load(paths.live)
+        return _load(paths)
 
 
-def version(profile_id: str) -> "int | None":
-    """The stored plan's modification stamp (ns), None when there is none."""
+def version(profile_id: str) -> "str | None":
+    """A stamp that changes with every write of the stored plan (mtime in ns
+    and size), None when there is none. For caches and change detection."""
     try:
-        return _paths(profile_id).live.stat().st_mtime_ns
+        st = _paths(profile_id).live.stat()
     except OSError:
         return None
+    return f"{st.st_mtime_ns}:{st.st_size}"
 
 
 # ── the private writer ───────────────────────────────────────────────────────
@@ -358,7 +466,7 @@ def update(profile_id: str, mutate, *, reason: str, replace_corrupt: bool = Fals
     paths = _paths(profile_id)
     with _held(paths):
         try:
-            plan = _load(paths.live)
+            plan = _load(paths) if not replace_corrupt else _load_quiet(paths)
         except PlanCorrupt:
             if not replace_corrupt:
                 raise
@@ -368,6 +476,7 @@ def update(profile_id: str, mutate, *, reason: str, replace_corrupt: bool = Fals
             new = mutate(plan)
         if new is None:
             return None
+        _still_captured(paths)
         _commit(paths, new)
     _written(profile_id, reason)
     return new
@@ -392,7 +501,7 @@ def restore_from_backup(profile_id: str) -> "str | None":
             try:
                 if not src.exists() or src.stat().st_size == 0:
                     continue
-                plan = _load(src)
+                plan = _load_quiet(paths, src)
             except (OSError, PlanCorrupt):
                 continue
             if plan is None:
@@ -405,14 +514,15 @@ def restore_from_backup(profile_id: str) -> "str | None":
     return src.name
 
 
-def copy_legacy_plans(profile_id: str, legacy_dir) -> int:
+def copy_legacy_plans(profile_id: str, legacy_dir=None) -> int:
     """Profile migration of a pre-profiles home: copy the legacy plans dir's
     files into ``profile_id``'s (the legacy dir is left as it was; adoption
-    retires it). Returns how many files were copied."""
-    paths = _paths(profile_id)
-    src_dir = Path(legacy_dir)
+    retires it). ``legacy_dir`` is the home's root plans dir unless a test
+    names another. Returns how many files were copied."""
+    src_dir = Path(legacy_dir) if legacy_dir is not None else _legacy_root()
     if not src_dir.is_dir():
         return 0
+    paths = _paths(profile_id)
     n = 0
     with _held(paths), _granted(src_dir):
         for item in sorted(src_dir.iterdir()):
@@ -554,14 +664,17 @@ def adopt_legacy_root(profile_id: str, *, profiles: int, root_dir=None) -> str:
             return "skipped"      # the root stays in place (support lever)
         with _held(paths), _granted(root_dir):
             if verdict == "adopt":
-                snap = None
+                # The profile's plan into its backups first (a copy: the live
+                # file stays until the rename), then the root over it. A copy
+                # that fails leaves the profile plan live and in .bak.
                 if prof.exists():
-                    snap = paths.snap
-                    shutil.copy2(prof, snap)
-                shutil.copy2(root, paths.tmp)
-                paths.tmp.replace(prof)
-                if snap is not None:
-                    _rotate(paths, snap)
+                    _rotate(paths, None)
+                try:
+                    shutil.copy2(root, paths.tmp)
+                    paths.tmp.replace(prof)
+                except BaseException:
+                    paths.tmp.unlink(missing_ok=True)
+                    raise
                 for n in range(1, BACKUP_DEPTH + 1):
                     src, dst = root_dir / paths.bak(n).name, paths.bak(n)
                     if src.exists() and not dst.exists():

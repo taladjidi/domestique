@@ -90,6 +90,8 @@ class ProfileManager:
     def __init__(self):
         self._base = domestique_home()  # 3.4.3: DOMESTIQUE_HOME-aware
         self._profiles_dir = self._base / "profiles"
+        import plan_store
+        plan_store.use_profiles_root(self._profiles_dir)   # where each profile's plans live
         self._registry_path = self._base / "profiles.json"
         self._active_id: Optional[str] = None
         self._athlete: dict = {}
@@ -413,7 +415,7 @@ class ProfileManager:
             profile_dir.mkdir(parents=True, exist_ok=True)
 
             try:
-                (profile_dir / "plans").mkdir(exist_ok=True)
+                # No plans/ dir: plan_store creates it with the first plan.
 
                 # Default athlete.json. AC5e/A3 (grill): lthr / max_hr are
                 # NOT seeded — a fabricated lthr:170 made lthr_is_set True on
@@ -496,6 +498,8 @@ class ProfileManager:
             # forget about it in the registry.
             if safe_dir.exists():
                 try:
+                    import plan_store
+                    plan_store.drop(profile_id)    # the plans go through their owner
                     shutil.rmtree(str(safe_dir))
                 except OSError as e:
                     log.warning(
@@ -622,6 +626,8 @@ class ProfileManager:
                         f"sync busy: write gate not released within "
                         f"{_SYNC_GATE_TIMEOUT_S:.0f}s; profile switch aborted"
                     )
+            import plan_store
+            plan_store.spend_captures()
             try:
                 # ── identity mutation window (write gate held) ──────────
                 self._active_id = profile_id
@@ -662,6 +668,9 @@ class ProfileManager:
                 self.apply_training_dirs()
             except Exception as e:
                 log.warning(f"Error updating training_planner on switch: {e}")
+            # Plan writes captured before or during the switch refuse from
+            # here on (contract 10.3): their inputs may be mixed.
+            plan_store.spend_captures()
 
             # Save registry
             self._save_registry()

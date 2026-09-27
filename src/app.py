@@ -76,7 +76,9 @@ import db
 import zones as _zones_mod
 import plan_invariants  # leaf: the shared hard-gap rule, also the planner's
 import ride_storage  # the one definition of a ride's duration (ride_moving_s)
-import training_planner as tp  # module-level: every plan endpoint uses tp.plan_write_lock()
+import training_planner as tp  # noqa: E402
+import plan_store  # noqa: E402  the plan's one owner: every plan read and write goes through it
+from plan_store import PlanCorrupt  # noqa: E402
 import continuous_policy as cpol  # 3.4.0 W2 — continuous-mode deload + rotation policy
 # v1.6.1 — register _log_error as the planner's observability hook so any
 # planner-internal failure (generate_plan phase build, reforecast, match_zwo
@@ -100,292 +102,6 @@ from paths import (  # noqa: F401
     ROUTE_DATA, ROUTE_PROFILES_INDEX, ROUTE_PROFILES_DIR,
     _DEFAULT_PLAN_DIR, _plan_dir, _safe_path, _rides_fit_dir,
 )
-
-
-def _maybe_restore_plan_from_backup(plan_path: Path) -> str | None:
-    """v1.6.2 — restore current_plan.json from the newest non-empty .bak* file.
-
-    Triggered on app startup. If ``plan_path`` is missing or zero-bytes AND
-    at least one ``current_plan.json.bak*`` snapshot exists with parseable
-    JSON, atomically copies the newest valid snapshot back into place.
-
-    Returns the source filename (e.g. ``"current_plan.json.bak"``) on
-    successful restore, else ``None``. Never raises — boot must continue.
-    """
-    try:
-        live_ok = plan_path.exists() and plan_path.stat().st_size > 0
-        if live_ok:
-            return None
-        # Walk .bak, .bak2, ..., .bak{depth} in age order (newest first).
-        candidates = [plan_path.with_suffix(plan_path.suffix + ".bak")]
-        for n in range(2, tp.PLAN_BACKUP_DEPTH + 1):
-            candidates.append(plan_path.with_suffix(plan_path.suffix + f".bak{n}"))
-        for src in candidates:
-            if not src.exists() or src.stat().st_size == 0:
-                continue
-            try:
-                with open(src, encoding="utf-8") as f:
-                    parsed = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                continue
-            if not isinstance(parsed, dict) or not parsed:
-                continue
-            # Atomic copy: write tmp + rename. Don't go through atomic_write_plan
-            # because we don't want to rotate (the .bak files we're restoring
-            # FROM should be preserved as-is, not shifted).
-            tmp = plan_path.with_suffix(plan_path.suffix + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(parsed, f, indent=2, default=str)
-            tmp.replace(plan_path)
-            return src.name
-        return None
-    except Exception:
-        return None
-
-
-def _plan_generated_stamp(plan: dict):
-    """v3.1.0 (PART A) — parse a plan's generation stamp as a naive datetime.
-
-    Reads ``generated`` (live key since v1.0.0) with legacy ``generated_at``
-    fallback — the same both-keys pattern the seed anchor uses
-    (training_planner.rewrite_stale_plan_classifications). Full-timestamp
-    precision when the value parses as an ISO datetime; date-only values
-    become midnight. Returns None when neither key parses (caller falls back
-    to mtime).
-    """
-    for k in ("generated", "generated_at"):
-        v = plan.get(k)
-        if not v:
-            continue
-        s = str(v)
-        try:
-            return datetime.fromisoformat(s).replace(tzinfo=None)
-        except ValueError:
-            pass
-        try:
-            d = date.fromisoformat(s[:10])
-            return datetime(d.year, d.month, d.day)
-        except ValueError:
-            pass
-    return None
-
-
-def _adopt_legacy_root_plan(root_dir: Path, prof_dir: Path,
-                            multi_profile: bool) -> str:
-    """v3.1.0 (IP_PLAN_CONTINUITY PART A) — one-time root→profile plan adoption.
-
-    Since v2.1.0, single-profile users who never opened the profile picker
-    kept writing plans to the legacy ROOT ``~/.domestique/plans/`` while
-    ``profiles/<id>/plans/`` held a frozen migration-day snapshot; the v3.0.0
-    boot repoint then served the stale snapshot. This adopts the legacy root
-    ``current_plan.json`` into the ACTIVE profile's plan dir, once.
-
-    Discriminator (STAMP-primary, A-LOCKED-1): the plan's ``generated`` /
-    ``generated_at`` stamp; newer stamp wins. mtime is the fallback ONLY when
-    a stamp is missing/unparseable on either side (NEVER mtime-primary — the
-    boot-time stale-classification rewrite restamps the profile file every
-    3.0.x boot, so the mtime rule would no-op the fix for the whole victim
-    cohort). Equal stamps: single-profile home adopts (wrong-skip is
-    permanent+silent, wrong-adopt is .bak-recoverable); multi-profile skips.
-    mtime tie: skip (profile wins; conservative).
-
-    Adoption = rotate profile live → .bak chain, then ``copy2`` root → profile
-    (mtime/stamp preserved); root's standard ``.bak..bak{depth}`` names are
-    copied only where the profile has no file of that exact name (2.1.0
-    migration already copied them → expected no-ops); foreign names
-    (``.bak-v206`` etc.) are never touched. The root file is retired via
-    ``Path.replace`` → ``current_plan.json.pre-v3`` (the idempotency latch,
-    immune to restamps) only AFTER the copy succeeded. Byte-identical
-    root == profile retires WITHOUT copy/rotation — this doubles as the
-    retire-failure loop guard (a re-boot after a failed retire re-lands here).
-
-    Corrupt root JSON: skip + warn, leave the file for support. Unparseable /
-    zero-byte profile plan counts as "profile missing" (else the v1.6.2
-    boot restore would resurrect a stale .bak over the adopted plan).
-    Never raises; returns a status string (also logged, one line).
-    """
-    import shutil
-
-    root_dir = Path(root_dir)
-    prof_dir = Path(prof_dir)
-    root = root_dir / "current_plan.json"
-    latch = root_dir / "current_plan.json.pre-v3"
-    prof = prof_dir / "current_plan.json"
-    try:
-        if latch.exists():
-            _log.debug("plan adoption: skipped — .pre-v3 latch present")
-            return "latched"
-        if not root.exists():
-            _log.debug("plan adoption: skipped — no legacy root plan")
-            return "no-root"
-        try:
-            if root_dir.resolve() == prof_dir.resolve():
-                _log.debug("plan adoption: skipped — root dir IS the profile dir")
-                return "same-dir"
-        except OSError:
-            pass
-
-        try:
-            root_bytes = root.read_bytes()
-            root_plan = json.loads(root_bytes.decode("utf-8"))
-            if not isinstance(root_plan, dict) or not root_plan:
-                raise ValueError("not a non-empty JSON object")
-        except Exception as e:  # noqa: BLE001 — corrupt legacy file must not brick boot
-            _log.warning(
-                f"plan adoption: skipped — corrupt legacy root plan left in "
-                f"place for support ({e})"
-            )
-            return "corrupt-root"
-        root_mtime = root.stat().st_mtime
-
-        # H2 (evaluator): fallback latch on the PROFILE side for homes where
-        # the root dir is unwritable (read-only volume / restored backup) and
-        # the .pre-v3 retire keeps failing. Without it, the same boot's
-        # stale-classification rewrite mutates the adopted plan (stamps stay
-        # equal, bytes diverge) and every subsequent boot re-adopts — reverting
-        # the user's edits and churning the .bak chain. The latch records the
-        # adopted root stamp; as long as the root file still carries that
-        # stamp there is nothing new to adopt. A genuinely different root
-        # (changed stamp) still adopts normally.
-        prof_latch = prof_dir / "current_plan.json.adopted-from-root"
-        _r_stamp_obj = _plan_generated_stamp(root_plan)
-        # Stampless roots latch on a CONTENT HASH, not a shared sentinel — a
-        # different stampless root must not match an old latch (wrong-skip is
-        # permanent+silent; wrong-adopt is .bak-recoverable).
-        _root_stamp_str = (str(_r_stamp_obj) if _r_stamp_obj is not None
-                           else "sha256:" + hashlib.sha256(root_bytes).hexdigest()[:16])
-        # The latch only means "this exact root was already adopted HERE" —
-        # meaningless when the profile plan is gone (support lever: delete the
-        # profile plan + reboot ⇒ re-adopt the root).
-        if prof_latch.exists() and (prof_dir / "current_plan.json").exists():
-            try:
-                if prof_latch.read_text(encoding="utf-8").strip() == _root_stamp_str:
-                    _log.debug(
-                        "plan adoption: skipped — profile-side latch matches "
-                        "root stamp (retire previously failed)"
-                    )
-                    return "latched-prof"
-            except OSError:
-                pass  # unreadable latch → fall through to the normal decision
-
-        prof_bytes = None
-        prof_plan = None
-        if prof.exists():
-            try:
-                prof_bytes = prof.read_bytes()
-                parsed = json.loads(prof_bytes.decode("utf-8")) if prof_bytes else None
-                prof_plan = parsed if (isinstance(parsed, dict) and parsed) else None
-            except Exception:  # noqa: BLE001 — unparseable prof ⇒ treated as missing
-                prof_plan = None
-
-        # ── DECIDE first (pure reads), LOG the full decision, THEN act. ─────
-        prof_mtime = prof.stat().st_mtime if prof.exists() else None
-        r_stamp = _plan_generated_stamp(root_plan)
-        p_stamp = _plan_generated_stamp(prof_plan) if prof_plan is not None else None
-
-        if prof_bytes is not None and prof_bytes == root_bytes:
-            # Byte-identical root == profile → retire only (no copy, no
-            # rotation). Also the retire-failure loop guard.
-            verdict, why = "retire-only", "root == profile (byte-identical)"
-        elif prof_plan is None:
-            verdict, why = "adopt", "profile plan missing/unparseable"
-        elif r_stamp is not None and p_stamp is not None:
-            if r_stamp > p_stamp:
-                verdict, why = "adopt", "root stamp newer"
-            elif r_stamp < p_stamp:
-                verdict, why = "skip", "profile stamp newer"
-            elif not multi_profile:
-                verdict, why = "adopt", "equal stamps — single-profile home adopts"
-            else:
-                verdict, why = "skip", "equal stamps — multi-profile home skips"
-        else:
-            # Stamp missing/unparseable on either side → mtime fallback.
-            if prof_mtime is None or root_mtime > prof_mtime:
-                verdict, why = "adopt", "mtime fallback: root newer"
-            elif root_mtime < prof_mtime:
-                verdict, why = "skip", "mtime fallback: profile newer"
-            else:
-                verdict, why = "skip", "mtime fallback: tie — profile wins"
-
-        # Log-before-act (owner requirement — adoption rewrites plan data at
-        # boot): every decision input + the verdict, emitted BEFORE the first
-        # filesystem mutation so the trail exists even on a crash mid-swap.
-        _log.info(
-            f"plan adoption decision: verdict={verdict} ({why}); "
-            f"root_stamp={r_stamp} prof_stamp={p_stamp} "
-            f"root_mtime={root_mtime} prof_mtime={prof_mtime} "
-            f"multi_profile={multi_profile} latch_present=False "
-            f"root={root} prof={prof}"
-        )
-
-        if verdict == "skip":
-            return "skipped"  # GA2 DECIDED: root LEFT in place (support lever)
-
-        if verdict == "retire-only":
-            try:
-                root.replace(latch)  # Path.replace — a rename, never a delete
-                return "retired-identical"
-            except OSError as e:
-                _log.warning(
-                    f"plan adoption: retire of identical root failed ({e}) — "
-                    "writing profile-side latch instead"
-                )
-                try:
-                    prof_latch.write_text(_root_stamp_str, encoding="utf-8")
-                except OSError:
-                    pass
-                return "retire-failed"
-
-        # verdict == "adopt". NEVER-DELETE invariant: only copy2 /
-        # _rotate_plan_backups / Path.replace→.pre-v3 below — no deletion
-        # calls of our own. (The standard rotation ages the OLDEST .bak
-        # off the end at depth 7, same as every plan write — the live plan
-        # and recent history are never destroyed.)
-        with tp.plan_write_lock():
-            if prof.exists():
-                tp._rotate_plan_backups(prof)  # profile's current → .bak chain
-            prof_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(root, prof)
-
-        # Root's standard .bak..bak{depth} history: copy only names the
-        # profile side doesn't already have; foreign .bak names untouched.
-        bak_names = ["current_plan.json.bak"] + [
-            f"current_plan.json.bak{n}" for n in range(2, tp.PLAN_BACKUP_DEPTH + 1)
-        ]
-        for name in bak_names:
-            src, dst = root_dir / name, prof_dir / name
-            if src.exists() and not dst.exists():
-                try:
-                    shutil.copy2(src, dst)
-                except OSError as e:
-                    _log.debug(f"plan adoption: bak copy {name} failed: {e}")
-
-        # Retire ONLY after a successful copy (Path.replace — Windows-safe).
-        try:
-            root.replace(latch)
-        except OSError as e:
-            _log.warning(
-                f"plan adoption: adopted but retire failed ({e}) — writing "
-                "profile-side latch so later boots don't re-adopt after the "
-                "adopted plan is modified (H2)"
-            )
-            try:
-                prof_latch.write_text(_root_stamp_str, encoding="utf-8")
-            except OSError:
-                pass
-
-        _log_error(
-            error_codes.Codes.PLAN_ADOPTED_FROM_ROOT,
-            root=str(root), profile_plan=str(prof), reason=why,
-        )
-        return "adopted"
-    except Exception as e:  # noqa: BLE001 — never brick startup. Total-abort:
-        # every already-completed step is safe on its own (rotation only
-        # COPIES, the root→prof copy leaves root intact until retire), so no
-        # partial-swap state is reachable; boot continues serving whatever
-        # the profile dir holds, exactly as v3.0.2 does.
-        _log.warning(f"plan adoption failed: {e}")
-        return "error"
 
 
 def _session_naming_lookup(
@@ -546,7 +262,7 @@ async def lifespan(app):
     # (FTP 200 / 70kg) and saves evaporated on reopen (the Windows "profile
     # resets every launch" bug). Paired with the non-destructive empty-rebuild
     # fix in profile_manager._rebuild_registry.
-    migrate_to_profiles()
+    await run_in_threadpool(migrate_to_profiles)   # it copies legacy plans through the store
     pm = ProfileManager.get()
 
     # v1.0.2 IMPL-MIGRATION: startup version-aware self-check. Detects an
@@ -626,23 +342,24 @@ async def lifespan(app):
         pm.apply_training_dirs()
     except Exception as _e:
         _log.warning(f"apply_training_dirs at boot failed: {_e}")
+    # The boot passes below work on the profile active at boot, captured
+    # once (contract 10.3). Every one of them writes through the plan store,
+    # off the event loop, and every store write -- boot's too -- arms the
+    # calendar push (the store's post-write callback), so the callback is
+    # registered first.
+    plan_store.post_write_callback = _icu_push_schedule_debounced
+    boot_pid = pm.active_id
     # v3.1.0 (IP_PLAN_CONTINUITY PART A): one-time adoption of the legacy ROOT
-    # plan into the ACTIVE profile's plan dir. MUST run after
-    # apply_training_dirs (PLAN_DIR points at the profile) and BEFORE
-    # _apply_profile_paths / db init / the v1.6.2 .bak restore / the v4.1.1
-    # stale-classification rewrite / the ICU push-hook registration — so the
-    # adopted file is what those boot passes see, and booting never schedules
-    # a calendar push by itself (the daily reconcile mirrors it instead).
+    # plan, before the .bak restore and the stale-classification rewrite, so
+    # the adopted file is what those boot passes see. The owner is named;
+    # in a home of several profiles the store refuses (10.3).
     try:
-        if pm.active_id is not None:
-            # Plan writers run off the event loop, boot included: the
-            # plan store refuses the loop's thread (fix-forward F6).
-            await run_in_threadpool(
-                _adopt_legacy_root_plan,
-                _DEFAULT_PLAN_DIR,   # legacy root ~/.domestique/plans
-                pm.plan_dir,         # active profile's plans dir
-                multi_profile=len(pm.list_profiles()) > 1,
-            )
+        if boot_pid is not None:
+            _adopted = await run_in_threadpool(
+                plan_store.adopt_legacy_root, boot_pid,
+                profiles=len(pm.list_profiles()))
+            if _adopted == "adopted":
+                _log_error(error_codes.Codes.PLAN_ADOPTED_FROM_ROOT, profile=boot_pid)
     except Exception as _e:
         _log.warning(f"legacy root plan adoption failed: {_e}")
     _apply_profile_paths()
@@ -663,12 +380,13 @@ async def lifespan(app):
     # the newest valid one. Closes the failure mode where a release-time
     # mutation nuked the live file but the rotated .bak files survived.
     try:
-        _restored_from = _maybe_restore_plan_from_backup(_plan_dir() / "current_plan.json")
+        _restored_from = (await run_in_threadpool(plan_store.restore_from_backup, boot_pid)
+                          if boot_pid is not None else None)
         if _restored_from:
             _log_error(
                 error_codes.Codes.PLAN_AUTO_RESTORED,
                 source=_restored_from,
-                plan_path=str(_plan_dir() / "current_plan.json"),
+                profile=boot_pid,
             )
             _log.warning(
                 f"v1.6.2 plan auto-restore: live current_plan.json was "
@@ -685,29 +403,22 @@ async def lifespan(app):
     # plans — users won't regenerate manually. Best-effort: never raise,
     # log count.
     try:
-        import training_planner as _tp_boot
-        _plan_json = _plan_dir() / "current_plan.json"
-        _rewritten = await run_in_threadpool(
-            _tp_boot.rewrite_stale_plan_classifications, _plan_json)
+        _rewritten = (await run_in_threadpool(tp.rewrite_stale_plan_classifications, boot_pid)
+                      if boot_pid is not None else 0)
         if _rewritten > 0:
             _log.info(
                 f"v4.1.1 FIX-PLANNER A: rewrote {_rewritten} stale session "
-                f"classifications in {_plan_json}"
+                f"classifications in profile {boot_pid}'s plan"
             )
     except Exception as _e:
         _log.debug(f"stale-plan rewrite on boot failed: {_e}")
 
-    # v3.0.1 (IP_ICU_PUSH): register the plan post-write hook AFTER the
-    # boot-time restore/rewrite writes above, so booting never schedules a
-    # calendar push by itself. Server-only — the CLI path never registers.
-    # Boot-time writes are instead mirrored by the once-a-day reconcile
-    # riding the sync loop (D3b).
-    tp.post_write_callback = _icu_push_schedule_debounced
     db.post_sync_callback = _after_background_sync
 
     try:
         # P8: the plan self-heal runs here, not on a GET.
-        await run_in_threadpool(_heal_plan_on_disk)
+        if boot_pid is not None:
+            await run_in_threadpool(_heal_plan_on_disk, boot_pid)
         yield
     finally:
         # ── Shutdown cleanup: best-effort, don't block teardown ──────────
@@ -3992,11 +3703,11 @@ async def api_readiness_revert_cap(request: Request):
         return None
 
     try:
-        json_path = _plan_dir() / "current_plan.json"
-        if json_path.exists():
+        pid = _pid()
+        if _has_plan(pid):
             # The plan store's read-modify-write, off the event loop (4.1/4.2:
             # this took the plan lock ON the loop, stalling every request).
-            await run_in_threadpool(tp.update_plan, json_path, _restore)
+            await run_in_threadpool(plan_store.update, pid, _restore, reason="api_readiness_revert_cap")
     except Exception:
         _log.exception("revert-cap: plan restore skipped")
     restored = out["restored"]
@@ -4048,8 +3759,8 @@ async def api_readiness_apply_tier_down(request: Request):
         date.fromisoformat(day_iso)
     except ValueError:
         return JSONResponse({"error": "Invalid date format (use YYYY-MM-DD)"}, 400)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -4204,7 +3915,7 @@ async def api_readiness_apply_tier_down(request: Request):
             current_tsb = (await run_in_threadpool(cached, "training", get_today_metrics)).get("tsb")
         except Exception:
             current_tsb = None
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_readiness_apply_tier_down")
         return out["r"]
     except Exception:
         _log.exception("apply-tier-down failed")
@@ -4297,8 +4008,8 @@ async def api_plan_auto_adjust(request: Request):
         }
 
     # 3. Load plan.
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
     import copy as _copy
     out = {}
@@ -4504,8 +4215,7 @@ async def api_plan_auto_adjust(request: Request):
 
     if dry_run:
         try:
-            with open(json_path, encoding="utf-8") as f:
-                plan = json.load(f)
+            plan = _read_plan(pid)
         except Exception:
             _log.exception("auto-adjust: plan load failed")
             return JSONResponse({"error": "plan load failed"}, 500)
@@ -4524,8 +4234,8 @@ async def api_plan_auto_adjust(request: Request):
     except Exception:
         current_tsb = None
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _adjust)
-    except json.JSONDecodeError:
+        await run_in_threadpool(plan_store.update, pid, _adjust, reason="api_plan_auto_adjust")
+    except PlanCorrupt:
         _log.exception("auto-adjust: plan load failed")
         return JSONResponse({"error": "plan load failed"}, 500)
     except Exception:
@@ -7755,7 +7465,7 @@ def api_icu_connection():
 
 # ── v3.0.1 (IP_ICU_PUSH) — calendar push: endpoints + debounced plan hook ────
 # One engine (icu_calendar_push.reconcile), two triggers: the plan-tab button
-# (POST below) and the atomic_write_plan post-write callback registered at
+# (POST below) and plan_store's post-write callback registered at
 # boot, debounced ~30s so a mutation burst coalesces into ONE bulk call.
 
 ICU_PUSH_DEBOUNCE_S = 30.0
@@ -7834,20 +7544,19 @@ def _icu_push_debounced_run(expected_pid: str) -> None:
         _log.warning("debounced ICU calendar push failed", exc_info=True)
 
 
-def _icu_push_schedule_debounced(json_path) -> None:
-    """training_planner.atomic_write_plan post-write callback (boot-registered;
-    the CLI path never registers it). Coalesces: every plan write within the
-    window cancels and re-arms one shared ~30s timer. Only the ACTIVE
-    profile's live current_plan.json schedules — never a stray path."""
+def _icu_push_schedule_debounced(pid: str) -> None:
+    """plan_store's post-write callback (registered at boot; the CLI never
+    registers it), called with the profile whose plan was written.
+    Coalesces: every plan write within the window cancels and re-arms one
+    shared ~30s timer. Only the ACTIVE profile's plan is mirrored (the
+    calendar is the active rider's): a write to another profile's plan
+    schedules nothing."""
     global _icu_push_timer
     try:
         if not _icu_push_sync_enabled():
             return
         from profile_manager import ProfileManager
-        pid = ProfileManager.get().active_id
-        if pid is None:
-            return
-        if Path(json_path).name != "current_plan.json":
+        if pid is None or pid != ProfileManager.get().active_id:
             return
         with _icu_push_timer_lock:
             if _icu_push_timer is not None:
@@ -7897,7 +7606,8 @@ def _icu_push_daily_from_sync() -> None:
     """db.post_sync_callback (boot-registered): ONE reconcile per calendar
     day, riding the 30-min sync loop (D3b). This is what rolls the 14-day
     horizon forward on mutation-free days and mirrors boot-time plan writes
-    — the atomic_write_plan hook is deliberately registered AFTER those."""
+    — boot writes arm the debounced push too, since plan_store fires its
+    callback after every write."""
     pid = None
     try:
         if not _icu_push_sync_enabled():
@@ -8090,7 +7800,7 @@ def api_calendar_push_workout(body: "dict | None" = None):
                 return {"error": reason}
             events = [event]
         else:  # planner
-            plan = _icp._load_plan()
+            plan = _icp._load_plan(profile_id)
             if plan is None:
                 return {"error": "no_plan"}
             # O1: extend the horizon so a day beyond the 14-day auto-sync window
@@ -8888,16 +8598,41 @@ BLOOD_MARKER_RANGES = {
 # WEEKLY MESOCYCLE API
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _read_stored_plan() -> "dict | None":
-    """current_plan.json, or None when there is none or it does not parse."""
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
-        return None
-    try:
-        with open(json_path, encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
+def _pid() -> "str | None":
+    """The profile a request or job works on, read once when it starts and
+    passed to every plan store call it makes (contract 10.3): a profile
+    switch landing mid-operation cannot turn its writes onto another
+    rider's plan. None when no profile is active."""
+    from profile_manager import ProfileManager
+    pid = ProfileManager.get().active_id
+    return plan_store.capture(pid) if pid is not None else None
+
+
+def _bridge_plan_dir(pid):
+    """BRIDGE (removed with 10.3): the active profile's plans resolve through
+    the legacy seam the suite still patches."""
+    from profile_manager import ProfileManager
+    pm = ProfileManager._instance
+    return _plan_dir() if pm is not None and pid == pm.active_id else None
+
+
+plan_store._BRIDGE = _bridge_plan_dir
+
+
+def _has_plan(pid: "str | None") -> bool:
+    return pid is not None and plan_store.version(pid) is not None
+
+
+def _read_plan(pid: "str | None") -> "dict | None":
+    """The stored plan of ``pid`` (plan_store.read), None when there is no
+    profile or no plan. A plan that does not parse raises PlanCorrupt, and
+    every route answers it the same way (_one_answer_for_a_corrupt_plan)."""
+    return plan_store.read(pid) if pid is not None else None
+
+
+def _read_stored_plan(pid: "str | None" = None) -> "dict | None":
+    """The stored plan of ``pid``, the active profile's when not given."""
+    return _read_plan(pid if pid is not None else _pid())
 
 
 def _stored_week_view(plan: "dict | None", week_offset: int = 0, rides=None):
@@ -9499,13 +9234,13 @@ async def api_today_session_persist(request: Request):
 
     Caller passes ``{reason, session_type, duration_min, tss_estimate,
     description}`` — typically the output of /api/today-session's `adjusted`
-    block when the user clicks "Accept". Writes back under plan_write_lock
+    block when the user clicks "Accept". Writes back through plan_store.update
     with an explicit ``adapted_reason`` field so it's clear why the
     prescription was modified (threshold → Z2 because readiness 45, etc.).
     """
     body = await _get_json_body(request)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -9569,7 +9304,7 @@ async def api_today_session_persist(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_today_session_persist")
         return out["r"]
     except Exception:
         _log.exception("today-session persist failed")
@@ -9643,13 +9378,8 @@ def _next_ftp_test_slot() -> "str | None":
     user-pinned days and anything already done/missed. None when no plan or
     no eligible slot (the banner then offers snooze/instructions only).
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
-        return None
-    try:
-        with open(json_path, encoding="utf-8") as f:
-            plan = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    plan = _read_plan(_pid())
+    if plan is None:
         return None
     today = clock.today()
     next_monday = today + timedelta(days=7 - today.weekday())
@@ -9948,7 +9678,7 @@ def _continuous_deload_signals(plan: dict, rides: list[dict],
     return monotony, acwr
 
 
-def _maybe_advance_continuous_deload(plan: dict, json_path: Path,
+def _maybe_advance_continuous_deload(plan: dict,
                                      today: "date | None" = None) -> "dict | None":
     """Amendment C: convert the CURRENT continuous week to the deload shape
     when monotony/ACWR trip. Idempotent per week (latched via the
@@ -9981,7 +9711,7 @@ def _maybe_advance_continuous_deload(plan: dict, json_path: Path,
     trip = cpol.deload_trigger(monotony, acwr)
     if not trip:
         return None
-    return _advance_continuous_deload(plan, json_path, cur_idx, trip, today)
+    return _advance_continuous_deload(plan, cur_idx, trip, today)
 
 
 def _deload_chip_for_today(plan: "dict | None", today: "date | None" = None) -> "dict | None":
@@ -9996,7 +9726,7 @@ def _deload_chip_for_today(plan: "dict | None", today: "date | None" = None) -> 
     return _deload_chip_payload(rec)
 
 
-def _advance_continuous_deload(plan: dict, json_path: Path, cur_idx: int,
+def _advance_continuous_deload(plan: dict, cur_idx: int,
                                trip: dict, today: date) -> "dict | None":
     """Convert plan["weeks"][cur_idx] to the deload shape via the machinery:
     tp.plan_week(is_stepback=True) skeleton (×0.72 TSS, easy content) spliced
@@ -10073,7 +9803,7 @@ def _advance_continuous_deload(plan: dict, json_path: Path, cur_idx: int,
         "original_week": original_week,
     }
     plan["deload_advance"] = rec
-    # The caller persists it through tp.update_plan (contract 4.1): this
+    # The caller persists it through plan_store.update (contract 4.1): this
     # helper runs inside that read-modify-write and only mutates ``plan``.
     _log.info(
         f"EVENT=continuous_deload_advanced week={cur_dto.week_num} "
@@ -10092,8 +9822,8 @@ async def api_continuous_deload_revert(request: Request):
         _ = await _get_json_body(request)  # body optional — accept empty POST
     except Exception:  # noqa: BLE001
         pass
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"reverted": False, "reason": "no_plan"}, 404)
 
     out = {}
@@ -10131,7 +9861,7 @@ async def api_continuous_deload_revert(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_continuous_deload_revert")
         return out["r"]
     except Exception:
         _log.exception("continuous deload revert failed")
@@ -10156,7 +9886,6 @@ def api_today_session():
 def _api_today_session_impl():
     """Internal — actual /api/today-session compute path."""
     today_str = clock.today().isoformat()
-    _jp = _plan_dir() / "current_plan.json"
     _stored = _read_stored_plan()
     # 3.4.0 W2 (amendment C): the continuous deload advance's chip. The
     # advance itself runs where rides arrive (_maybe_auto_reforecast, reached
@@ -10625,7 +10354,7 @@ _PLAN_HEAL_SEEN: dict = {}
 _PLAN_HEAL_LOCK = threading.Lock()
 
 
-def _maybe_heal_plan_files(json_path, plan_data: dict) -> None:
+def _maybe_heal_plan_files(pid: str, plan_data: dict) -> None:
     """v3.11.5 plan self-heal — upcoming pending sessions with no workout file
     get one from the current library, once per plan-file version, and the
     plan is persisted when anything changed. Background: a rider's 3.11.1-era
@@ -10633,18 +10362,17 @@ def _maybe_heal_plan_files(json_path, plan_data: dict) -> None:
     (see tp.heal_unmatched_sessions_dict).
 
     The request's ``plan_data`` was read OUTSIDE the plan-write lock, so the
-    heal runs in the plan store's read-modify-write (tp.update_plan: a
+    heal runs in the plan store's read-modify-write (plan_store.update: a
     regenerate/reforecast may have written in between), heals THAT copy,
     writes it, and then replaces the request's dict with exactly what was
     persisted. Nothing is served that is
     not on disk; nothing on disk is overwritten with a stale read.
     """
-    key = str(json_path)
+    key = pid
     stats = None
     with _PLAN_HEAL_LOCK:
-        try:
-            mtime_ns = json_path.stat().st_mtime_ns
-        except OSError:
+        mtime_ns = plan_store.version(pid)
+        if mtime_ns is None:
             return
         if _PLAN_HEAL_SEEN.get(key) == mtime_ns:
             return
@@ -10662,10 +10390,10 @@ def _maybe_heal_plan_files(json_path, plan_data: dict) -> None:
                     fresh, library, hr_bias=_hr_bias())
                 return fresh if healed["stats"]["healed"] else None
 
-            written = tp.update_plan(json_path, _heal)
+            written = plan_store.update(pid, _heal, reason="plan self-heal")
             stats = healed.get("stats")
             if written is not None:
-                _PLAN_HEAL_SEEN[key] = json_path.stat().st_mtime_ns
+                _PLAN_HEAL_SEEN[key] = plan_store.version(pid)
                 plan_data.clear()
                 plan_data.update(written)
         except Exception as e:  # noqa: BLE001 — never break the plan read
@@ -10676,27 +10404,43 @@ def _maybe_heal_plan_files(json_path, plan_data: dict) -> None:
                   stats["candidates"], stats["healed"], stats["still_unmatched"])
 
 
-def _heal_plan_on_disk() -> None:
+def _heal_plan_on_disk(pid: "str | None") -> None:
     """P8 (reads do not write): the plan self-heal runs at startup and after a
-    plan-writing POST, never on a GET. Reads the active profile's plan and
-    hands it to _maybe_heal_plan_files, whose mtime cache makes a no-op cheap."""
+    plan-writing POST, never on a GET. Reads ``pid``'s plan and hands it to
+    _maybe_heal_plan_files, whose version cache makes a no-op cheap."""
     try:
-        json_path = _plan_dir() / "current_plan.json"
-        if not json_path.exists():
-            return
-        with open(json_path, encoding="utf-8") as f:
-            plan_data = json.load(f)
+        plan_data = _read_plan(pid)
         if isinstance(plan_data, dict):
-            _maybe_heal_plan_files(json_path, plan_data)
+            _maybe_heal_plan_files(pid, plan_data)
     except Exception as e:  # noqa: BLE001 — never break startup or a request
         _log.warning("EVENT=plan_selfheal_failed where=on_disk error=%s", str(e)[:200])
 
 
-def _plan_file_mtime_ns() -> "int | None":
+def _plan_file_mtime_ns(pid: "str | None") -> "int | None":
+    return plan_store.version(pid) if pid is not None else None
+
+
+@app.middleware("http")
+async def _one_answer_for_a_corrupt_plan(request, call_next):
+    """Contract 10.2: a stored plan that does not parse is one answer on
+    every route -- 409 E_PLAN_PARSE_CORRUPT -- whether the route let
+    PlanCorrupt through or swallowed it into a fallback of its own (four
+    routes gave four answers: the markdown served as the plan, "no plan on
+    record", a code in a 200, a 500). The health report is the one route
+    whose job is to describe the plan, and it does, with the same code."""
+    seen = plan_store.watch_corrupt()
     try:
-        return (_plan_dir() / "current_plan.json").stat().st_mtime_ns
-    except Exception:  # noqa: BLE001
-        return None
+        response = await call_next(request)
+    except PlanCorrupt:
+        seen.append("raised")
+        response = None
+    if seen and request.url.path != "/api/diag/health":
+        _log_error(error_codes.Codes.PLAN_PARSE_CORRUPT, endpoint=request.url.path)
+        return JSONResponse(
+            {"error": "The stored plan cannot be read. Generate a new plan from the Plan tab "
+                      "(the unreadable file is kept as a backup).",
+             "code": error_codes.Codes.PLAN_PARSE_CORRUPT}, status_code=409)
+    return response
 
 
 @app.middleware("http")
@@ -10709,13 +10453,17 @@ async def _heal_after_plan_writes(request, call_next):
     loop either way."""
     is_post = request.method == "POST"
     path = request.url.path
-    before = _plan_file_mtime_ns() if is_post and path.startswith("/api/plan") else None
+    pid = _pid() if is_post and path.startswith("/api/plan") else None
+    before = _plan_file_mtime_ns(pid) if pid is not None else None
     response = await call_next(request)
-    if is_post and (path.startswith("/api/profiles") or
-                    (path.startswith("/api/plan") and _plan_file_mtime_ns() != before)):
+    if is_post and path.startswith("/api/profiles"):
+        pid = _pid()                  # a switch heals the newly active plan
+    elif not (pid is not None and _plan_file_mtime_ns(pid) != before):
+        pid = None
+    if pid is not None:
         try:
             from starlette.concurrency import run_in_threadpool
-            await run_in_threadpool(_heal_plan_on_disk)
+            await run_in_threadpool(_heal_plan_on_disk, pid)
         except Exception as e:  # noqa: BLE001
             _log.debug("heal-after-write skipped: %s", e)
     return response
@@ -10724,11 +10472,10 @@ async def _heal_after_plan_writes(request, call_next):
 @app.get("/api/plan")
 def api_plan():
     # Try structured JSON first
-    json_path = _plan_dir() / "current_plan.json"
-    if json_path.exists():
+    pid = _pid()
+    if _has_plan(pid):
         try:
-            with open(json_path, encoding="utf-8") as f:
-                plan_data = json.load(f)
+            plan_data = _read_plan(pid)
             # v4.1.1 FIX-PLANNER B: attach per-session `zone_dist` so the
             # dashboard mini-graph can render the ACTUAL ZWO's zone
             # distribution. v1.4.0: per-session enrichment now lives in
@@ -10863,7 +10610,7 @@ def api_plan():
             if plans:
                 with open(plans[0], encoding="utf-8") as f:
                     md = f.read()
-            return {"plan_json": plan_data, "plan": md, "file": str(json_path)}
+            return {"plan_json": plan_data, "plan": md}
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -11085,13 +10832,9 @@ def api_event_projection():
     is no event-prep plan or no event_km — the dashboard widget hides
     itself in that case.
     """
-    plan_path = _plan_dir() / "current_plan.json"
-    if not plan_path.exists():
+    plan = _read_plan(_pid())
+    if plan is None:
         return {"available": False, "reason": "no_plan"}
-    try:
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        return {"available": False, "reason": f"plan_load_error: {e}"}
 
     g = plan.get("goal", {})
     if g.get("type") not in ("event", "event_preparation"):
@@ -11217,10 +10960,13 @@ def _replaced_weeks_before(old_plan: dict, cutoff: date) -> list[dict]:
 @app.post("/api/plan/generate")
 async def api_plan_generate(request: Request):
     """Generate a training plan from UI form data."""
+    pid = _pid()
     body = await _get_json_body(request)
     _bad = _generate_input_error(body)
     if _bad:
         return JSONResponse({"detail": _bad}, status_code=400)
+    if pid is None:
+        return JSONResponse({"detail": "no active profile"}, status_code=409)
     try:
 
         # The rider's saved training prefs as defaults (from setup wizard):
@@ -11402,7 +11148,6 @@ async def api_plan_generate(request: Request):
         # plan store's one read-modify-write (contract 4.1), off the event
         # loop (4.2). The old plan supplies explicit availability blocks and
         # the weeks it replaces; everything above is plan-independent.
-        json_path = _plan_dir() / "current_plan.json"
         out = {}
 
         def _mutate(_existing_plan):
@@ -11565,7 +11310,11 @@ async def api_plan_generate(request: Request):
             out["plan_dict"], out["plan_path"] = plan_dict, plan_path
             return plan_dict
 
-        await run_in_threadpool(_generate_into_store, json_path, _mutate)
+        # A corrupt plan cannot be read, and generate is the action that
+        # repairs it: built from no old plan, it replaces the unreadable file
+        # (kept as the newest backup).
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="generate",
+                                replace_corrupt=True)
         plan_dict, plan_path = out["plan_dict"], out["plan_path"]
 
         # v1.4.0 — single enrichment helper (replaces the inline duplicate).
@@ -11600,18 +11349,6 @@ async def api_plan_generate(request: Request):
 
 
 
-def _generate_into_store(json_path, mutate) -> None:
-    """Generate's write: the plan store's read-modify-write (contract 4.1).
-    A corrupt current_plan.json cannot be read, and generate is the action
-    that repairs it: build from no old plan and replace it (the corrupt file
-    rotates into .bak, nothing lost). Sync -- callers use run_in_threadpool."""
-    try:
-        tp.update_plan(json_path, mutate)
-    except (json.JSONDecodeError, UnicodeDecodeError):   # read failed; mutate never ran
-        _log.warning("generate: current_plan.json unreadable -- replacing it")
-        with tp.plan_write_lock():
-            tp.atomic_write_plan(json_path, mutate(None))
-
 def _maybe_auto_reforecast(profile_id: str, new_rides: int) -> "str | None":
     """v1.0.3 / v1.8.24 — best-effort auto-ADAPT on ride sync / FIT import.
 
@@ -11633,8 +11370,8 @@ def _maybe_auto_reforecast(profile_id: str, new_rides: int) -> "str | None":
     """
     written = None
     try:
-        json_path = _plan_dir() / "current_plan.json"
-        if not json_path.exists():
+        pid = profile_id            # captured by the caller when its request started
+        if not _has_plan(pid):
             return None
 
         # Plan-independent inputs, before the plan lock (contract 4.2).
@@ -11698,7 +11435,7 @@ def _maybe_auto_reforecast(profile_id: str, new_rides: int) -> "str | None":
             out["written"] = action if action != "skipped" else None
             return plan_dict
 
-        tp.update_plan(json_path, _adapt)
+        plan_store.update(pid, _adapt, reason="_maybe_auto_reforecast")
         if out["stop"]:
             return None
         written = out["written"]
@@ -11710,7 +11447,7 @@ def _maybe_auto_reforecast(profile_id: str, new_rides: int) -> "str | None":
                 return None
             before = plan.get("deload_advance")
             try:
-                chip = _maybe_advance_continuous_deload(plan, json_path)
+                chip = _maybe_advance_continuous_deload(plan)
             except Exception as _e:  # noqa: BLE001
                 _log.warning(f"continuous deload check failed: {_e}")
                 return None
@@ -11719,7 +11456,7 @@ def _maybe_auto_reforecast(profile_id: str, new_rides: int) -> "str | None":
                 out["deload"] = True
             return plan if plan.get("deload_advance") is not before else None
 
-        tp.update_plan(json_path, _deload)
+        plan_store.update(pid, _deload, reason="_maybe_auto_reforecast")
         if out.get("deload"):
             written = "deload_advanced"
     except Exception as e:  # noqa: BLE001
@@ -11730,8 +11467,8 @@ def _maybe_auto_reforecast(profile_id: str, new_rides: int) -> "str | None":
 @app.post("/api/plan/reforecast")
 async def api_plan_reforecast():
     """Reforecast the plan based on actual training data."""
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -11847,7 +11584,7 @@ async def api_plan_reforecast():
             )
         except Exception:  # noqa: BLE001
             actual_pol_kwarg = None
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_reforecast")
         if "r" in out:
             return out["r"]
         plan = out["plan"]
@@ -11883,8 +11620,8 @@ async def api_plan_reforecast():
 async def api_mark_unavailable(request: Request):
     """Mark a date range as unavailable (holiday/injury/illness)."""
     body = await _get_json_body(request)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -11925,7 +11662,7 @@ async def api_mark_unavailable(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_mark_unavailable")
         return out["r"]
     except Exception:
         # SEC3: don't leak exception text.
@@ -11944,8 +11681,8 @@ async def api_save_availability(request: Request):
     user to "click Generate Plan" to apply, which was confusing UX.
     """
     body = await _get_json_body(request)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -12054,7 +11791,7 @@ async def api_save_availability(request: Request):
             recent_activities = db.query_activities(days=120)
         except Exception:
             recent_activities = []
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_save_availability")
         return out["r"]
     except Exception:
         # SEC3: don't leak exception text.
@@ -12079,7 +11816,7 @@ def _regenerate_plan_dict(
     top-level key (availability, reforecast_date, goal, …) survives.
 
     Returns ``(plan_dict, regen_info)``. Does NOT write to disk — the caller
-    persists via ``tp.atomic_write_plan`` so the latch/status writes land in
+    persists via ``plan_store.update`` so the latch/status writes land in
     the same critical section.
     """
     # Reconstruct Goal via the canonical helper — the old inline build here
@@ -12381,7 +12118,7 @@ def _apply_plan_update(
 
     Returns ``(plan_dict, action, info, status_message)`` where action is
     "rebuilt" | "rebalanced". Does NOT persist — the caller writes inside its
-    own plan_write_lock so the latch/status writes are in the same critical
+    own plan_store.update so the latch/status writes are in the same critical
     section.
     """
     now_iso = clock.now().isoformat()
@@ -12639,8 +12376,8 @@ async def api_plan_regenerate_dynamic(request: Request):
 
     v1.8.24 — body delegates to the shared ``_regenerate_plan_dict`` core.
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -12666,7 +12403,7 @@ async def api_plan_regenerate_dynamic(request: Request):
         training = await run_in_threadpool(cached, "training", get_today_metrics)
         current_ctl = await run_in_threadpool(_planning_ctl)
         activities = db.query_activities(days=120)
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_regenerate_dynamic")
         return out["r"]
     except ValueError as e:
         # FC5d (v2.5.0, L3-6): planner input rejection (event date passed) —
@@ -12688,8 +12425,8 @@ async def api_plan_add_race(request: Request):
     volume, keep intensity) + recovery around the race and preserves past weeks.
     RESHAPES existing weeks — does NOT change the plan length or the A-event date.
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
     body = await _get_json_body(request)
     ev_date = str(body.get("date") or "").strip()
@@ -12740,7 +12477,7 @@ async def api_plan_add_race(request: Request):
         training = await run_in_threadpool(cached, "training", get_today_metrics)
         current_ctl = await run_in_threadpool(_planning_ctl)
         activities = db.query_activities(days=120)
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_add_race")
         return out["r"]
     except ValueError as e:
         # FC5d (v2.5.0, L3-6): the shared regen core refuses a passed A-event
@@ -12769,8 +12506,8 @@ async def api_plan_update(debounce: int = Query(0)):
     the tab repeatedly is a cheap no-op instead of re-running reforecast every
     time. The manual "Update plan" button omits it (always acts).
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
     out = {}
 
@@ -12801,7 +12538,7 @@ async def api_plan_update(debounce: int = Query(0)):
         # (contracts 4.1 / 4.2: this took the lock ON the loop).
         training = await run_in_threadpool(cached, "training", get_today_metrics)
         activities = db.query_activities(days=120)
-        await run_in_threadpool(tp.update_plan, json_path, _update)
+        await run_in_threadpool(plan_store.update, pid, _update, reason="api_plan_update")
         if "r" in out:
             return out["r"]
         plan_dict, action, info, status = (out["plan_dict"], out["action"],
@@ -13451,13 +13188,12 @@ def api_plan_daily_adapt():
     or /api/plan/rematch?apply=1.
     """
 
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return {"action": "no_plan", "projection_only": True}
 
     try:
-        with open(json_path, encoding="utf-8") as f:
-            plan = json.load(f)
+        plan = _read_plan(pid)
 
         today = clock.today()
         current_week, _idx = _load_current_week_dto(plan, today)
@@ -14029,8 +13765,8 @@ async def api_plan_move_session(request: Request):
     - §6.12: regenerate_from_today honors user_moved=True — never re-prescribed.
     """
     body = await _get_json_body(request)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     src_iso = str(body.get("date", "")).strip()
@@ -14106,8 +13842,7 @@ async def api_plan_move_session(request: Request):
         # 404 string.
         if src_week_idx is None or dst_week_idx is None:
             try:
-                with open(json_path, encoding="utf-8") as f:
-                    plan_disk = json.load(f)
+                plan_disk = _read_plan(pid)
                 weeks_data = plan_disk.get("weeks", [])
                 src_week_idx = _find_week_idx(src_d)
                 dst_week_idx = _find_week_idx(dst_d)
@@ -14150,7 +13885,7 @@ async def api_plan_move_session(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_move_session")
         return out["r"]
     except Exception:
         _log.exception("Plan move-session failed")
@@ -14382,7 +14117,7 @@ def legacy_card_state(state10: str) -> str:
 # sessions. Cache invalidates on plan mtime change (every mutation
 # endpoint already touches the JSON via tmp+rename) or today rollover.
 # Single-process FastAPI worker → no thread race; plan writes are also
-# serialized via tp.plan_write_lock().
+# serialized by plan_store.
 _ENRICH_CACHE: dict[str, tuple[float, dict]] = {}
 _ENRICH_CACHE_TTL = 300  # 5 min
 
@@ -14402,13 +14137,13 @@ def _enrich_plan_for_response(plan_dict: dict, today_iso: str) -> dict:
     Idempotent: calling twice produces the same output. Safe to chain
     after every plan mutation.
     """
-    # Cache key includes mtime + size so concurrent ms-coincident writes
-    # can't collide (grill I5). today_iso busts on rollover.
-    plan_path = _plan_dir() / "current_plan.json"
-    try:
-        st = plan_path.stat()
-        key = f"{st.st_mtime:.6f}|{st.st_size}|{today_iso}"
-    except OSError:
+    # Cache key: the stored plan's version (mtime + size, so ms-coincident
+    # writes can't collide, grill I5). today_iso busts on rollover.
+    pid = _pid()
+    stamp = plan_store.version(pid) if pid is not None else None
+    if stamp is not None:
+        key = f"{pid}|{stamp}|{today_iso}"
+    else:
         # No persisted plan (e.g. first-run /api/plan/generate). Skip the
         # cache; the result is short-lived anyway.
         return _enrich_plan_for_response_uncached(plan_dict, today_iso)
@@ -15640,29 +15375,15 @@ def api_calendar():
     POST /api/icu/lazy-sync and /api/rides/sync, not by this read).
     """
     plan: dict = {}
-    json_path = _plan_dir() / "current_plan.json"
-    if json_path.exists():
+    pid = _pid()
+    if _has_plan(pid):
         try:
-            with open(json_path, encoding="utf-8") as f:
-                plan = json.load(f)
-        except json.JSONDecodeError as _e:
-            # v1.6.0 — corrupt plan file is a render-blocker for the
-            # homepage's THIS-WEEK card. Surface E_PLAN_PARSE_CORRUPT in
-            # the response so the frontend can paint a clear "Plan
-            # unreadable, regenerate" message instead of silently
-            # falling back to history-only weeks.
-            _log_error(error_codes.Codes.PLAN_PARSE_CORRUPT, exc=_e, path=str(json_path))
-            return {
-                "error": error_codes.Codes.PLAN_PARSE_CORRUPT,
-                "weeks": [],
-                "summary": {},
-                "current_iso_week": None,
-                "today": clock.today().isoformat(),
-            }
+            plan = _read_plan(pid) or {}
         except OSError as _e:
             # OS-level read failure is recoverable (perms, transient I/O).
             # Fall through to "no plan" — caller still wants ride history.
-            _log_error(error_codes.Codes.PLAN_LOAD_OS_ERROR, exc=_e, path=str(json_path))
+            # A plan that does not parse is PlanCorrupt: the one answer.
+            _log_error(error_codes.Codes.PLAN_LOAD_OS_ERROR, exc=_e, profile=pid)
 
     # v4.4.0 — single rides source: ICU + FIT merged via ride_storage; legacy
     # JSON rides retained for back-compat (pre-v4 archive).
@@ -15920,8 +15641,8 @@ async def api_plan_rematch(request: Request, apply: int = Query(0)):
 
     When apply=1, writes back session.status + session.completion_matches[].
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     try:
@@ -15958,11 +15679,10 @@ async def api_plan_rematch(request: Request, apply: int = Query(0)):
                 out["r"] = {"ok": True, "apply": True, "changed": changed, **preview}
                 return plan
 
-            await run_in_threadpool(tp.update_plan, json_path, _rematch)
+            await run_in_threadpool(plan_store.update, pid, _rematch, reason="api_plan_rematch")
             return out["r"]
 
-        with open(json_path, encoding="utf-8") as f:
-            plan = json.load(f)
+        plan = _read_plan(pid)
 
         today = clock.today()
         current_week, week_idx = _load_current_week_dto(plan, today)
@@ -16015,10 +15735,9 @@ async def api_plan_re_draw(request: Request):
         try:
             idx = int(day_iso)
             if 0 <= idx < 7:
-                json_path = _plan_dir() / "current_plan.json"
-                if json_path.exists():
-                    with open(json_path, encoding="utf-8") as f:
-                        plan = json.load(f)
+                pid = _pid()
+                if _has_plan(pid):
+                    plan = _read_plan(pid)
                     today = clock.today()
                     wk, _wi = _load_current_week_dto(plan, today)
                     if wk:
@@ -16031,8 +15750,8 @@ async def api_plan_re_draw(request: Request):
         date.fromisoformat(day_iso)
     except ValueError:
         return JSONResponse({"error": "Invalid date format (use YYYY-MM-DD)"}, 400)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -16073,7 +15792,7 @@ async def api_plan_re_draw(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_re_draw")
         return out["r"]
     except Exception:
         _log.exception("Plan re-draw failed")
@@ -16220,7 +15939,7 @@ def _accept_redraw_apply(plan: dict, day_iso: str, candidate: dict) -> dict:
     and run a full reforecast so downstream TSS / TSB / availability
     flow catches up.
 
-    Caller persists via ``tp.atomic_write_plan``.
+    Caller persists via ``plan_store.update``.
     """
     target = None
     for w in plan.get("weeks", []):
@@ -16338,11 +16057,10 @@ async def api_plan_preview_redraw(request: Request):
         date.fromisoformat(day_iso)
     except ValueError:
         return JSONResponse({"error": "Invalid date format (use YYYY-MM-DD)"}, 400)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    plan = _read_plan(pid)
+    if plan is None:
         return JSONResponse({"error": "No active plan found"}, 404)
-    with open(json_path, encoding="utf-8") as f:
-        plan = json.load(f)
     try:
         return _pick_redraw_candidate(plan, day_iso, exclude_extra=exclude_extra)
     except tp.NoCandidateWorkoutError:
@@ -16371,8 +16089,8 @@ async def api_plan_accept_redraw(request: Request):
         date.fromisoformat(day_iso)
     except ValueError:
         return JSONResponse({"error": "Invalid date format"}, 400)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -16390,7 +16108,7 @@ async def api_plan_accept_redraw(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_accept_redraw")
         return out["r"]
     except ValueError as e:
         return JSONResponse({"error": str(e)}, 400)
@@ -16411,7 +16129,7 @@ def _swap_session_type_apply(plan: dict, day_iso: str, new_type: str, new_dur: i
     """Mutate the session at ``day_iso`` to ``new_type`` + ``new_dur``, pin it
     (user_swapped → reforecast/refit won't demote it), match a workout for the
     new type, then reforecast the rest of the plan so downstream load rebalances.
-    Caller persists via ``tp.atomic_write_plan``."""
+    Caller persists via ``plan_store.update``."""
     target = None
     target_week = None
     for w in plan.get("weeks", []):
@@ -16585,8 +16303,8 @@ async def api_plan_swap_type(request: Request):
         new_dur = min(new_dur, ceil)
     new_dur = max(new_dur, 30)
 
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -16608,7 +16326,7 @@ async def api_plan_swap_type(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_swap_type")
         return out["r"]
     except ValueError as e:
         return JSONResponse({"error": str(e)}, 400)
@@ -16661,8 +16379,8 @@ async def api_plan_ftp_test_type(request: Request):
         date.fromisoformat(day_iso)
     except ValueError:
         return JSONResponse({"error": "Invalid date"}, 400)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     out = {}
@@ -16720,7 +16438,7 @@ async def api_plan_ftp_test_type(request: Request):
 
     try:
         library = tp.load_workout_library()     # outside the plan lock (contract 4.2)
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_ftp_test_type")
         return out["r"]
     except Exception:
         _log.exception("ftp-test-type swap failed")
@@ -16735,8 +16453,8 @@ async def api_plan_dismiss_session(request: Request):
     Sets status=dismissed (or back to pending if undo=true).
     """
     body = await _get_json_body(request)
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return JSONResponse({"error": "No active plan found"}, 404)
 
     d_iso = str(body.get("date", "")).strip()
@@ -16784,7 +16502,7 @@ async def api_plan_dismiss_session(request: Request):
         return plan
 
     try:
-        await run_in_threadpool(tp.update_plan, json_path, _mutate)
+        await run_in_threadpool(plan_store.update, pid, _mutate, reason="api_plan_dismiss_session")
         return out["r"]
     except Exception:
         _log.exception("Plan dismiss-session failed")
@@ -16839,8 +16557,8 @@ def api_plan_auto_recalc():
     A POST since 2026-09-14 (decision D8): it rebuilds and writes the plan,
     and was a GET the Plan tab and the morning adapter called as a read."""
 
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    pid = _pid()
+    if not _has_plan(pid):
         return {"action": "no_plan"}
 
     out = {}
@@ -16940,8 +16658,7 @@ def api_plan_auto_recalc():
         # A fresh plan is only read, never written: answer it without the
         # plan lock and without the inputs a rebuild needs (3.3.2 Lapo #2: a
         # metrics failure must never turn a fresh verdict into an error).
-        with open(json_path, encoding="utf-8") as f:
-            fresh = _auto_recalc_fresh(json.load(f))
+        fresh = _auto_recalc_fresh(_read_plan(pid))
         if fresh is not None:
             return fresh
         # Plan-independent inputs, fetched BEFORE the plan lock (contract 4.2):
@@ -16960,7 +16677,7 @@ def api_plan_auto_recalc():
         # (without it, a weekly recalc reverted to the legacy +5/+5 CTL step).
         recalc_athlete = _planner_athlete()
         recent_weekly_tss = _chronic_weekly_tss_safe()
-        tp.update_plan(json_path, _mutate)
+        plan_store.update(pid, _mutate, reason="api_plan_auto_recalc")
         return out["r"]
     except Exception:
         # SEC3: don't leak exception text.
@@ -17356,6 +17073,7 @@ async def api_ride_import(
     analytics dict from :func:`_parse_fit_stats`. Errors short-circuit with
     a 4xx so the UI can render a message.
     """
+    pid = _pid()        # the rider this import adapts, whatever a switch does meanwhile
     if not fit_file or not fit_file.filename:
         raise HTTPException(status_code=400, detail="fit_file required")
 
@@ -17457,7 +17175,8 @@ async def api_ride_import(
     # v1.0.3 — best-effort auto-reforecast: a FIT import = 1 new ride.
     # Helper swallows all exceptions; the import response stays unchanged.
     # In the threadpool: it waits on the plan lock (contract 4.2).
-    await run_in_threadpool(_maybe_auto_reforecast, "default", 1)
+    if pid is not None:
+        await run_in_threadpool(_maybe_auto_reforecast, pid, 1)
 
     return {
         "ride_id": ride_id,
@@ -18689,11 +18408,9 @@ def _detect_plan_load_alert() -> bool:
     job of /api/plan/reforecast — this hook is read-only.
     """
     try:
-        json_path = _plan_dir() / "current_plan.json"
-        if not json_path.exists():
+        plan = _read_plan(_pid())
+        if plan is None:
             return False
-        with open(json_path, encoding="utf-8") as f:
-            plan = json.load(f)
         today_iso = clock.today().isoformat()
         # Find today's planned session (skip rest days with tss_estimate == 0).
         planned_estimate = 0.0
@@ -18741,6 +18458,7 @@ def api_rides_sync(force: int = Query(0)):
     """
     # The sync fetches; this handler adapts, once (it did twice: inside the
     # sync and again below, the second finding the day already stamped).
+    pid = _pid()
     if force:
         result = _sync_icu_rides_and_wellness(force=True)
     else:
@@ -18754,7 +18472,8 @@ def api_rides_sync(force: int = Query(0)):
     # v1.0.3 — best-effort auto-reforecast on new rides. Helper swallows
     # all exceptions. plan_adapted names what it wrote (None: nothing), so
     # the dashboard knows to repaint the cards that read the plan.
-    result["plan_adapted"] = _maybe_auto_reforecast("default", result.get("added", 0))
+    result["plan_adapted"] = (_maybe_auto_reforecast(pid, result.get("added", 0))
+                              if pid is not None else None)
     return result
 
 
@@ -20201,14 +19920,9 @@ def api_programme_summary(plan_id: str = Query("current")):
     phase, mean-max curve (start-4w vs end-4w), Hooper trend (1995),
     totals, decoupling trend.
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    plan = _read_plan(_pid())
+    if plan is None:
         return JSONResponse({"error": "No active plan"}, 404)
-    try:
-        with open(json_path, encoding="utf-8") as f:
-            plan = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        return JSONResponse({"error": f"plan read failed: {e}"}, 500)
     summary = _build_programme_summary(plan)
     summary["plan_id"] = plan_id
     return summary
@@ -20221,14 +19935,9 @@ def api_programme_summary_png(plan_id: str = Query("current")):
     No new dependencies — Pillow is already in the runtime stack via
     ride_report_png.
     """
-    json_path = _plan_dir() / "current_plan.json"
-    if not json_path.exists():
+    plan = _read_plan(_pid())
+    if plan is None:
         return JSONResponse({"error": "No active plan"}, 404)
-    try:
-        with open(json_path, encoding="utf-8") as f:
-            plan = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        return JSONResponse({"error": f"plan read failed: {e}"}, 500)
     summary = _build_programme_summary(plan)
     summary["plan_id"] = plan_id
     try:
@@ -20336,21 +20045,19 @@ def api_diag_health(request: Request):
     if cached is not None and (now - _DIAG_HEALTH_CACHE.get("ts", 0)) < _DIAG_HEALTH_CACHE_TTL:
         return cached
     checks: dict = {}
-    plan_path = _plan_dir() / "current_plan.json"
     plan_data: dict | None = None
     # plan_readable
     try:
-        if not plan_path.exists():
+        plan_data = _read_plan(_pid())
+        if plan_data is None:
             checks["plan_readable"] = {"ok": False, "code": error_codes.Codes.PLAN_PARSE_MISSING,
                                        "sessions_without_file": 0}
         else:
-            with open(plan_path, encoding="utf-8") as f:
-                plan_data = json.load(f)
             # v3.11.5: upcoming pending cards with no workout file — the
             # "no workout matched" count a rider sees; api_plan heals these.
             checks["plan_readable"] = {"ok": True,
                                        "sessions_without_file": tp.count_unmatched_pending_sessions(plan_data)}
-    except json.JSONDecodeError as e:
+    except PlanCorrupt as e:
         checks["plan_readable"] = {"ok": False, "code": error_codes.Codes.PLAN_PARSE_CORRUPT, "msg": str(e)[:200]}
     except OSError as e:
         checks["plan_readable"] = {"ok": False, "code": error_codes.Codes.PLAN_LOAD_OS_ERROR, "msg": str(e)[:200]}

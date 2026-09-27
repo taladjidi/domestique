@@ -42,6 +42,7 @@ import config  # noqa: E402
 import db as db_module  # noqa: E402
 import app as app_module  # noqa: E402
 import training_planner as tp  # noqa: E402
+import plan_store  # noqa: E402
 import icu_calendar_push as icp  # noqa: E402
 from profile_manager import ProfileManager  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -141,7 +142,7 @@ def stub(tmp_path):
         if t is not None:
             t.cancel()
         app_module._icu_push_timer = None
-        tp.post_write_callback = None
+        plan_store.post_write_callback = None
         ProfileManager._instance = old_instance
         app_module.DATA_DIR = old_data_dir
         app_module.tp.WORKOUT_DIR = old_workout_dir
@@ -593,44 +594,43 @@ class TestConnectionWriteOk:
 # ---------------------------------------------------------------------------
 
 class TestPlanWriteHook:
-    def test_atomic_write_plan_fires_post_write_callback(self, stub, tmp_path):
+    def test_a_store_write_fires_post_write_callback_with_the_profile(self, stub, tmp_path):
         seen = []
-        tp.post_write_callback = seen.append
+        plan_store.post_write_callback = seen.append
         try:
-            p = tmp_path / "current_plan.json"
-            tp.atomic_write_plan(p, {"weeks": []})
+            plan_store.bind("hooked", tmp_path)
+            plan_store.update("hooked", lambda _p: {"weeks": []}, reason="test")
         finally:
-            tp.post_write_callback = None
-        assert seen == [p]
+            plan_store.post_write_callback = None
+        assert seen == ["hooked"]
 
     def test_callback_failure_never_breaks_the_write(self, stub, tmp_path):
         def boom(_p):
             raise RuntimeError("hook exploded")
-        tp.post_write_callback = boom
+        plan_store.post_write_callback = boom
         try:
-            p = tmp_path / "current_plan.json"
-            tp.atomic_write_plan(p, {"weeks": [1]})
+            plan_store.bind("hooked", tmp_path)
+            plan_store.update("hooked", lambda _p: {"weeks": [1]}, reason="test")
         finally:
-            tp.post_write_callback = None
-        assert json.loads(p.read_text(encoding="utf-8")) == {"weeks": [1]}
+            plan_store.post_write_callback = None
+        assert plan_store.read("hooked") == {"weeks": [1]}
 
     def test_debounce_arms_only_when_toggle_on_and_coalesces(self, stub):
-        plan_path = Path(tp.PLAN_DIR) / "current_plan.json"
-        app_module._icu_push_schedule_debounced(plan_path)
+        app_module._icu_push_schedule_debounced(stub.pid)
         assert app_module._icu_push_timer is None          # pref OFF → no-op
         stub.pm.save_prefs({"icu_calendar_sync": True})
         try:
-            app_module._icu_push_schedule_debounced(plan_path)
+            app_module._icu_push_schedule_debounced(stub.pid)
             t1 = app_module._icu_push_timer
             assert t1 is not None
-            app_module._icu_push_schedule_debounced(plan_path)
+            app_module._icu_push_schedule_debounced(stub.pid)
             t2 = app_module._icu_push_timer
             assert t2 is not None and t2 is not t1         # re-armed, coalesced
-            # A non-plan write never schedules.
+            # A write to another profile's plan never schedules: the
+            # calendar is the active rider's.
             t2.cancel()
             app_module._icu_push_timer = None
-            app_module._icu_push_schedule_debounced(
-                Path(tp.PLAN_DIR) / "something_else.json")
+            app_module._icu_push_schedule_debounced("some-other-profile")
             assert app_module._icu_push_timer is None
         finally:
             t = app_module._icu_push_timer
@@ -665,8 +665,7 @@ class TestDebouncedFireTime:
     def test_toggle_off_endpoint_cancels_pending_timer(self, stub, fake):
         _apikey(stub)
         stub.pm.save_prefs({"icu_calendar_sync": True})
-        app_module._icu_push_schedule_debounced(
-            Path(tp.PLAN_DIR) / "current_plan.json")
+        app_module._icu_push_schedule_debounced(stub.pid)
         assert app_module._icu_push_timer is not None
         r = stub.client.post("/api/icu/push", json={"sync": False})
         assert r.status_code == 200

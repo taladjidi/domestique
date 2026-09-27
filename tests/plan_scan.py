@@ -44,6 +44,8 @@ LEGACY_INTERNAL = {f"{TP}:update_plan", f"{TP}:atomic_write_plan",
                    f"{TP}:_PlanLock.acquire", f"{TP}:_PlanLock.release",
                    f"{TP}:_PlanLock.__enter__", f"{TP}:_PlanLock.__exit__",
                    f"{TP}:_PlanLock.__init__", f"{TP}:_refuse_on_event_loop"}
+STORE_WRITERS = {"update", "restore_from_backup", "adopt_legacy_root", "copy_legacy_plans",
+                 "drop", "_commit", "_held", "_rotate"}
 OFFLOAD = {"run_in_threadpool", "to_thread", "run_in_executor", "Thread",
            "add_task", "submit", "Timer", "start_new_thread"}
 PATH_WRITE_METHODS = {"write_text", "write_bytes", "touch", "unlink", "rmdir",
@@ -438,7 +440,11 @@ def analyse(mods):
         for what, ln in _access_nodes(fn, tainted):
             s.append(("ACCESS", what, ln))
         edges[q], sinks[q] = e, sorted(set(s), key=lambda x: (x[2], x[0], x[1]))
-    writer = {q for q, s in sinks.items() if any(k in ("OWNER", "DOOR", "CENSUS") for k, _, _ in s)}
+    # The store's own functions are writers only where they write: its
+    # readers (read, version, capture) are safe on the event loop.
+    writer = {q for q, s in sinks.items()
+              if not q.startswith(f"{STORE}:") and any(k in ("OWNER", "DOOR", "CENSUS") for k, _, _ in s)}
+    writer |= {f"{STORE}:{n}" for n in STORE_WRITERS}
     changed = True
     while changed:
         changed = False
@@ -464,7 +470,7 @@ def analyse(mods):
                     if k != "sync" or c in seen:
                         continue
                     seen[c] = (cur, ln)
-                    if c in writer or (_prim(c) and _prim(c)[0] != "ACCESS"):
+                    if c in writer:
                         hit = c
                         break
                     stack.append(c)

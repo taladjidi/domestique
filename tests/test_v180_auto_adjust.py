@@ -322,8 +322,8 @@ def test_auto_adjust_dry_run_does_not_persist(tmp_path, monkeypatch):
     monkeypatch.setattr(tp, "load_workout_library", lambda: [])
 
     write_calls: list = []
-    real_write = tp.atomic_write_plan
-    monkeypatch.setattr(tp, "atomic_write_plan",
+    import plan_store
+    monkeypatch.setattr(plan_store, "_commit",                 # the plan's one writer
                         lambda *a, **kw: write_calls.append((a, kw)))
 
     client = TestClient(app_module.app)

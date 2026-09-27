@@ -80,11 +80,7 @@ NOOP = {
 
 # The worklist: writes outside plan_store, "route | door | innermost src
 # function". 98 at 433c6067; what is left.
-UNOWNED = {
-    'POST /api/plan/generate (seed) | none | export_plan_md',
-    'POST /api/plan/generate | none | export_plan_md',
-    'switch: B generate | none | export_plan_md',
-}
+UNOWNED: set = set()
 
 PLANTS = {"POST /api/zz_plant_direct", "POST /api/zz_plant_raw", "POST /api/zz_plant_nested"}
 

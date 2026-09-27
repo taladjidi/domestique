@@ -10604,21 +10604,18 @@ def api_plan():
                         plan_data["ctl_drift"] = _drift
             except Exception as _e:
                 _log.debug(f"/api/plan ctl_drift skipped: {_e}")
-            # Also include markdown if available
-            plans = sorted(_plan_dir().glob("*.md"), reverse=True)
-            md = None
-            if plans:
-                with open(plans[0], encoding="utf-8") as f:
-                    md = f.read()
+            # The Raw plan: the stored plan rendered now (10.4/10.5), never a
+            # markdown file written at the last Generate (the audit's D2: a
+            # move-session later, it still showed the old schedule).
+            try:
+                md = tp.render_plan_md(_read_plan(pid))
+            except (KeyError, TypeError, ValueError) as _e:
+                _log.debug(f"/api/plan raw markdown skipped: {_e}")
+                md = None
             return {"plan_json": plan_data, "plan": md}
-        except (json.JSONDecodeError, OSError):
+        except OSError:
             pass
-
-    plans = sorted(_plan_dir().glob("*.md"), reverse=True)
-    if not plans:
-        return {"plan": None, "plan_json": None}
-    with open(plans[0], encoding="utf-8") as f:
-        return {"plan": f.read(), "plan_json": None, "file": str(plans[0])}
+    return {"plan": None, "plan_json": None}
 
 
 @app.get("/api/plan/preview")
@@ -11197,7 +11194,6 @@ async def api_plan_generate(request: Request):
             if len(weeks) > SETUP_LIMITS["plan_weeks"][1]:
                 raise ValueError(f"the event is {len(weeks)} weeks away; a plan "
                                  f"covers at most {SETUP_LIMITS['plan_weeks'][1]}")
-            plan_path = tp.export_plan_md(goal, phases, weeks)
 
             # Also save structured JSON
             plan_dict = {
@@ -11307,7 +11303,7 @@ async def api_plan_generate(request: Request):
                     "arriving fresh is what's left to win."
                 )
 
-            out["plan_dict"], out["plan_path"] = plan_dict, plan_path
+            out["plan_dict"] = plan_dict
             return plan_dict
 
         # A corrupt plan cannot be read, and generate is the action that
@@ -11315,7 +11311,7 @@ async def api_plan_generate(request: Request):
         # (kept as the newest backup).
         await run_in_threadpool(plan_store.update, pid, _mutate, reason="generate",
                                 replace_corrupt=True)
-        plan_dict, plan_path = out["plan_dict"], out["plan_path"]
+        plan_dict = out["plan_dict"]
 
         # v1.4.0 — single enrichment helper (replaces the inline duplicate).
         # Adds card_state / card_state_v2 / content_class / display_name /
@@ -11330,7 +11326,7 @@ async def api_plan_generate(request: Request):
                 week_count=len(plan_dict.get("weeks", [])) if isinstance(plan_dict, dict) else 0,
             )
 
-        resp = {"ok": True, "plan_json": plan_dict, "plan_file": str(plan_path)}
+        resp = {"ok": True, "plan_json": plan_dict}
         if plan_dict.get("warning"):
             resp["warning"] = plan_dict["warning"]  # F4c: top-level for the UI
         return resp

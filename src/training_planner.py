@@ -7,7 +7,7 @@ Takes a goal + time budget → generates a full training plan with:
   - Specific workouts from the 2,459 ZWO library
   - Daily adaptation via readiness/HRV
   - Reforecasting when actual ≠ planned
-  - Push to Intervals.icu calendar or local export
+  - Show a plan on screen (the app stores and mirrors the one plan)
 
 Research base: 60+ papers (see RESEARCH_TRAINING_PLANNER.md)
 
@@ -24,10 +24,6 @@ Usage:
 
   # General improvement
   python3 training_planner.py --goal general --hours-per-week 8
-
-  # Push to Intervals.icu
-  python3 training_planner.py --goal event --event-date 2026-07-15 \\
-    --event-km 150 --event-climb 4300 --push-icu
 
   # Reforecast (after deviations)
   python3 training_planner.py --reforecast
@@ -16933,148 +16929,59 @@ def adjust_today_session(
     return planned, ""
 
 
-# ── Intervals.icu calendar push ───────────────────────────────────────────────
-
-def push_to_icu(weeks: list[PlannedWeek]) -> None:
-    """Push planned workouts to Intervals.icu calendar via /events/bulk API."""
-    import urllib.request
-    import tls_trust  # v3.11.4 — one verifier for every intervals.icu connection
-
-    events = []
-    for pw in weeks:
-        for s in pw.sessions:
-            if s.session_type == "rest":
-                continue
-            event = {
-                "start_date_local": s.day.isoformat(),
-                "category": "WORKOUT",
-                "name": f"[Plan] {s.description[:60]}",
-                "description": (
-                    f"Phase: {pw.phase}\n"
-                    f"Type: {s.session_type}\n"
-                    f"Duration: {s.duration_min}min\n"
-                    f"TSS target: {s.tss_estimate}\n"
-                    f"ZWO: {s.zwo_name or 'none'}\n"
-                    f"Nutrition: {s.nutrition_note}"
-                ),
-                "indoor": True,
-                "color": _phase_color(pw.phase),
-                "moving_time": s.duration_min * 60,
-            }
-            events.append(event)
-
-    if not events:
-        print("No events to push.")
-        return
-
-    url = f"https://intervals.icu/api/v1/athlete/{config.ICU_ATHLETE_ID}/events/bulk"
-    data = json.dumps(events).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Authorization", f"Basic {_b64auth()}")
-
-    try:
-        with urllib.request.urlopen(req, timeout=15, context=tls_trust.make_context()) as resp:
-            print(f"✓  {len(events)} workouts pushed to Intervals.icu calendar")
-    except Exception as e:
-        print(f"✗  Failed to push to Intervals.icu: {e}")
-        print("   Tip: check API key in config.py has calendar write access")
-
-
-def _b64auth() -> str:
-    import base64
-    creds = f"API_KEY:{config.ICU_API_KEY}".encode()
-    return base64.b64encode(creds).decode()
-
-
-def _phase_color(phase: str) -> str:
-    return {
-        "base": "#3498db",    # blue
-        "build1": "#f39c12",  # orange
-        "build2": "#e74c3c",  # red
-        "peak": "#9b59b6",    # purple
-        "taper": "#2ecc71",   # green
-    }.get(phase, "#95a5a6")
-
-
 # ── Output formatters ─────────────────────────────────────────────────────────
 
-def export_plan_md(
-    goal: Goal,
-    phases: list[Phase],
-    weeks: list[PlannedWeek],
-    ftp_at_generation: int | None = None,
-) -> Path:
-    """Export the full plan as a readable markdown file.
-
-    Args:
-        goal, phases, weeks: plan contents.
-        ftp_at_generation: the FTP used when the plan was computed, taken from
-            plan["meta"]["ftp_at_generation"] when available. Falls back to the
-            live config.ATHLETE_FTP_W only if not supplied. Using the stored
-            value means exporting an old plan does not silently re-scale all of
-            its session descriptions to a newer FTP.
-    """
-    path = PLAN_DIR / f"plan_{clock.today().isoformat()}.md"
-    # First-write mkdir per the deferred-PLAN_DIR contract (see the PLAN_DIR
-    # note ~tp:119): every other writer creates the dir; this bare open()
-    # 500'd the whole /api/plan/generate on a FRESH install (no plans/ yet).
-    # Masked for years because the real ~/.domestique/plans always existed —
-    # the hermetic test sandbox (9e9aff3d) finally exposed it.
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"# Training Plan — {goal.goal_type.upper()}\n\n")
-        f.write(f"*Generated: {clock.now().strftime('%Y-%m-%d %H:%M')}*\n\n")
-
-        if goal.goal_type == "event":
-            f.write(f"**Event:** {goal.event_name or 'Target event'}\n")
-            f.write(f"**Date:** {goal.target_date}\n")
-            f.write(f"**Distance:** {goal.event_km}km / {goal.event_climb_m}m climb\n\n")
-
-        metrics = get_today_metrics()
-        f.write(f"**Current CTL:** {metrics.get('ctl', '?')}\n")
-        ftp_w = ftp_at_generation if ftp_at_generation is not None else config.ATHLETE_FTP_W
-        f.write(f"**FTP:** {ftp_w}W\n")
-        f.write(f"**Time budget:** {goal.hours_per_week}h/week\n\n")
-
-        # Phase overview
-        f.write("## Phases\n\n")
-        f.write("| Phase | Weeks | Dates | Weekly TSS | Focus |\n")
-        f.write("|---|---|---|---|---|\n")
-        for p in phases:
-            f.write(f"| {p.name} | {p.weeks} | {p.start} → {p.end} | "
-                    f"{p.weekly_tss_target} | {p.focus[:60]} |\n")
-
-        # Weekly detail
-        f.write("\n## Weekly Schedule\n\n")
-        for pw in weeks:
-            stepback = " (STEP-BACK)" if pw.is_stepback else ""
-            f.write(f"\n### Week {pw.week_num} — {pw.phase.upper()}{stepback}\n")
-            f.write(f"*{pw.start} → {pw.end} | TSS target: {pw.tss_target}*\n\n")
-            f.write("| Day | Type | Duration | TSS | Description | Workout |\n")
-            f.write("|---|---|---|---|---|---|\n")
-            actual_tss = 0
-            for s in pw.sessions:
-                actual_tss += s.tss_estimate
-                zwo = s.zwo_name[:25] if s.zwo_name else "—"
-                f.write(f"| {s.day_name} {s.day.strftime('%d/%m')} | {s.session_type} | "
-                        f"{s.duration_min}min | {s.tss_estimate:.0f} | "
-                        f"{s.description[:50]} | {zwo} |\n")
-            f.write(f"\n*Week TSS: {actual_tss:.0f} / target {pw.tss_target:.0f}*\n")
-
-        # CTL projection
-        f.write("\n## CTL Projection\n\n")
-        daily_tss = []
-        for pw in weeks:
-            for s in pw.sessions:
-                daily_tss.append(s.tss_estimate)
-        ctl_trajectory = forecast_ctl(metrics.get("ctl") or 37.0, daily_tss)
-        for i, pw in enumerate(weeks):
-            week_end_ctl = ctl_trajectory[min((i + 1) * 7, len(ctl_trajectory) - 1)]
-            f.write(f"- Week {pw.week_num} ({pw.phase}): CTL → {week_end_ctl}\n")
-
-    return path
+def render_plan_md(plan: dict) -> str:
+    """The stored plan as readable markdown -- the Plan tab's "Raw plan" --
+    rendered from the plan's JSON when asked (contract 10.4/10.5: no
+    derived plan_<date>.md is written beside the plan, so the markdown can
+    never lag the plan it describes). The FTP is the plan's own
+    (meta.ftp_at_generation) when it has one, and the CTL the one it was
+    built against (ctl_snapshot), so an old plan is not re-described in
+    today's numbers."""
+    goal = goal_from_dict(plan.get("goal") or {})
+    weeks = [week_from_dict(w) for w in plan.get("weeks") or []]
+    out = [f"# Training Plan — {goal.goal_type.upper()}\n"]
+    gen = str(plan.get("generated") or "")[:16].replace("T", " ")
+    out.append(f"*Generated: {gen}*\n")
+    if goal.goal_type == "event":
+        out.append(f"**Event:** {goal.event_name or 'Target event'}")
+        out.append(f"**Date:** {goal.target_date}")
+        out.append(f"**Distance:** {goal.event_km}km / {goal.event_climb_m}m climb\n")
+    ctl = (plan.get("ctl_snapshot") or {}).get("current_ctl")
+    out.append(f"**Current CTL:** {ctl if ctl is not None else '?'}")
+    ftp_w = (plan.get("meta") or {}).get("ftp_at_generation") or config.ATHLETE_FTP_W
+    out.append(f"**FTP:** {ftp_w}W")
+    out.append(f"**Time budget:** {goal.hours_per_week}h/week\n")
+    out.append("## Phases\n")
+    out.append("| Phase | Weeks | Dates | Weekly TSS | Focus |")
+    out.append("|---|---|---|---|---|")
+    for p in plan.get("phases") or []:
+        out.append(f"| {p.get('name')} | {p.get('weeks')} | {p.get('start')} → {p.get('end')} | "
+                   f"{p.get('weekly_tss')} | {str(p.get('focus') or '')[:60]} |")
+    out.append("\n## Weekly Schedule\n")
+    for pw in weeks:
+        stepback = " (STEP-BACK)" if pw.is_stepback else ""
+        out.append(f"\n### Week {pw.week_num} — {pw.phase.upper()}{stepback}")
+        out.append(f"*{pw.start} → {pw.end} | TSS target: {pw.tss_target}*\n")
+        out.append("| Day | Type | Duration | TSS | Description | Workout |")
+        out.append("|---|---|---|---|---|---|")
+        actual_tss = 0
+        for s in pw.sessions:
+            actual_tss += s.tss_estimate
+            zwo = s.zwo_name[:25] if s.zwo_name else "—"
+            out.append(f"| {s.day_name} {s.day.strftime('%d/%m')} | {s.session_type} | "
+                       f"{s.duration_min}min | {s.tss_estimate:.0f} | "
+                       f"{s.description[:50]} | {zwo} |")
+        out.append(f"\n*Week TSS: {actual_tss:.0f} / target {pw.tss_target:.0f}*")
+    out.append("\n## CTL Projection\n")
+    daily_tss = [s.tss_estimate for pw in weeks for s in pw.sessions]
+    trajectory = forecast_ctl(ctl if ctl is not None else 37.0, daily_tss)
+    for i, pw in enumerate(weeks):
+        if trajectory:
+            out.append(f"- Week {pw.week_num} ({pw.phase}): CTL → "
+                       f"{trajectory[min((i + 1) * 7, len(trajectory) - 1)]}")
+    return "\n".join(out) + "\n"
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -17096,8 +17003,6 @@ def main():
     parser.add_argument("--max-weekend", type=float, default=3.5)
     parser.add_argument("--rest-days", type=str, default="0",
                         help="Comma-separated rest days (0=Mon, 6=Sun)")
-    parser.add_argument("--push-icu", action="store_true",
-                        help="Push plan to Intervals.icu calendar")
     parser.add_argument("--reforecast", action="store_true",
                         help="Re-evaluate current plan against actual training")
     args = parser.parse_args()
@@ -17163,13 +17068,8 @@ def main():
     final_ctl = trajectory[-1] if trajectory else current_ctl
     print(f"CTL projection: {current_ctl:.0f} → {final_ctl:.0f} over {len(weeks)} weeks\n")
 
-    # Export
-    md_path = export_plan_md(goal, phases, weeks)
-    print(f"✓  Plan exported: {md_path}")
-
-    # Push to Intervals.icu
-    if args.push_icu:
-        push_to_icu(weeks)
+    # The CLI plans on screen only: it writes no plan and pushes nothing (the
+    # app's stored plan is the one plan, and its calendar mirror the one push).
 
     # Reforecast
     if args.reforecast:

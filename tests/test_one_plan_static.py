@@ -31,8 +31,6 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 # legacy plan-dir seam the suite still patches, removed with 10.3.
 ALLOWED: Counter = Counter({
     'ACCESS app:_bridge_plan_dir  _plan_dir()': 1,   # BRIDGE, gone with 10.3
-    'ACCESS app:api_plan  _plan_dir()': 2,
-    "ACCESS app:api_plan  glob('*.md')": 2,
     'ACCESS paths:<module>  _DEFAULT_PLAN_DIR': 1,
     "ACCESS paths:<module>  path / 'plans'": 1,
     'ACCESS paths:_plan_dir  _DEFAULT_PLAN_DIR': 1,
@@ -40,11 +38,8 @@ ALLOWED: Counter = Counter({
     "ACCESS profile_manager:ProfileManager.plan_dir  path / 'plans'": 1,
     'ACCESS training_planner:<module>  PLAN_DIR': 1,
     "ACCESS training_planner:<module>  path / 'plans'": 1,
-    'ACCESS training_planner:export_plan_md  PLAN_DIR': 1,
     'OWNER app:<module>  plan_store._BRIDGE': 1,   # BRIDGE, gone with 10.3
     'OWNER profile_manager:ProfileManager.plan_dir  raw Path.mkdir': 1,
-    'OWNER training_planner:export_plan_md  raw Path.mkdir': 1,
-    "OWNER training_planner:export_plan_md  raw open(..., 'w')": 1,
 })
 
 

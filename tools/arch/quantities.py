@@ -114,6 +114,9 @@ def _when_from_scope(scope: str) -> str:
 # every entry here is a hole in the comparison, so each one names its reason.
 _EXCLUDED_PATHS = (
     ".components.",       # readiness sub-scores, 0..100, not the quantity
+    # /api/plan/daily-adapt's dry run: what the next sync WOULD make of the
+    # plan (contract 10.5), a different question from what it holds now.
+    ".projected_adaptations[",
 )
 
 # Endpoints that answer about SOMEONE ELSE. /api/icu/athlete-numbers reports

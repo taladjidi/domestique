@@ -92,7 +92,9 @@ def _door(start=3):
 def _record(op, *paths, ancestor=False):
     if STATE["probe"] or getattr(_tl, "busy", False):
         return
-    hit = [p for p in paths if p is not None and (_is_plan_path(p) or (ancestor and _contains_plans(p)))]
+    # Taking the store's lock file is not a write of the plan.
+    hit = [p for p in paths if p is not None and not str(p).endswith("current_plan.lock")
+           and (_is_plan_path(p) or (ancestor and _contains_plans(p)))]
     if not hit:
         return
     _tl.busy = True
@@ -496,6 +498,15 @@ def main():
                   "/api/plan/continuous/deload-revert": _deload,
                   "/api/plan/auto-recalc": _stale_recalc}
 
+        def _no_revert_today():
+            # /api/readiness/revert-cap ran earlier in the sweep; the readiness
+            # write a sync makes needs today's opt-out gone.
+            f = A._readiness_revert_flag_path()
+            if f.exists():
+                f.unlink()
+
+        PRE = {"/api/sync": _no_revert_today, "/api/daily-log": _no_revert_today}
+
         def _seed_for(path):
             if path not in TWEAKS:
                 return seed
@@ -528,6 +539,8 @@ def main():
                 if pm.active_id != pid_a:
                     probe_switch(pm, pid_a)
                 probe_write(plan_path(pid_a), _seed_for(path))
+                if path in PRE:
+                    PRE[path]()
                 if hasattr(A, "_PLAN_HEAL_SEEN"):
                     A._PLAN_HEAL_SEEN.clear()
                 STATE["route"] = f"{m} {path}"

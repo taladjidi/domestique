@@ -39,6 +39,7 @@ WRITERS = {
     "POST /api/readiness/apply-tier-down", "POST /api/readiness/revert-cap",
     "POST /api/today-session/persist", "POST /api/rides/sync", "POST /api/ride/import",
     "DELETE /api/profiles/{profile_id}",
+    "POST /api/daily-log", "POST /api/sync",   # readiness into today's session (10.5)
 }
 
 # Non-GET routes that do not write the plan, and why.
@@ -65,9 +66,7 @@ NOOP = {
     "POST /api/calendar/push-workout": "pushes a library workout to the intervals.icu calendar",
     "POST /api/settings": "preferences",
     "POST /api/settings/zones": "zone preferences (400 for the probe body)",
-    "POST /api/sync": "pulls intervals.icu into the SQLite mirror; the plan adapts on /api/rides/sync",
     "POST /api/metrics/log": "metrics store",
-    "POST /api/daily-log": "the morning questionnaire (10.5 moves the readiness adjustment here)",
     "POST /api/retest-nudge/snooze": "preferences",
     "POST /api/plan/preview-redraw": "a preview: answers a draft, writes nothing",
     "POST /api/ride/{ride_id}/rpe": "ride sidecar (404 for the probe id)",

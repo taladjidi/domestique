@@ -1,13 +1,12 @@
-"""The daily adaptation is told the rider's form.
+"""/api/plan/daily-adapt projects what the sync's adaptation will write.
 
-`training_planner.daily_adapt_plan` takes `tsb` and, when form is below -30,
-projects a de-load: the hard days ahead drop a level of intensity. The only
-production caller, `/api/plan/daily-adapt`, never passed the argument. It
-defaulted to None, so the branch was dead on the one path that runs it, while
-every card on the same page showed the rider's TSB.
-
-Found by asking the app the same question through every door: the adaptation
-answered "blank" for a number three other endpoints answered as -9.
+It ran `training_planner.daily_adapt_plan`, a second algorithm (first
+without the rider's form -- found by asking the app the same question
+through every door -- then with it), which the plan never ran: the
+projection promised changes the sync would not make (the single-source
+audit's D9). Contract 10.5: it is a dry run of the real on-sync adaptation,
+`_apply_plan_update`, on a copy of the stored plan. So the test is equality:
+the projection, then the sync's write, the same changes.
 """
 from __future__ import annotations
 
@@ -62,28 +61,36 @@ class DailyAdaptKnowsTheForm(unittest.TestCase):
         self._patch.stop()
         clock.unfreeze()
 
-    def _adapt(self, state):
-        with patch.object(app_module, "_fitness_state", return_value=state), \
-             patch.object(app_module, "_collect_week_activities", return_value=[]):
+    def _inputs(self, state):
+        return [patch.object(app_module, "get_today_metrics", return_value=state),
+                patch.object(app_module, "_fitness_state", return_value=state),
+                patch.object(app_module, "_load_all_rides_safe", return_value=[]),
+                patch("db.query_activities", return_value=[])]
+
+    def _projection_then_write(self, state):
+        import contextlib
+        import plan_store
+        with contextlib.ExitStack() as st:
+            for p in self._inputs(state):
+                st.enter_context(p)
             r = self.client.get("/api/plan/daily-adapt")
-        self.assertEqual(r.status_code, 200, r.text)
-        return r.json()
+            self.assertEqual(r.status_code, 200, r.text)
+            info = r.json()
+            pid = app_module._pid()
+            before = {x["day"]: x for w in plan_store.read(pid)["weeks"] for x in w["sessions"]}
+            app_module._maybe_auto_reforecast(pid, 1)
+            after = {x["day"]: x for w in plan_store.read(pid)["weeks"] for x in w["sessions"]}
+        keys = ("session_type", "duration_min", "tss_estimate")
+        wrote = sorted(d for d in after if d >= TODAY.isoformat()
+                       and tuple(after[d].get(k) for k in keys) != tuple(before[d].get(k) for k in keys))
+        return info, wrote
 
-    def test_a_wrecked_rider_gets_the_hard_days_eased(self):
-        info = self._adapt(WRECKED)
-        self.assertEqual(info.get("tsb"), -38.0,
-                         "the adaptation was not told the rider's form")
-        projected = json.dumps(info)
-        self.assertIn("vo2max", projected,
-                      "no hard day was considered at all; the fixture is wrong")
-        self.assertTrue(
-            info.get("tsb_deload_projected") or info.get("changes"),
-            f"form -38 projected no de-load: {projected[:400]}")
+    def test_a_wrecked_rider_is_projected_what_the_sync_writes(self):
+        info, wrote = self._projection_then_write(WRECKED)
+        self.assertTrue(info["projection_only"])
+        self.assertEqual(sorted(c["date"] for c in info["projected_adaptations"]), wrote)
+        self.assertTrue(wrote, "the sync changed nothing: the equality would be vacuous")
 
-    def test_a_fresh_rider_is_left_alone(self):
-        """The guard on the guard: an adaptation that always eases is as
-        useless as one that never does."""
-        info = self._adapt(FRESH)
-        self.assertEqual(info.get("tsb"), 10.0)
-        self.assertFalse(info.get("tsb_deload_projected"),
-                         "a rested rider had their hard days eased")
+    def test_a_fresh_rider_is_projected_what_the_sync_writes(self):
+        info, wrote = self._projection_then_write(FRESH)
+        self.assertEqual(sorted(c["date"] for c in info["projected_adaptations"]), wrote)

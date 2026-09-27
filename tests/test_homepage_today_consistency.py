@@ -156,6 +156,7 @@ class TestTodaySessionPlannedAndAdjusted(HomepageTodayConsistencyBase):
             app_module, "get_today_metrics",
             return_value={"ctl": 50, "atl": 45, "tsb": 5},
         ):
+            app_module._apply_readiness_to_today(app_module._pid())   # the POST's write (10.5)
             r = self.client.get("/api/today-session")
             self.assertEqual(r.status_code, 200, r.text)
             data = r.json()
@@ -186,6 +187,7 @@ class TestAdjustmentReasonPopulated(HomepageTodayConsistencyBase):
             app_module, "get_today_metrics",
             return_value={"ctl": 50, "atl": 45, "tsb": 5},
         ):
+            app_module._apply_readiness_to_today(app_module._pid())   # the POST's write (10.5)
             data = self.client.get("/api/today-session").json()
 
             # New canonical field per Pillar D.
@@ -326,6 +328,7 @@ class TestYesterdayOnAMonday(HomepageTodayConsistencyBase):
             app_module, "get_today_metrics",
             return_value={"ctl": 50, "atl": 45, "tsb": 5},
         ), patch.object(app_module.db, "query_activities", return_value=[ride]):
+            app_module._apply_readiness_to_today(app_module._pid())   # the POST's write (10.5)
             data = self.client.get("/api/today-session").json()
         self.assertEqual(data["planned"]["session_type"], "tempo")
         self.assertEqual(data["adjusted"]["session_type"], "z2")

@@ -307,6 +307,7 @@ class TestG2IntegrationViaTodaySession(_IntegrationBase):
 
         # No daily_log → G6 silent. Empty activity list → G1 silent.
         with patch.object(app_module, "_load_all_rides_safe", return_value=rides):
+            app_module._apply_readiness_to_today(app_module._pid())   # the POST's write (10.5)
             r = self.client.get("/api/today-session")
         self.assertEqual(r.status_code, 200, r.text)
         out = r.json()

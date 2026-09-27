@@ -12234,7 +12234,10 @@ function _renderPlanPreviewPhases(phases, planWeeks, goal, eventDate, resp) {
   }
   $('plan-phases').innerHTML = html;
   _syncGenerateBlocked();
-  let summary = `<div style="font-size:12px;color:var(--text2);">Preview &middot; ${agg.length} phases &middot; ${totalWeeks} weeks total</div>`;
+  // 10.5: the stored plan's phases while the form describes it; anything
+  // else is a draft of what Generate would build, and says so.
+  const label = (resp && resp.source === 'stored') ? 'Your plan' : 'Draft (not your plan until you Generate)';
+  let summary = `<div style="font-size:12px;color:var(--text2);">${label} &middot; ${agg.length} phases &middot; ${totalWeeks} weeks total</div>`;
   if (eventDate) summary = `<span style="font-size:12px;color:var(--text2);">Event ${eventDate}</span>` + summary;
   $('plan-summary').innerHTML = summary;
 }

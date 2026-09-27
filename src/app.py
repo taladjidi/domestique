@@ -3697,6 +3697,7 @@ async def api_readiness_revert_cap(request: Request):
                         s[k] = v
                     s["adapted"] = False
                     s.pop("adapted_reason", None)
+                    s.pop("adapted_by", None)
                     out["restored"] = {"session_type": s.get("session_type"),
                                        "duration_min": s.get("duration_min"),
                                        "zwo_file": s.get("zwo_file"),
@@ -8468,9 +8469,14 @@ def api_sync():
     from ICU must not cost the rider background sync for the rest of the
     session. run_sync re-raises on failure, so this only runs on success.
     """
+    pid = _pid()
     result = db.run_sync(days=90)
     if db._auth_disabled:
         db.restart_sync()
+    # Wellness (HRV, sleep) arrives here: today's session takes its readiness
+    # adjustment in the stored plan (contract 10.5).
+    if isinstance(result, dict):
+        result["today_session"] = _apply_readiness_to_today(pid)
     return result
 
 
@@ -8529,6 +8535,7 @@ async def api_daily_log_post(request: Request):
     fields excluding mood, range 4..28). Per Hooper & Mackinnon 1995,
     hooper_index ≥ 18 = significant accumulated fatigue (IMPL-B G6 gate).
     """
+    pid = _pid()
     body = await _get_json_body(request)
     dt = body.get("date", clock.today().isoformat())
     try:
@@ -8547,7 +8554,12 @@ async def api_daily_log_post(request: Request):
         )
     except (ValueError, TypeError) as e:
         return JSONResponse({"error": str(e)}, 400)
-    return {"ok": True, "entry": entry}
+    # The morning log is a readiness input: today's session takes the
+    # adjustment in the stored plan, here (contract 10.5), not on the GET.
+    today_session = None
+    if dt == clock.today().isoformat():
+        today_session = await run_in_threadpool(_apply_readiness_to_today, pid)
+    return {"ok": True, "entry": entry, "today_session": today_session}
 
 
 def _parse_rtt(raw):
@@ -9280,6 +9292,9 @@ async def api_today_session_persist(request: Request):
                         s["description"] = str(body["description"])
                     s["adapted"] = True
                     s["adapted_reason"] = reason
+                    # The rider's own now: a later readiness pass leaves it
+                    # (only an adjustment the pass made itself is its to undo).
+                    s["adapted_by"] = "rider"
                     # Clear ZWO so the UI / next match-pass re-picks for the new type.
                     s["zwo_file"] = ""
                     s["zwo_name"] = ""
@@ -9874,43 +9889,12 @@ def api_today_session():
         raise
 
 
-def _api_today_session_impl():
-    """Internal — actual /api/today-session compute path."""
-    today_str = clock.today().isoformat()
-    _stored = _read_stored_plan()
-    # 3.4.0 W2 (amendment C): the continuous deload advance's chip. The
-    # advance itself runs where rides arrive (_maybe_auto_reforecast, reached
-    # by the load's POST /api/rides/sync): this read used to run it and write
-    # the plan (week-view contract P8).
-    _deload_chip = _deload_chip_for_today(_stored) if _plan_is_continuous(_stored) else None
-
-    # Today's session is the stored week's, read through the one week view
-    # (src/week_view.py) the This Week list and the calendar read: its
-    # session_type is the served file's content, not the slot's label, so the
-    # Today card cannot say SWEETSPOT over a threshold file again
-    # (notes/week-view-contract.md A2). A day no stored row covers has no
-    # session; nothing is regenerated to fill it (P1, P4).
-    week_data = _stored_week_view(_stored, 0).as_weekly_plan()
-    planned_data = next(
-        (s for s in week_data["sessions"]
-         if s["day"] == today_str and s.get("on_record")), None)
-    if not planned_data:
-        # has_plan tells a rest day inside a plan (or before it starts, or
-        # after it ends) from having no plan at all, which the card offers
-        # to create. The retest nudge does not depend on a session.
-        from profile_manager import ProfileManager as _PM
-        return {"planned": None, "adjusted": None, "reason": "No session planned today",
-                "has_plan": bool(_stored and _stored.get("weeks")),
-                "retest_nudge": _retest_nudge_payload(_PM.get())}
-
-    planned = tp.PlannedSession(
-        day=clock.today(), day_name=planned_data.get("day_name", ""),
-        session_type=planned_data.get("session_type", "rest"),
-        duration_min=planned_data.get("duration_min", 0),
-        tss_estimate=planned_data.get("tss_estimate", 0),
-        description=planned_data.get("description", ""),
-    )
-
+def _today_readiness_inputs(stored: dict, week_data: dict) -> dict:
+    """Today's readiness score and the inputs of its session verdict
+    (yesterday's load against plan, the last four days' rides, the morning
+    log). No session is built here: /api/today-session shows the score
+    beside the stored session."""
+    _stored = stored
     # Get readiness and HRV data
     sleep = cached("sleep", get_sleep_metrics)
     training = cached("training", get_today_metrics)
@@ -10039,6 +10023,22 @@ def _api_today_session_impl():
     # midnight). Carried inside `r` to mirror how dfa_cap reaches the ladder;
     # the today-session payload only picks named keys, so this stays internal.
     r["cap_reverted_today"] = _is_readiness_cap_reverted_today()
+    return {"r": r, "hrv_streak": hrv_streak, "sleep": sleep, "training": training,
+            "rides": _all_rides, "yesterday_tss_ratio": yesterday_tss_ratio,
+            "rides_recent": rides_recent, "daily_log_today": daily_log_today}
+
+
+def _today_readiness(stored: dict, planned, week_data: dict) -> dict:
+    """Today's readiness verdict for ``planned`` (the prescription as the
+    plan made it): the session adjust_today_session would swap in. Its one
+    caller is _apply_readiness_to_today, on the POSTs that bring the inputs
+    (the morning log, a sync); /api/today-session serves what that stored
+    (contract 10.5)."""
+    v = _today_readiness_inputs(stored, week_data)
+    r, hrv_streak = v["r"], v["hrv_streak"]
+    yesterday_tss_ratio, rides_recent = v["yesterday_tss_ratio"], v["rides_recent"]
+    daily_log_today = v["daily_log_today"]
+    sleep, training, _all_rides = v["sleep"], v["training"], v["rides"]
     adjusted, reason = tp.adjust_today_session(
         planned=planned, readiness=r,
         hrv_streak_below_swc=hrv_streak,
@@ -10057,6 +10057,184 @@ def _api_today_session_impl():
             f"EVENT=today_adjustment_reverted suppressed_reason={reason!r}")
         adjusted, reason = planned, ""
 
+    return {"r": r, "hrv_streak": hrv_streak, "adjusted": adjusted, "reason": reason,
+            "sleep": sleep, "training": training, "rides": _all_rides}
+
+
+def _today_row(plan: dict, today_iso: str):
+    return next((s for w in (plan or {}).get("weeks", []) or []
+                 for s in w.get("sessions", []) or [] if s.get("day") == today_iso), None)
+
+
+_READINESS_FIELDS = ("session_type", "duration_min", "tss_estimate", "description",
+                     "zwo_file", "zwo_name")
+
+
+def _as_planned(plan: dict) -> dict:
+    """``plan`` with today's readiness adaptation (if any) taken back to the
+    prescription it replaced: what the readiness verdict is computed on."""
+    import copy as _copy
+    base = _copy.deepcopy(plan)
+    s = _today_row(base, clock.today().isoformat())
+    if s is not None and s.get("adapted_by") == "readiness" and isinstance(s.get("pre_adapt"), dict):
+        s.update(s.pop("pre_adapt"))
+        for k in ("adapted", "adapted_reason", "adapted_by"):
+            s.pop(k, None)
+    return base
+
+
+def _apply_readiness_to_today(pid) -> "str | None":
+    """Contract 10.5: the readiness adjustment is a plan write, on the POST
+    that brings its input (daily-log, a sync), through the store -- so the
+    stored plan, the intervals.icu event and the Bryton file all carry what
+    the Today card shows. It was computed on every GET /api/today-session
+    and served while the store and the calendar kept the original (the
+    audit's D1: recovery 30 min served, z2 58 min stored and pushed).
+
+    Today's session is adapted (the prescription stashed in pre_adapt,
+    adapted_by="readiness", a workout matched for the new type) or, when
+    the verdict no longer calls for it or the rider reverted today, restored.
+    A day the rider changed by hand (persist, tier-down, swap) is theirs:
+    left alone. Returns "adapted", "restored" or None. Best-effort: a failure
+    is logged, the POST that called it stands."""
+    try:
+        if pid is None or not _has_plan(pid):
+            return None
+        today_str = clock.today().isoformat()
+        base = _as_planned(_read_plan(pid))
+        week_data = _stored_week_view(base, 0).as_weekly_plan()
+        planned_data = next((s for s in week_data["sessions"]
+                             if s["day"] == today_str and s.get("on_record")), None)
+        row = _today_row(base, today_str)
+        if planned_data is None or row is None:
+            return None
+        planned = tp.PlannedSession(
+            day=clock.today(), day_name=planned_data.get("day_name", ""),
+            session_type=planned_data.get("session_type", "rest"),
+            duration_min=planned_data.get("duration_min", 0),
+            tss_estimate=planned_data.get("tss_estimate", 0),
+            description=planned_data.get("description", ""),
+        )
+        verdict = _today_readiness(base, planned, week_data)
+        adjusted, reason = verdict["adjusted"], verdict["reason"]
+        if reason and verdict["r"].get("cap_reverted_today"):
+            reason = ""                        # the rider's opt-out for today (C6)
+        library = tp.load_workout_library() if reason else None
+        out = {"did": None}
+
+        def _mutate(plan):
+            s = _today_row(plan, today_str)
+            if s is None:
+                return None
+            ours = s.get("adapted_by") == "readiness"
+            if s.get("adapted") and not ours:
+                return None                    # the rider's own change wins
+            if not reason:
+                if not ours:
+                    return None
+                s.update(s.pop("pre_adapt", {}) or {})
+                for k in ("adapted", "adapted_reason", "adapted_by"):
+                    s.pop(k, None)
+                out["did"] = "restored"
+                return plan
+            want = (adjusted.session_type, int(adjusted.duration_min),
+                    float(adjusted.tss_estimate))
+            if ours and (s.get("session_type"), int(s.get("duration_min") or 0),
+                         float(s.get("tss_estimate") or 0)) == want \
+                    and s.get("adapted_reason") == reason:
+                return None                    # already stored: idempotent
+            if not ours:
+                s["pre_adapt"] = {k: row.get(k) for k in _READINESS_FIELDS}
+            s["session_type"], s["duration_min"], s["tss_estimate"] = want
+            s["description"] = adjusted.description
+            s.update(adapted=True, adapted_reason=reason, adapted_by="readiness")
+            ps_ = tp.PlannedSession(day=clock.today(), day_name=s.get("day_name", ""),
+                                    session_type=want[0], duration_min=want[1],
+                                    tss_estimate=want[2], description=adjusted.description)
+            try:
+                tp.match_zwo(ps_, library or [], week_num=1,
+                             day_idx=clock.today().weekday(), used_names=set(),
+                             raise_on_empty=True, hr_bias=_hr_bias())
+                s["zwo_file"], s["zwo_name"] = ps_.zwo_file, ps_.zwo_name
+            except tp.NoCandidateWorkoutError:
+                s["zwo_file"], s["zwo_name"] = "", ""
+            out["did"] = "adapted"
+            return plan
+
+        plan_store.update(pid, _mutate, reason="readiness adjustment of today's session")
+        if out["did"]:
+            _log.info(f"EVENT=readiness_applied action={out['did']} reason={reason!r}")
+        return out["did"]
+    except Exception as e:  # noqa: BLE001 -- the POST that brought the input stands
+        _log.warning(f"readiness adjustment skipped: {e}")
+        return None
+
+
+def _api_today_session_impl():
+    """Internal — actual /api/today-session compute path. It serves the
+    stored session: a readiness adjustment is already in the plan
+    (_apply_readiness_to_today, run by the POST that brought the input), and
+    `planned` is the prescription it replaced (pre_adapt)."""
+    today_str = clock.today().isoformat()
+    _stored = _read_stored_plan()
+    # 3.4.0 W2 (amendment C): the continuous deload advance's chip. The
+    # advance itself runs where rides arrive (_maybe_auto_reforecast, reached
+    # by the load's POST /api/rides/sync): this read used to run it and write
+    # the plan (week-view contract P8).
+    _deload_chip = _deload_chip_for_today(_stored) if _plan_is_continuous(_stored) else None
+
+    # Today's session is the stored week's, read through the one week view
+    # (src/week_view.py) the This Week list and the calendar read: its
+    # session_type is the served file's content, not the slot's label, so the
+    # Today card cannot say SWEETSPOT over a threshold file again
+    # (notes/week-view-contract.md A2). A day no stored row covers has no
+    # session; nothing is regenerated to fill it (P1, P4).
+    week_data = _stored_week_view(_stored, 0).as_weekly_plan()
+    planned_data = next(
+        (s for s in week_data["sessions"]
+         if s["day"] == today_str and s.get("on_record")), None)
+    if not planned_data:
+        # has_plan tells a rest day inside a plan (or before it starts, or
+        # after it ends) from having no plan at all, which the card offers
+        # to create. The retest nudge does not depend on a session.
+        from profile_manager import ProfileManager as _PM
+        return {"planned": None, "adjusted": None, "reason": "No session planned today",
+                "has_plan": bool(_stored and _stored.get("weeks")),
+                "retest_nudge": _retest_nudge_payload(_PM.get())}
+
+    planned = tp.PlannedSession(
+        day=clock.today(), day_name=planned_data.get("day_name", ""),
+        session_type=planned_data.get("session_type", "rest"),
+        duration_min=planned_data.get("duration_min", 0),
+        tss_estimate=planned_data.get("tss_estimate", 0),
+        description=planned_data.get("description", ""),
+    )
+
+    # The readiness score is shown; the session is the stored one.
+    stored_row = _today_row(_stored, today_str) or {}
+    adapted = bool(stored_row.get("adapted"))
+    pre = stored_row.get("pre_adapt") if adapted and isinstance(stored_row.get("pre_adapt"), dict) else None
+    if pre:
+        planned = tp.PlannedSession(
+            day=clock.today(), day_name=planned_data.get("day_name", ""),
+            session_type=pre.get("session_type") or planned.session_type,
+            duration_min=pre.get("duration_min") or 0,
+            tss_estimate=pre.get("tss_estimate") or 0,
+            description=pre.get("description") or "",
+        )
+    served = tp.PlannedSession(
+        day=clock.today(), day_name=planned_data.get("day_name", ""),
+        session_type=planned_data.get("session_type", "rest"),
+        duration_min=planned_data.get("duration_min", 0),
+        tss_estimate=planned_data.get("tss_estimate", 0),
+        description=planned_data.get("description", ""),
+    )
+    verdict = _today_readiness_inputs(_as_planned(_stored), week_data)
+    r, hrv_streak = verdict["r"], verdict["hrv_streak"]
+    sleep, training, _all_rides = verdict["sleep"], verdict["training"], verdict["rides"]
+    adjusted = served
+    reason = str(stored_row.get("adapted_reason") or "") if adapted else ""
+
     # v4.6.0 IMPL-HOMEPAGE-CONSISTENCY §3 Pillar D: surface adjustment_reason
     # explicitly so the homepage chip can render "Adjusted to {type} due to
     # {reason}" without re-parsing the legacy arrow-string. Empty when no
@@ -10071,14 +10249,16 @@ def _api_today_session_impl():
             "description": planned.description,
             # v3.2.1: matched library file so the home card can preview the
             # actual blocks (same source the day-detail modal charts).
-            "zwo_file": planned_data.get("zwo_file") or None,
-            "zwo_name": planned_data.get("zwo_name") or None,
+            "zwo_file": ((pre or {}).get("zwo_file") if pre else planned_data.get("zwo_file")) or None,
+            "zwo_name": ((pre or {}).get("zwo_name") if pre else planned_data.get("zwo_name")) or None,
         },
         "adjusted": {
             "session_type": adjusted.session_type,
             "duration_min": adjusted.duration_min,
             "tss_estimate": adjusted.tss_estimate,
             "description": adjusted.description,
+            "zwo_file": planned_data.get("zwo_file") or None,
+            "zwo_name": planned_data.get("zwo_name") or None,
         },
         # issue #7 — surface a race on the home "Today" card when today IS a race.
         "is_race": bool(planned_data.get("is_race")),
@@ -10609,6 +10789,37 @@ def api_plan():
     return {"plan": None, "plan_json": None}
 
 
+def _stored_phases_for(plan: "dict | None", g) -> "list | None":
+    """The stored plan's phases when ``g`` (the configurator's form) is the
+    goal the stored plan was built for -- same type, event date, start and
+    runway, and no custom split other than the stored one -- else None."""
+    from types import SimpleNamespace
+    if not plan or not plan.get("phases"):
+        return None
+    try:
+        sg = tp.goal_from_dict(plan.get("goal") or {})
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (sg.goal_type, sg.target_date, sg.start_date) != (g.goal_type, g.target_date, g.start_date):
+        return None
+    if g.phase_weeks and dict(g.phase_weeks) != dict(sg.phase_weeks or {}):
+        return None
+    if g.goal_type not in ("event", "event_preparation") and sg.plan_weeks \
+            and int(sg.plan_weeks) != int(g.plan_weeks):
+        return None
+    out = []
+    for p in plan["phases"]:
+        try:
+            out.append(SimpleNamespace(name=p["name"], weeks=p["weeks"],
+                                start=date.fromisoformat(str(p["start"])[:10]),
+                                end=date.fromisoformat(str(p["end"])[:10]),
+                                weekly_tss_target=p.get("weekly_tss"),
+                                focus=p.get("focus") or ""))
+        except (KeyError, TypeError, ValueError):
+            return None
+    return out
+
+
 @app.get("/api/plan/preview")
 def api_plan_preview(
     goal: str = Query("general"),
@@ -10682,11 +10893,21 @@ def api_plan_preview(
     except Exception:
         current_ctl = _PLANNING_CTL_UNKNOWN
 
-    phases = tp.generate_phases(g, current_ctl,
-                                recent_weekly_tss=_chronic_weekly_tss_safe())
+    # 10.5: while the form describes the stored plan's goal, the panel shows
+    # the stored phases -- what the rider was actually given; a live
+    # generate_phases on today's CTL/load drifted from them (the audit's D3:
+    # base 484 previewed vs 371 stored at CTL +12). Anything else is a draft.
+    stored_phases = _stored_phases_for(_read_plan(_pid()), g)
+    if stored_phases is not None:
+        phases, source = stored_phases, "stored"
+    else:
+        phases, source = tp.generate_phases(
+            g, current_ctl, recent_weekly_tss=_chronic_weekly_tss_safe()), "draft"
     _pw_status = (getattr(g, "_phase_weeks_status", None)
                   or (f"fallback:{_pw_parse_err}" if _pw_parse_err else None))
     return {
+        "source": source,
+        "draft": source == "draft",
         "ok": True,
         "plan_weeks": plan_weeks,
         "goal": goal_type,
@@ -13163,41 +13384,52 @@ def _collect_week_activities(current_week, today: date, include_today: bool = Fa
 
 @app.get("/api/plan/daily-adapt")
 def api_plan_daily_adapt():
-    """Daily-adapt PROJECTION (fix26 §6.1) — read-only preview.
+    """The on-sync adaptation, as a dry run (contract 10.5): what the next
+    ride sync would change in the stored plan. It runs _apply_plan_update --
+    the one adaptation core the sync and /api/plan/update write through --
+    on a COPY of the stored plan, with the inputs the sync reads, and never
+    writes. (It used to run daily_adapt_plan, a second algorithm the plan
+    never ran, and projected changes the sync would not make: the audit's
+    D9.)
 
-    *** THIS ENDPOINT NEVER WRITES TO current_plan.json. ***
-
-    Returns what a legacy daily-adapt pass *would* have done as
-    `projected_adaptations[]`. The UI branches on
-    `info.projection_only === true` and surfaces a non-intrusive hint.
-
-    Writes now require explicit user action via /api/plan/move-session
-    or /api/plan/rematch?apply=1.
+    Returns ``projected_adaptations`` (day, from -> to), the ``update_action``
+    the sync would take, and ``surplus`` (> 0: the plan would get easier).
     """
-
+    import copy as _copy
     pid = _pid()
-    if not _has_plan(pid):
+    plan = _read_plan(pid)
+    if plan is None:
         return {"action": "no_plan", "projection_only": True}
-
     try:
-        plan = _read_plan(pid)
-
         today = clock.today()
-        current_week, _idx = _load_current_week_dto(plan, today)
-        if not current_week:
-            return {"action": "no_current_week", "projection_only": True}
-
-        actual = _collect_week_activities(current_week, today, include_today=False)
-        # The rider's TSB, from its owner. It was not passed, so the
-        # TSB-aware de-load inside daily_adapt_plan -- ease the hard days when
-        # form is below -30 -- could never fire on the only path that calls
-        # it: the parameter defaulted to None and the branch was dead in
-        # production while every card on the page showed the number.
-        _unchanged, info = tp.daily_adapt_plan(
-            current_week, actual, today, tsb=_fitness_state()["tsb"])
-        info["projection_only"] = True  # defensive: re-mark in case caller strips
-        return info
-
+        before = _copy.deepcopy(plan)
+        after, action, _info, _status = _apply_plan_update(
+            _copy.deepcopy(plan),
+            training=cached("training", get_today_metrics),
+            activities=db.query_activities(days=120),
+            today=today,
+            allow_regen=True,
+            gap_debounce=True,
+            reforecast_min_interval_iso=plan.get("reforecast_date"),
+        )
+        old = {s.get("day"): s for w in before.get("weeks", []) for s in w.get("sessions", [])}
+        changes = []
+        for w in after.get("weeks", []):
+            for s in w.get("sessions", []):
+                o = old.get(s.get("day"))
+                if not o or (s.get("day") or "") < today.isoformat():
+                    continue
+                if (o.get("session_type"), o.get("duration_min"), o.get("tss_estimate")) != \
+                        (s.get("session_type"), s.get("duration_min"), s.get("tss_estimate")):
+                    changes.append({"date": s["day"],
+                                    "from": {k: o.get(k) for k in ("session_type", "duration_min", "tss_estimate")},
+                                    "to": {k: s.get(k) for k in ("session_type", "duration_min", "tss_estimate")},
+                                    "projected_tss": s.get("tss_estimate")})
+        delta = sum(float(c["to"]["tss_estimate"] or 0) - float(c["from"]["tss_estimate"] or 0)
+                    for c in changes)
+        return {"action": "projected" if changes else "no_change", "projection_only": True,
+                "update_action": action, "projected_adaptations": changes,
+                "surplus": -delta}
     except Exception:
         # SEC3: don't leak exception text.
         _log.exception("Plan daily-adapt projection failed")
@@ -18461,6 +18693,9 @@ def api_rides_sync(force: int = Query(0)):
     # the dashboard knows to repaint the cards that read the plan.
     result["plan_adapted"] = (_maybe_auto_reforecast(pid, result.get("added", 0))
                               if pid is not None else None)
+    # A sync brings readiness inputs (HRV, the ride of yesterday): today's
+    # session takes its adjustment in the stored plan (contract 10.5).
+    result["today_session"] = _apply_readiness_to_today(pid)
     return result
 
 

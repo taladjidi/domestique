@@ -565,17 +565,23 @@ class TestRevertFlagSuppressesLiveAdjustment(unittest.TestCase):
         self._tmpdir.cleanup()
         app_module.clear_cache()
 
-    def test_unreverted_adjustment_stands(self):
+    # Contract 10.5: the adjustment is written by the POST that brings the
+    # readiness input (_apply_readiness_to_today: daily-log, a sync), and
+    # the GET serves what is stored. These tests run that write first.
+    def _post_readiness(self, reverted):
         with patch.object(app_module, "_is_readiness_cap_reverted_today",
-                          return_value=False):
-            data = self.client.get("/api/today-session").json()
+                          return_value=reverted):
+            app_module._apply_readiness_to_today(app_module._pid())
+            return self.client.get("/api/today-session").json()
+
+    def test_unreverted_adjustment_stands(self):
+        data = self._post_readiness(False)
         self.assertTrue(data.get("was_modified"))
         self.assertEqual(data["adjusted"]["session_type"], "z2")
+        self.assertEqual(data["planned"]["session_type"], "tempo")
 
     def test_reverted_flag_restores_planned(self):
-        with patch.object(app_module, "_is_readiness_cap_reverted_today",
-                          return_value=True):
-            data = self.client.get("/api/today-session").json()
+        data = self._post_readiness(True)
         self.assertFalse(data.get("was_modified"),
                          f"revert flag must suppress the adjustment: {data.get('reason')!r}")
         self.assertEqual(data["adjusted"]["session_type"], "tempo")
@@ -586,33 +592,33 @@ class TestRevertFlagSuppressesLiveAdjustment(unittest.TestCase):
 
     def test_accept_flow_converges(self):
         """The accept button's server side: persisting the adjusted block
-        makes the NEXT /api/today-session read unadjusted (planned == the
-        accepted z2; the HRV gate has nothing hard left to demote) — card,
-        modal and grid then all tell the same story."""
-        with patch.object(app_module, "_is_readiness_cap_reverted_today",
-                          return_value=False):
-            before = self.client.get("/api/today-session").json()
-            self.assertTrue(before.get("was_modified"))
-            adj = before["adjusted"]
-            r = self.client.post("/api/today-session/persist", json={
-                "reason": before.get("adjustment_reason") or "adapted",
-                "session_type": adj["session_type"],
-                "duration_min": adj["duration_min"],
-                "tss_estimate": adj["tss_estimate"],
-                "description": adj.get("description") or "",
-            })
-            self.assertEqual(r.status_code, 200, r.text)
-            self.assertTrue(r.json().get("ok"))
-            after = self.client.get("/api/today-session").json()
-        self.assertEqual(after["planned"]["session_type"], "z2")
-        self.assertFalse(after.get("was_modified"),
-                         f"accepted day must not re-adjust: {after.get('reason')!r}")
-        # The stale sweet-spot ZWO was cleared for the re-match pass.
+        makes the stored adjustment the rider's own -- card, modal and grid
+        tell the same story, and a later readiness pass leaves it alone."""
+        before = self._post_readiness(False)
+        self.assertTrue(before.get("was_modified"))
+        adj = before["adjusted"]
+        r = self.client.post("/api/today-session/persist", json={
+            "reason": before.get("adjustment_reason") or "adapted",
+            "session_type": adj["session_type"],
+            "duration_min": adj["duration_min"],
+            "tss_estimate": adj["tss_estimate"],
+            "description": adj.get("description") or "",
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json().get("ok"))
+        with patch.object(app_module, "get_sleep_metrics",
+                          return_value={"red_hrv_streak": 0, "ln_rmssd_7d": None,
+                                        "swc_lower": None, "swc_upper": None,
+                                        "sleep_h": 8.0, "rhr_delta": 0}):
+            after = self._post_readiness(False)       # readiness recovered
+        self.assertEqual(after["adjusted"]["session_type"], "z2")
+        self.assertEqual(after["planned"]["session_type"], "tempo")
         plan = json.loads((Path(plan_seam.active_plan_dir()) / "current_plan.json").read_text())
         sess = next(s for w in plan["weeks"] for s in w["sessions"]
                     if s["day"] == date.today().isoformat())
         self.assertEqual(sess["zwo_file"], "")
         self.assertTrue(sess.get("adapted"))
+        self.assertEqual(sess.get("adapted_by"), "rider")
 
 
 if __name__ == "__main__":

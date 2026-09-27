@@ -24,6 +24,7 @@ B5  AUTOMATIC FTP ingestion (F5 eftp auto-apply, the wizard's eFTP
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import logging
 import os
 import shutil
@@ -187,14 +188,13 @@ class RedrawRetryBase(unittest.TestCase):
         self._monday = today - timedelta(days=today.weekday())
         (self._tmp / "current_plan.json").write_text(
             json.dumps(_mk_week_plan(self._monday)))
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         self._orig_match = tp.match_zwo
         self.client = TestClient(app_module.app)
 
     def tearDown(self):
         tp.match_zwo = self._orig_match
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _read_plan(self) -> dict:

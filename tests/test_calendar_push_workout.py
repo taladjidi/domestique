@@ -25,6 +25,7 @@ Contract coverage:
 from __future__ import annotations
 
 import base64
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import json
 import os
 import sys
@@ -93,7 +94,6 @@ def stub(tmp_path):
     old_data_dir = app_module.DATA_DIR
     old_workout_dir = app_module.tp.WORKOUT_DIR
     old_gpx_dir = app_module.GPX_DIR
-    old_tp_plan_dir = tp.PLAN_DIR
     old_tp_workout_dir = tp.WORKOUT_DIR
     old_environ = {k: os.environ.get(k) for k in _ENV_KEYS}
     for attr in _ENV_KEYS:                 # kill stale shadows from other suites
@@ -134,7 +134,7 @@ def stub(tmp_path):
         app_module.DATA_DIR = old_data_dir
         app_module.tp.WORKOUT_DIR = old_workout_dir
         app_module.GPX_DIR = old_gpx_dir
-        tp.PLAN_DIR = old_tp_plan_dir
+        plan_seam.unbind_active()
         tp.WORKOUT_DIR = old_tp_workout_dir
         db_module.set_db_path(old_db_path)
         db_module._sync_stop.clear()
@@ -211,7 +211,7 @@ def _write_plan(sessions):
             "weeks": [{"week_num": 1, "start": days[0], "end": days[-1],
                        "phase": "base", "tss_target": 300,
                        "is_stepback": False, "sessions": sessions}]}
-    pdir = Path(tp.PLAN_DIR)
+    pdir = Path(plan_seam.active_plan_dir())
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "current_plan.json").write_text(json.dumps(plan), encoding="utf-8")
 

@@ -16,6 +16,7 @@ so the change that makes it pass must also remove the marker.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import threading
 import time
 from datetime import timedelta
@@ -182,7 +183,7 @@ def app_plan(tmp_path, monkeypatch):
                      "target_date": (mon + timedelta(weeks=8)).isoformat()},
             "phases": [], "weeks": [_week(mon + timedelta(weeks=k), k + 1) for k in range(8)],
             "generated": stale, "recalc_date": stale}
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     jp = tmp_path / "current_plan.json"
     jp.write_text(json.dumps(plan))
     monkeypatch.setattr(A, "get_today_metrics", lambda *a, **k: {})

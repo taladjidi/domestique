@@ -7,6 +7,7 @@ module-state guard) and drives the real endpoints this week touched.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sys
 from pathlib import Path
@@ -29,7 +30,6 @@ def _module_state_guard():
     saved_env = {k: os.environ.get(k) for k in
                  ("ICU_ATHLETE_ID", "ICU_API_KEY", "ICU_ACCESS_TOKEN")}
     orig_db_path = db_mod.DB_PATH
-    orig_plan_dir = tp.PLAN_DIR
     orig_workout_dir = tp.WORKOUT_DIR
     yield
     db_mod.shutdown_sync()
@@ -40,7 +40,7 @@ def _module_state_guard():
             pass
     db_mod.close_all_connections()
     db_mod.set_db_path(orig_db_path)
-    tp.PLAN_DIR = orig_plan_dir
+    plan_seam.unbind_active()
     tp.WORKOUT_DIR = orig_workout_dir
     for k, v in saved_env.items():
         if v is None:
@@ -115,7 +115,7 @@ def _seed_plan(app_module, day="2026-09-05"):
                                      "duration_min": 60, "tss_estimate": 72.0, "description": "",
                                      "zwo_file": "ftp_test_coggan_3x1min-1min_95pct_59min.zwo",
                                      "zwo_name": "FTP Test", "status": "pending"}]}]}
-    d = app_module._plan_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = plan_seam.active_plan_dir(); d.mkdir(parents=True, exist_ok=True)
     (d / "current_plan.json").write_text(json.dumps(plan))
     return d / "current_plan.json"
 
@@ -130,7 +130,7 @@ def test_protocol_choice_is_per_profile(tmp_path):
     assert json.loads(plan_a.read_text())["weeks"][0]["sessions"][0]["ftp_test_type"] == "ramp"
 
     pm.switch(b); app_module._apply_profile_paths()
-    assert app_module._plan_dir() != plan_a.parent
+    assert plan_seam.active_plan_dir() != plan_a.parent
     r = client.post("/api/plan/ftp-test-type", json={"date": "2026-09-05", "test_type": "sixty_min"})
     assert r.status_code in (400, 404)          # B has no plan — must not touch A's
     assert json.loads(plan_a.read_text())["weeks"][0]["sessions"][0]["ftp_test_type"] == "ramp"

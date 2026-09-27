@@ -22,6 +22,7 @@ clearing it, so sessions whose ZWO survived reforecast keep their workout.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -105,8 +106,7 @@ def isolated_plan(tmp_path):
     plan["availability"] = av
     (tmp_path / "current_plan.json").write_text(json.dumps(plan, default=str))
 
-    orig_plan_dir = tp.PLAN_DIR
-    tp.PLAN_DIR = tmp_path
+    plan_seam.bind_active(tmp_path)
 
     # Mock db.query_activities so /api/plan/reforecast doesn't 500 when
     # the test DB hasn't been provisioned by an earlier suite.
@@ -124,7 +124,7 @@ def isolated_plan(tmp_path):
     finally:
         for p in reversed(patches):
             p.stop()
-        tp.PLAN_DIR = orig_plan_dir
+        plan_seam.unbind_active()
 
 
 def test_reforecast_preserves_zwo_file_when_no_swap(isolated_plan):

@@ -12,6 +12,7 @@ goal the rider no longer has."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -62,7 +63,7 @@ class GenerateKeepsHistory(unittest.TestCase):
         clock.freeze(TODAY)
         self.tmp = Path(tempfile.mkdtemp(prefix="gen_history_"))
         self._patches = [
-            patch.object(app_module, "_plan_dir", return_value=self.tmp),
+            plan_seam.patch_plan_dir(self.tmp),
             patch.object(app_module, "get_today_metrics", lambda: {"ctl": 50.0, "tsb": 0.0}),
         ]
         for p in self._patches:

@@ -20,6 +20,7 @@ audit fixes in /tmp/audit_ux_fixes.md:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import re
 import tempfile
 import unittest
@@ -75,8 +76,7 @@ class _CalendarUxBase(unittest.TestCase):
         self._weeks = _mk_plan_weeks(self._monday, weeks_count=2)
         self._end_date = self._weeks[-1]["end"]
 
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
 
         self._fit_dir = self._tmp / "fit"
         self._fit_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +106,7 @@ class _CalendarUxBase(unittest.TestCase):
         self._patch_fit_dir_rs.stop()
         self._patch_icu_dir.stop()
         self._patch_fit.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _write_plan(self, plan_dict: dict) -> None:

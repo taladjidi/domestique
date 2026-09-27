@@ -10,6 +10,7 @@ omitted plan_mode. Both fixed. This drives the real HTTP /api/plan/generate +
 week (the owner's "one HIT type per week" contract).
 """
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -35,7 +36,7 @@ def _max_hit_types_per_week(plan):
 class TestFixedCoreSurvivesRegen(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="fs1regen_"))
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
 

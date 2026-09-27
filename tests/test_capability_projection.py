@@ -14,6 +14,7 @@ Each test exercises one of the bands described in the master decisions.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -210,7 +211,7 @@ class CapabilityProjectionEndpointTests(unittest.TestCase):
 
     def test_endpoint_returns_locked_shape(self):
         """GET /api/event/projection returns the §4 locked-shape dict."""
-        with patch.object(app_module, "_plan_dir", return_value=self._plan_path.parent):
+        with plan_seam.patch_plan_dir(self._plan_path.parent):
             client = TestClient(app_module.app)
             res = client.get("/api/event/projection")
             self.assertEqual(res.status_code, 200)
@@ -230,7 +231,7 @@ class CapabilityProjectionEndpointTests(unittest.TestCase):
         """No current_plan.json → {available: False}."""
         empty_dir = Path(tempfile.mkdtemp())
         try:
-            with patch.object(app_module, "_plan_dir", return_value=empty_dir):
+            with plan_seam.patch_plan_dir(empty_dir):
                 client = TestClient(app_module.app)
                 res = client.get("/api/event/projection")
                 self.assertEqual(res.status_code, 200)

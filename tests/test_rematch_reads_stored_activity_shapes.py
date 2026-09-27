@@ -17,6 +17,7 @@ The rows below are those shapes, with that ride's numbers."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import date, timedelta
 from unittest.mock import patch
 
@@ -546,7 +547,7 @@ def test_the_manual_rematch_undoes_a_move_first(tmp_path):
     (tmp_path / "current_plan.json").write_text(json.dumps(plan))
     clock.freeze(TODAY)
     try:
-        with patch.object(app_module, "_plan_dir", return_value=tmp_path), \
+        with plan_seam.patch_plan_dir(tmp_path), \
              patch("db.query_activities", return_value=[SQLITE_ROW]), patch("ride_storage.list_rides", return_value=[]):
             r = TestClient(app_module.app).post("/api/plan/rematch?apply=1",
                                                 headers={"Origin": "http://127.0.0.1:22400"})
@@ -644,7 +645,7 @@ def test_the_manual_rematch_judges_yesterdays_week_after_an_undo(tmp_path):
     sat_ride = _row(120, 91, 89, day=saturday, rid="sat")
     clock.freeze(nxt)
     try:
-        with patch.object(app_module, "_plan_dir", return_value=tmp_path), \
+        with plan_seam.patch_plan_dir(tmp_path), \
              patch("db.query_activities", return_value=[sat_ride]), patch("ride_storage.list_rides", return_value=[]):
             r = TestClient(app_module.app).post("/api/plan/rematch?apply=1",
                                                 headers={"Origin": "http://127.0.0.1:22400"})

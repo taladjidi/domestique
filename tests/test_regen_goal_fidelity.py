@@ -19,6 +19,7 @@ Drives the real HTTP /api/plan/generate + /api/plan/regenerate path (the
 FS1-regen-persistence pattern).
 """
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -46,14 +47,14 @@ def _race_rows(plan: dict) -> dict:
 class TestRegenGoalFidelity(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="regenfid_"))
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         # 3.4.3 hermetic-fs gate: export_plan_md writes plan_<date>.md via
-        # tp.PLAN_DIR (NOT app._plan_dir) — unpatched, this suite was
+        # plan_seam.active_plan_dir() (NOT app._plan_dir) — unpatched, this suite was
         # writing into the machine's REAL profile plan dir on every gate
         # run (masked because that dir always existed; the sandbox home
         # surfaced it as ENOENT). Patch both roots to the same tmp.
-        self._patch_tp = patch.object(tp, "PLAN_DIR", self.tmp)
+        self._patch_tp = plan_seam.patch_plan_dir(self.tmp)
         self._patch_tp.start()
         self.client = TestClient(app_module.app)
         # B race on a Sunday ~4-5 weeks out: always a trainable day (rest_days

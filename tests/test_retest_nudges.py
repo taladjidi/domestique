@@ -15,6 +15,7 @@ Locks:
 from __future__ import annotations
 
 import sys
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -206,14 +207,14 @@ def test_next_slot_lands_in_next_week_and_skips_pins(monkeypatch, tmp_path):
                        "sessions": sessions}]}
     import json as _json
     (tmp_path / "current_plan.json").write_text(_json.dumps(plan))
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: tmp_path)
+    plan_seam.bind_active(tmp_path)
     got = app_module._next_ftp_test_slot()
     # Hard slot preferred; race + user-swapped + rest skipped → Friday.
     assert got == (monday_next + timedelta(days=4)).isoformat()
 
 
 def test_next_slot_none_without_plan(monkeypatch, tmp_path):
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: tmp_path)
+    plan_seam.bind_active(tmp_path)
     assert app_module._next_ftp_test_slot() is None
 
 

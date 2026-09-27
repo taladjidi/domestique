@@ -14,6 +14,7 @@ regenerating produced byte-identical zwo_file lists every time.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -81,15 +82,14 @@ class RegenerateShuffleBase(unittest.TestCase):
         self._monday = today - timedelta(days=today.weekday())
         self._plan = _mk_plan_dict(self._monday)
         (self._tmp / "current_plan.json").write_text(json.dumps(self._plan))
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         self._patch_db = patch("db.query_activities", return_value=[])
         self._patch_db.start()
         self.client = TestClient(app_module.app)
 
     def tearDown(self):
         self._patch_db.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _read_plan(self) -> dict:

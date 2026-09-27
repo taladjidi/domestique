@@ -11,6 +11,7 @@ disagreements, notes/review/http.md section 4)."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import sys
 import tempfile
 import unittest
@@ -102,14 +103,13 @@ class WeekViewAgreement(unittest.TestCase):
             p.start()
         (tmp / "fit").mkdir()
         (tmp / "icu").mkdir()
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = tmp
+        plan_seam.bind_active(tmp)
         (tmp / "current_plan.json").write_text(json.dumps(_plan()))
         cache.clear_cache()
         self.client = TestClient(app_module.app)
 
     def tearDown(self):
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         for p in reversed(self._patches):
             p.stop()
         cache.clear_cache()

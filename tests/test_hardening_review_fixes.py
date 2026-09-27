@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import threading
 import time
 import types
@@ -50,7 +51,7 @@ def fresh_plan(tmp_path, monkeypatch):
                      "target_date": (mon + timedelta(weeks=8)).isoformat()},
             "phases": [], "weeks": [_week(mon + timedelta(weeks=k), k + 1) for k in range(8)],
             "generated": fresh, "recalc_date": fresh}
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     jp = tmp_path / "current_plan.json"
     jp.write_text(json.dumps(plan))
     A.clear_cache()
@@ -166,7 +167,7 @@ def rider_env(tmp_path):
     patcher = mock.patch("pathlib.Path.home", return_value=tmp_path)
     patcher.start()
     saved = (ProfileManager._instance, db_module.DB_PATH, app_module.DATA_DIR,
-             app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR)
+             app_module.GPX_DIR, tp.WORKOUT_DIR)
     ProfileManager._instance = None
     app_module.DATA_DIR = tmp_path / ".domestique"
     try:
@@ -175,11 +176,11 @@ def rider_env(tmp_path):
         db_module.init_db()
         yield types.SimpleNamespace(
             c=TestClient(app_module.app, raise_server_exceptions=False),
-            plan=lambda: app_module._plan_dir() / "current_plan.json")
+            plan=lambda: plan_seam.active_plan_dir() / "current_plan.json")
     finally:
         patcher.stop()
         (ProfileManager._instance, old_db, app_module.DATA_DIR,
-         app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR) = saved
+         app_module.GPX_DIR, tp.WORKOUT_DIR) = saved
         db_module.set_db_path(old_db)
         db_module._sync_stop.clear()
         app_module.clear_cache()
@@ -198,6 +199,7 @@ def _gen(env, **over):
                          ids=["utf8-truncated", "json-truncated"])
 def test_generate_repairs_an_unreadable_plan(rider_env, corrupt):
     p = rider_env.plan()
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(corrupt)
     r = _gen(rider_env)
     assert r.status_code == 200, r.text[:300]

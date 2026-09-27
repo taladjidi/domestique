@@ -17,6 +17,7 @@ Pinned here:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import date, timedelta
 
 import pytest
@@ -157,7 +158,7 @@ def test_heal_with_an_empty_library_changes_nothing(library):
 def test_diag_health_counts_sessions_without_file(monkeypatch, tmp_path):
     import app as app_module
     from fastapi.testclient import TestClient
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     (tmp_path / "current_plan.json").write_text(json.dumps(_plan_dict(_next_monday())))
     app_module._DIAG_HEALTH_CACHE["result"] = None
     app_module._DIAG_HEALTH_CACHE["ts"] = 0.0
@@ -182,7 +183,7 @@ def test_get_api_plan_does_not_heal_or_write(monkeypatch, tmp_path, library):
     """A GET serves the plan as it is on disk and changes nothing there."""
     import app as app_module
     from fastapi.testclient import TestClient
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     json_path = tmp_path / "current_plan.json"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))
     before = json_path.stat().st_mtime_ns
@@ -199,7 +200,7 @@ def test_get_api_plan_does_not_heal_or_write(monkeypatch, tmp_path, library):
 
 def test_startup_heal_heals_and_persists_with_a_backup(monkeypatch, tmp_path, library):
     import app as app_module
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     json_path = tmp_path / "current_plan.json"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))
     app_module._PLAN_HEAL_SEEN.clear()
@@ -214,7 +215,7 @@ def test_heal_runs_once_per_file_version(monkeypatch, tmp_path):
     """The mtime cache, proven independently of content: a heal that fixes
     nothing (still damaged file) must not be re-run until the file changes."""
     import app as app_module
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     json_path = tmp_path / "current_plan.json"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))
     app_module._PLAN_HEAL_SEEN.clear()
@@ -237,7 +238,7 @@ def test_the_heal_follows_a_plan_write_not_a_read_and_not_a_preview(monkeypatch,
     /api/profiles (a switch) heals the newly active plan."""
     import app as app_module
     from fastapi.testclient import TestClient
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     json_path = tmp_path / "current_plan.json"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))
     app_module._PLAN_HEAL_SEEN.clear()
@@ -265,7 +266,7 @@ def test_heal_never_overwrites_a_plan_written_in_between(monkeypatch, tmp_path, 
     that lands before the heal takes the lock must win, and must be what the
     heal operates on."""
     import app as app_module
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     json_path = tmp_path / "current_plan.json"
     json_path.write_text(json.dumps(_plan_dict(_next_monday())))
     app_module._PLAN_HEAL_SEEN.clear()

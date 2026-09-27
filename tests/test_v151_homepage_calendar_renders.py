@@ -26,6 +26,7 @@ catch v1.4.x/v1.5.x-style drifts before they ship.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import date, timedelta
 
 import pytest
@@ -38,7 +39,7 @@ import training_planner as tp
 @pytest.fixture(autouse=True)
 def _sandbox_plan_dir(tmp_path, monkeypatch):
     """3.3.1 (gate-red postmortem): these tests read the LIVE profile plan
-    via app._plan_dir() → tp.PLAN_DIR, with no sandbox. Under xdist, any
+    via plan_seam.active_plan_dir() → plan_seam.active_plan_dir(), with no sandbox. Under xdist, any
     plan-WRITING test in a sibling worker (save-availability, swap-type,
     reforecast persist) races the two /api/plan calls and the byte-identity
     assertion fails with a spurious availability/session diff — order-
@@ -71,7 +72,7 @@ def _sandbox_plan_dir(tmp_path, monkeypatch):
     pdir = tmp_path / "plans"
     pdir.mkdir()
     (pdir / "current_plan.json").write_text(json.dumps(plan), encoding="utf-8")
-    monkeypatch.setattr(tp, "PLAN_DIR", pdir)
+    plan_seam.bind_active(pdir)
     app._ENRICH_CACHE.clear()
     yield
     app._ENRICH_CACHE.clear()

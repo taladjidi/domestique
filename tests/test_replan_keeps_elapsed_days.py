@@ -20,6 +20,7 @@ what makes the rollup's numerator and denominator comparable.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sys
 import tempfile
@@ -55,7 +56,7 @@ class TestReplanKeepsElapsedDays(unittest.TestCase):
         clock.freeze(THURSDAY)
         self.tmp = Path(tempfile.mkdtemp(prefix="replan_"))
         self.plan_p = self.tmp / "current_plan.json"
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
 

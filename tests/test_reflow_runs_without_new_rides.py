@@ -25,6 +25,7 @@ intensity is preserved.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -55,7 +56,7 @@ def plan_on_disk(tmp_path, monkeypatch):
     d = tmp_path / "plans"
     d.mkdir(parents=True)
     (d / "current_plan.json").write_text(json.dumps(plan), encoding="utf-8")
-    monkeypatch.setattr(app_mod, "_plan_dir", lambda: d)
+    plan_seam.bind_active(d)
     monkeypatch.setattr(app_mod.db, "query_activities", lambda **kw: [])
     monkeypatch.setattr(app_mod, "cached", lambda *a, **k: {"ctl": 40, "tsb": 5})
     return d / "current_plan.json"

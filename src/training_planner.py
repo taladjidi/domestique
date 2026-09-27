@@ -166,12 +166,8 @@ for _upf in [domestique_home() / "user_paths.json",
         except Exception:
             pass
         break
-# Plans must be written to user data dir (not the read-only app bundle)
-PLAN_DIR = domestique_home() / "plans"
-# NOTE: PLAN_DIR creation deferred to first write so the v3 data-dir
-# migration in profile_manager._maybe_migrate_data_dir can race-free
-# detect a fresh install vs. a pre-existing legacy dir. Callers that
-# write into PLAN_DIR should mkdir(parents=True, exist_ok=True) first.
+# Plans live where plan_store says, per profile (contract 10.3): no plan
+# directory here.
 
 # Cache for load_workout_library(): key=str(WORKOUT_DIR),
 # value=((classifier_version, zwo_count, max_mtime), list_of_workout_dicts).

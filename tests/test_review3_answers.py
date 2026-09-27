@@ -4,6 +4,7 @@ showed no test caught."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import time
 from datetime import date, timedelta
@@ -64,7 +65,7 @@ def _lazy_ride_adapts(today, tmp):
         return plan, "reforecasted", {}, {}
     act = [{"id": "i777000001", "type": "Ride", "start_date_local": f"{today.isoformat()}T07:00:00",
             "name": "new", "moving_time": 3600, "icu_training_load": 80}]
-    with patch.object(app_module, "_plan_dir", return_value=tmp), \
+    with plan_seam.patch_plan_dir(tmp), \
          patch.object(app_module, "_icu_credentials_present", return_value=True), \
          patch.object(app_module, "_read_last_sync_at", side_effect=lambda: state["last"]), \
          patch.object(app_module, "_write_last_sync_at", side_effect=lambda t: state.__setitem__("last", t)), \
@@ -86,7 +87,7 @@ def test_a_stamp_only_write_is_not_an_adaptation():
     today = clock.today()
     tmp = Path(tempfile.mkdtemp())
     (tmp / "current_plan.json").write_text(json.dumps(_week_plan(today)))
-    with patch.object(app_module, "_plan_dir", return_value=tmp), \
+    with plan_seam.patch_plan_dir(tmp), \
          patch.object(app_module, "_apply_plan_update",
                       side_effect=lambda plan, **k: (plan, "skipped", {}, {})):
         assert app_module._maybe_auto_reforecast("default", 0) is None
@@ -154,7 +155,7 @@ def test_the_calendar_cell_and_today_carry_the_riders_marks():
         if s["day"] == today.isoformat():
             s.update(status="dismissed", user_moved=True)
     (tmp / "current_plan.json").write_text(json.dumps(plan))
-    with patch.object(app_module, "_plan_dir", return_value=tmp), \
+    with plan_seam.patch_plan_dir(tmp), \
          patch.object(app_module, "_kick_lazy_icu_sync", return_value=False):
         c = TestClient(app_module.app)
         cal = c.get("/api/calendar").json()

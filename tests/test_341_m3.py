@@ -26,6 +26,7 @@ Contract (locked):
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import shutil
 import subprocess
 import sys
@@ -540,8 +541,7 @@ class TestRevertFlagSuppressesLiveAdjustment(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         tmp = Path(self._tmpdir.name)
         (tmp / "current_plan.json").write_text(json.dumps(_mk_today_plan(date.today())))
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = tmp
+        plan_seam.bind_active(tmp)
         self._patches = [
             patch.object(app_module, "_maybe_lazy_icu_sync", return_value=None),
             patch.object(app_module, "_kick_lazy_icu_sync", return_value=None),
@@ -561,7 +561,7 @@ class TestRevertFlagSuppressesLiveAdjustment(unittest.TestCase):
     def tearDown(self):
         for p in self._patches:
             p.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
         app_module.clear_cache()
 
@@ -608,7 +608,7 @@ class TestRevertFlagSuppressesLiveAdjustment(unittest.TestCase):
         self.assertFalse(after.get("was_modified"),
                          f"accepted day must not re-adjust: {after.get('reason')!r}")
         # The stale sweet-spot ZWO was cleared for the re-match pass.
-        plan = json.loads((Path(tp.PLAN_DIR) / "current_plan.json").read_text())
+        plan = json.loads((Path(plan_seam.active_plan_dir()) / "current_plan.json").read_text())
         sess = next(s for w in plan["weeks"] for s in w["sessions"]
                     if s["day"] == date.today().isoformat())
         self.assertEqual(sess["zwo_file"], "")

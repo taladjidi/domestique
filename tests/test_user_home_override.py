@@ -13,7 +13,7 @@ from pathlib import Path
 _PROBE = (
     "import db, training_planner, power_curve, log_config, app;"
     "print(db._USER_DATA);"
-    "print(training_planner.PLAN_DIR);"
+    "import plan_store; print(plan_store._paths('default').dir);"
     "print(power_curve._profile_dir());"
     "print(log_config.LOG_DIR);"
     "print(app._user_data_dir)"

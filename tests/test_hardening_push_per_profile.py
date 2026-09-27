@@ -10,6 +10,7 @@ struct #6; rv-integ test_p8_daily.py).
 from __future__ import annotations
 
 from unittest import mock
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,7 +29,7 @@ def two_riders(tmp_path, monkeypatch):
     p.start()
     old = ProfileManager._instance
     ProfileManager._instance = None
-    saved = (db.DB_PATH, app_module.DATA_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR)
+    saved = (db.DB_PATH, app_module.DATA_DIR, tp.WORKOUT_DIR)
     app_module.DATA_DIR = tmp_path / ".domestique"
     pm = ProfileManager.get()
     a = pm.create_profile("Alice")
@@ -45,7 +46,7 @@ def two_riders(tmp_path, monkeypatch):
     cache.clear_cache()
     p.stop()
     ProfileManager._instance = old
-    old_db, app_module.DATA_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR = saved
+    old_db, app_module.DATA_DIR, tp.WORKOUT_DIR = saved
     db.set_db_path(old_db)
     db._sync_stop.clear()
 

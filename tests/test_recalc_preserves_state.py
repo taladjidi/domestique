@@ -27,6 +27,7 @@ through the endpoint additionally needs the Goal-reconstruction fix
 test_regen_goal_fidelity.py.
 """
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import sys
 import tempfile
 import unittest
@@ -161,7 +162,7 @@ class TestAutoRecalcWritePreservesState(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="recalcpres_"))
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         # The endpoint, the planner and this test must read one "today".
         self._frozen = [patch.object(m, "date", _Wednesday)

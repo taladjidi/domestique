@@ -9,6 +9,7 @@ then applies twice and asserts the session ends with exactly ONE match.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sys
 import tempfile
@@ -27,7 +28,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 class TestRematchDedup(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="rematch_dedup_"))
-        self._patch_dir = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch_dir = plan_seam.patch_plan_dir(self.tmp)
         self._patch_dir.start()
         self.pp = self.tmp / "current_plan.json"
         self.client = TestClient(app_module.app)

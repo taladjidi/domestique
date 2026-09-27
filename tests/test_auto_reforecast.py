@@ -26,6 +26,7 @@ Helper contract (per MASTER §1):
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -109,8 +110,7 @@ class AutoReforecastBase(unittest.TestCase):
         self._json_path.write_text(json.dumps(_mk_plan_dict(self._monday)))
 
         # Redirect plan dir.
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
 
         # Stub out activity DB + training metrics (auto-reforecast reads
         # both); empty activities + neutral TSB keeps the run trivial.
@@ -126,7 +126,7 @@ class AutoReforecastBase(unittest.TestCase):
     def tearDown(self):
         self._patch_training.stop()
         self._patch_activities.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
 

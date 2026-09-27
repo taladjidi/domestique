@@ -23,6 +23,7 @@ conftest's urlopen block stays king).
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import time
 from datetime import datetime
@@ -111,7 +112,7 @@ def test_ga1_adopts_newer_root_over_stale_profile(tmp_path, monkeypatch):
 
     # Post-boot /api/plan serves EVENT (PLAN_DIR repointed at the profile —
     # what apply_training_dirs does before the adoption step at boot).
-    monkeypatch.setattr(tp, "PLAN_DIR", prof)
+    plan_seam.bind_active(prof)
     r = TestClient(app_module.app).get("/api/plan")
     assert r.status_code == 200
     assert r.json()["plan_json"]["goal"]["event_name"] == "EVENT"

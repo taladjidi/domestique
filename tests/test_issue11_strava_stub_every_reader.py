@@ -16,6 +16,7 @@ One predicate now, ride_storage.is_icu_stub, used by all three.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sqlite3
 import sys
@@ -45,7 +46,7 @@ def _module_state_guard():
     saved_env = {k: os.environ.get(k) for k in
                  ("ICU_ATHLETE_ID", "ICU_API_KEY", "ICU_ACCESS_TOKEN")}
     orig_db_path = db_mod.DB_PATH
-    orig_plan_dir, orig_workout_dir = tp.PLAN_DIR, tp.WORKOUT_DIR
+    orig_workout_dir = tp.WORKOUT_DIR
     db_mod.shutdown_sync()
     db_mod.close_all_connections()
     yield
@@ -57,7 +58,7 @@ def _module_state_guard():
             pass
     db_mod.close_all_connections()
     db_mod.set_db_path(orig_db_path)
-    tp.PLAN_DIR, tp.WORKOUT_DIR = orig_plan_dir, orig_workout_dir
+    tp.WORKOUT_DIR = orig_workout_dir
     for k, v in saved_env.items():
         if v is None:
             os.environ.pop(k, None)

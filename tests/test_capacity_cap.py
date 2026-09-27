@@ -21,6 +21,7 @@ Contract map (IP_WPRIME_CALIBRATION.md "GRILL OUTCOME — LOCKED"):
 from __future__ import annotations
 
 import glob
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import random
 import sys
@@ -357,7 +358,6 @@ def stub(tmp_path):
     old_data_dir = app_module.DATA_DIR
     old_workout_dir = app_module.tp.WORKOUT_DIR
     old_gpx_dir = app_module.GPX_DIR
-    old_tp_plan_dir = tp.PLAN_DIR
     old_tp_workout_dir = tp.WORKOUT_DIR
     old_environ = {k: os.environ.get(k) for k in _ENV_KEYS}
     for attr in _ENV_KEYS:
@@ -400,7 +400,7 @@ def stub(tmp_path):
         app_module.DATA_DIR = old_data_dir
         app_module.tp.WORKOUT_DIR = old_workout_dir
         app_module.GPX_DIR = old_gpx_dir
-        tp.PLAN_DIR = old_tp_plan_dir
+        plan_seam.unbind_active()
         tp.WORKOUT_DIR = old_tp_workout_dir
         db_module.set_db_path(old_db_path)
         db_module._sync_stop.clear()

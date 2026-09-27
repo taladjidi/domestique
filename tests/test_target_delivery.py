@@ -6,6 +6,7 @@ fix landed; the commit that fixed it records the mutation.
 from __future__ import annotations
 
 import copy
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import datetime as _dt
 import pathlib
 import sys
@@ -1017,7 +1018,7 @@ def test_the_badge_reads_the_weeks_own_rides(tmp_path, monkeypatch):
                        "end": (mon + _dt.timedelta(days=6)).isoformat(), "phase": "continuous",
                        "tss_target": 479.0, "is_stepback": False, "sessions": ss}]}
     (tmp_path / "current_plan.json").write_text(_json.dumps(plan))
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     monkeypatch.setattr(app_module, "get_today_metrics", lambda: {})
     monkeypatch.setattr(app_module, "fetch_wellness", lambda *a, **k: [])
     archive = [{"started_at": (mon + _dt.timedelta(days=i)).isoformat() + "T10:00:00",
@@ -1091,7 +1092,7 @@ def test_mf1_the_weekly_recalc_reads_the_rides_not_the_plan(tmp_path, monkeypatc
     built = {w.start.isoformat(): w.tss_target for w in weeks}
     plan = stored(weeks, g)
     plan.update(generated="2026-09-14T08:00:00", recalc_date="2026-09-14T08:00:00")
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     (tmp_path / "current_plan.json").write_text(_json.dumps(plan))
     monkeypatch.setattr(ride_storage, "ride_record", _owner_archive)   # the one seam
     monkeypatch.setattr(A, "get_today_metrics", lambda: {})

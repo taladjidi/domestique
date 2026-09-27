@@ -6,6 +6,7 @@ round-trip the Path-A serialization (_plan_dict_to_planned_weeks) AND be honored
 by the reforecast downshift loops + _refit_session_frozen.
 """
 import tempfile
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import pathlib
 from datetime import date, timedelta
 
@@ -18,7 +19,7 @@ import app
 @pytest.fixture
 def sandbox_plan_dir(monkeypatch):
     tmp = pathlib.Path(tempfile.mkdtemp())
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp / "plans", raising=False)
+    plan_seam.bind_active(tmp / "plans")
     yield tmp
 
 
@@ -148,7 +149,7 @@ def test_swap_type_endpoint(sandbox_plan_dir):
 
     # Persisted with the pin + new type.
     import json as _json
-    plan = _json.loads((tp.PLAN_DIR / "current_plan.json").read_text())
+    plan = _json.loads((plan_seam.active_plan_dir() / "current_plan.json").read_text())
     hit = {s["day"]: s for w in plan["weeks"] for s in w["sessions"]}[target]
     assert hit["session_type"] == "vo2max"
     assert hit["user_swapped"] is True

@@ -22,6 +22,7 @@ too, for any writer this list does not know."""
 from __future__ import annotations
 
 import hashlib
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import json
 import tempfile
 import unittest
@@ -70,7 +71,7 @@ class ReadsDoNotWrite(unittest.TestCase):
             return real_write(paths, data, *a, **k)
 
         self._patches = [
-            patch.object(app_module, "_plan_dir", return_value=self.tmp),
+            plan_seam.patch_plan_dir(self.tmp),
             patch.object(plan_store, "_commit", _recording_write),
             patch.object(app_module, "_load_all_rides_safe", return_value=_monotone_rides(TODAY)),
             patch.object(app_module, "get_today_metrics", lambda: {"ctl": 50.0, "atl": 60.0, "tsb": -10.0}),

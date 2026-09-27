@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import tempfile
 import unittest
@@ -96,13 +97,12 @@ class PlanApiTestBase(unittest.TestCase):
         self._plan = _mk_plan_dict(self._monday)
         (self._tmp / "current_plan.json").write_text(json.dumps(self._plan))
         # Redirect plan dir
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         # Build client after patching PLAN_DIR (some routes compute paths eagerly)
         self.client = TestClient(app_module.app)
 
     def tearDown(self):
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _read_plan(self) -> dict:
@@ -428,12 +428,11 @@ class TestMoveSessionISOWeekBoundary(unittest.TestCase):
             "generated": "2026-04-19T00:00:00",
         }
         (self._tmp / "current_plan.json").write_text(json.dumps(plan))
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         self.client = TestClient(app_module.app)
 
     def tearDown(self):
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _read_plan(self) -> dict:

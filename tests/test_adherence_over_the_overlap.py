@@ -23,6 +23,7 @@ nothing changes, which is why this went unnoticed for so long.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import sys
 import tempfile
 import unittest
@@ -56,7 +57,7 @@ class AdherenceOverTheOverlap(unittest.TestCase):
         clock.freeze(SUNDAY)
         self.tmp = Path(tempfile.mkdtemp(prefix="overlap_"))
         self.plan_p = self.tmp / "current_plan.json"
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
 

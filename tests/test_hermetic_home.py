@@ -5,7 +5,7 @@ Owner incident (2026-07-16): a release-gate run replaced the owner's live
 (goal.event_name == "v134-test", from test_v134_generate_plan_no_yellow's
 TestClient POST to /api/plan/generate). Every app data path resolves through
 Path.home()/.domestique at import time, and profile_manager rebinds
-training_planner.PLAN_DIR to the ACTIVE PROFILE's plan dir — so any
+plan_seam.active_plan_dir() to the ACTIVE PROFILE's plan dir — so any
 unsandboxed test that generates/updates a plan stomped the real store.
 
 conftest.py now swaps HOME to a per-process sandbox BEFORE any project
@@ -13,6 +13,7 @@ import (keeping the real path in DOMESTIQUE_REAL_HOME for read-only
 validations). These tests pin that contract.
 """
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 from pathlib import Path
 
@@ -34,14 +35,14 @@ def test_app_data_paths_resolve_inside_sandbox():
     real = os.environ.get("DOMESTIQUE_REAL_HOME") or ""
     sandbox = str(Path.home())
     # The two import-time roots every plan write funnels through.
-    plan_dir = str(app_module._plan_dir())
+    plan_dir = str(plan_seam.active_plan_dir())
     assert plan_dir.startswith(sandbox), (
-        f"app._plan_dir() escapes the sandbox: {plan_dir}")
+        f"plan_seam.active_plan_dir() escapes the sandbox: {plan_dir}")
     assert not plan_dir.startswith(str(Path(real) / ".domestique")), (
-        f"app._plan_dir() points at the REAL home: {plan_dir}")
-    tp_dir = str(tp.PLAN_DIR)
+        f"plan_seam.active_plan_dir() points at the REAL home: {plan_dir}")
+    tp_dir = str(plan_seam.active_plan_dir())
     assert tp_dir.startswith(sandbox), (
-        f"training_planner.PLAN_DIR escapes the sandbox: {tp_dir}")
+        f"plan_seam.active_plan_dir() escapes the sandbox: {tp_dir}")
 
 
 def test_generate_endpoint_writes_only_the_sandbox():
@@ -62,7 +63,7 @@ def test_generate_endpoint_writes_only_the_sandbox():
             "rest_days": [0], "available_days": [1, 2, 3, 4, 5, 6],
         })
         assert r.status_code == 200, r.text
-    written = app_module._plan_dir() / "current_plan.json"
+    written = plan_seam.active_plan_dir() / "current_plan.json"
     assert str(written).startswith(sandbox)
     assert written.exists(), "generate must persist the plan in the sandbox"
     goal = (json.loads(written.read_text()).get("goal") or {})

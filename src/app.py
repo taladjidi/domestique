@@ -92,15 +92,14 @@ except Exception:
 # User data directory — must be defined before any path that uses it.
 # NOTE: directory creation is deferred until lifespan startup (after
 # profile_manager._maybe_migrate_data_dir has had a chance to rename a
-# legacy ~/.chickencycling/ dir into place). _plan_dir() below mkdirs
-# on demand, so deferring this is safe.
+# legacy ~/.chickencycling/ dir into place).
 # Filesystem locations live in paths.py. Re-exported so `app.DATA_DIR`,
-# `app._plan_dir`, `app._safe_path` and friends keep resolving for the ~200
+# `app._safe_path` and friends keep resolving for the ~200
 # call sites and the test files that reach them through `app.X`.
 from paths import (  # noqa: F401
     domestique_home, _user_data_dir, DATA_DIR, COURSE_DIR,
     ROUTE_DATA, ROUTE_PROFILES_INDEX, ROUTE_PROFILES_DIR,
-    _DEFAULT_PLAN_DIR, _plan_dir, _safe_path, _rides_fit_dir,
+    _safe_path, _rides_fit_dir,
 )
 
 
@@ -8606,17 +8605,6 @@ def _pid() -> "str | None":
     from profile_manager import ProfileManager
     pid = ProfileManager.get().active_id
     return plan_store.capture(pid) if pid is not None else None
-
-
-def _bridge_plan_dir(pid):
-    """BRIDGE (removed with 10.3): the active profile's plans resolve through
-    the legacy seam the suite still patches."""
-    from profile_manager import ProfileManager
-    pm = ProfileManager._instance
-    return _plan_dir() if pm is not None and pid == pm.active_id else None
-
-
-plan_store._BRIDGE = _bridge_plan_dir
 
 
 def _has_plan(pid: "str | None") -> bool:

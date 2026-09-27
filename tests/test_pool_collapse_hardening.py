@@ -8,6 +8,7 @@ override emptied the library with no error anywhere. These pin the guards.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -68,7 +69,7 @@ def test_profile_switch_ignores_empty_override_and_empty_profile_dir(tmp_path):
     folder, and an existing empty <profile>/workouts, must both fall back to
     the bundled library (the Linux v3.11.1 hole)."""
     import profile_manager as pm_mod
-    orig_wd, orig_pd = tp.WORKOUT_DIR, tp.PLAN_DIR
+    orig_wd = tp.WORKOUT_DIR
     orig_inst = pm_mod.ProfileManager._instance
     try:
         pm_mod.ProfileManager._instance = None
@@ -97,7 +98,7 @@ def test_profile_switch_ignores_empty_override_and_empty_profile_dir(tmp_path):
             pm.apply_training_dirs()
             assert tp.WORKOUT_DIR == good
     finally:
-        tp.WORKOUT_DIR, tp.PLAN_DIR = orig_wd, orig_pd
+        tp.WORKOUT_DIR = orig_wd
         pm_mod.ProfileManager._instance = orig_inst
 
 

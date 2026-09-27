@@ -37,6 +37,7 @@ Three locked tests:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -162,8 +163,7 @@ class _BasePayloadTest(unittest.TestCase):
         plan = _build_plan_with_sessions(self._monday)
         (self._tmp / "current_plan.json").write_text(json.dumps(plan))
 
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
 
         # Inject fixtures so the test does not depend on the live
         # workouts/.content_classification.json or the live workout library.
@@ -186,7 +186,7 @@ class _BasePayloadTest(unittest.TestCase):
     def tearDown(self):
         for p in self._patches:
             p.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _sessions_from_plan(self) -> list[dict]:

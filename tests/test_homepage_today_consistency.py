@@ -17,6 +17,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import re
 import tempfile
 import unittest
@@ -92,8 +93,7 @@ class HomepageTodayConsistencyBase(unittest.TestCase):
             self._today, "tempo", 75, 60, "3x15min @ 88% FTP")
         (self._tmp / "current_plan.json").write_text(json.dumps(self._plan))
 
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
 
         # ── 3.4.2 M7: hermetic sandbox ────────────────────────────────────
         # /api/today-session also reads the LIVE dev environment: the ride
@@ -138,7 +138,7 @@ class HomepageTodayConsistencyBase(unittest.TestCase):
     def tearDown(self):
         for p in self._patches:
             p.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
 

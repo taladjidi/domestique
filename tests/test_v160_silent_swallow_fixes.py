@@ -8,6 +8,7 @@ Closes the three holes from /tmp/wave1_silent_swallows.md:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import time
 import unittest
 from pathlib import Path
@@ -33,7 +34,7 @@ def _corrupt_plan(text: str):
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "current_plan.json"
         p.write_text(text)
-        with mock.patch.object(app_module, "_plan_dir", lambda: Path(td)):
+        with plan_seam.patch_plan_dir(Path(td)):
             yield p
 
 
@@ -151,8 +152,7 @@ class EnrichSwallowFixTests(unittest.TestCase):
         # reaches the enrich call (see _MINIMAL_PLAN note above).
         self._td = tempfile.TemporaryDirectory()
         Path(self._td.name, "current_plan.json").write_text(_MINIMAL_PLAN)
-        self._plan_patch = mock.patch.object(
-            app_module, "_plan_dir", lambda: Path(self._td.name))
+        self._plan_patch = plan_seam.patch_plan_dir(Path(self._td.name))
         self._plan_patch.start()
         self.addCleanup(self._plan_patch.stop)
         self.addCleanup(self._td.cleanup)

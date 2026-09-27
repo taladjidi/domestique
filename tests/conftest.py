@@ -44,7 +44,7 @@ from datetime import date
 # ── 3.4.3 HERMETIC-FS GATE (root fix for the owner-plan clobber) ─────────────
 # The suite sandboxed NETWORK (fixtures below) but never the FILESYSTEM: every
 # data path in the app resolves through Path.home()/.domestique at import time
-# (app._user_data_dir, training_planner.PLAN_DIR — which profile_manager
+# (app._user_data_dir, the plan dir — which profile_manager
 # rebinds to the ACTIVE PROFILE's plan dir — db, logs). Any test that hit
 # /api/plan/generate via TestClient or a planner save path therefore wrote the
 # USER'S REAL plan store: a gate run replaced the owner's live
@@ -242,35 +242,35 @@ def ride_record(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _restore_tp_profile_dirs():
-    """Order-independence guard for training_planner.PLAN_DIR / WORKOUT_DIR.
+    """Order-independence guard for training_planner.WORKOUT_DIR.
 
-    ProfileManager activation rewrites BOTH module globals to the active
-    profile's dirs (profile_manager.py:658). Nine suites reset the
+    ProfileManager activation rewrites it to the active profile's dir
+    (profile_manager.apply_training_dirs). Nine suites reset the
     ProfileManager singleton under a tmp_path home; any test that activates
-    a profile there leaves the TP globals pointing into a DELETED tmp dir
-    for every later test in the same worker process — the
-    test_recalc_preserves_state parallel-gate red ("future dismissed day
-    missing": plans written to a vanished dir) and the sequential
-    hermetic-home escape both traced to this one leak. Snap both back after
-    every test, mirroring _restore_db_path below.
+    a profile there leaves the global pointing into a DELETED tmp dir for
+    every later test in the same worker process (the
+    test_recalc_preserves_state parallel-gate red). Snap it back after every
+    test, mirroring _restore_db_path below. (The plan dir was the other half
+    until the one-plan round: plans resolve per profile in plan_store now,
+    restored by _restore_plan_store_bindings.)
     """
     import training_planner as _tp
-    plan_dir, workout_dir = _tp.PLAN_DIR, _tp.WORKOUT_DIR
+    workout_dir = _tp.WORKOUT_DIR
     yield
-    if _tp.PLAN_DIR != plan_dir:
-        _tp.PLAN_DIR = plan_dir
     if _tp.WORKOUT_DIR != workout_dir:
         _tp.WORKOUT_DIR = workout_dir
 
 
 @pytest.fixture(autouse=True)
 def _restore_plan_store_bindings():
-    """A test that points a profile's plans at a tmp dir (plan_store.bind)
-    gets the binding table back as it was."""
-    saved = dict(_plan_store._dirs)
+    """A test that points a profile's plans at a tmp dir (plan_store.bind,
+    tests/plan_seam.py), or opens a tmp home (a new ProfileManager sets the
+    store's profiles root), gets both back as they were."""
+    saved, root = dict(_plan_store._dirs), _plan_store._profiles_root
     yield
     _plan_store._dirs.clear()
     _plan_store._dirs.update(saved)
+    _plan_store._profiles_root = root
 
 
 @pytest.fixture(autouse=True)

@@ -12,6 +12,7 @@ answered "blank" for a number three other endpoints answered as -9.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import sys
 import tempfile
 import unittest
@@ -53,7 +54,7 @@ class DailyAdaptKnowsTheForm(unittest.TestCase):
                                              110 if i in (3, 5) else 60)
                                     for i in range(7)]}],
         }), encoding="utf-8")
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
 

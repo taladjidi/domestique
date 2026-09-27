@@ -26,21 +26,9 @@ import plan_scan
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 
-# The worklist: what is left of the 202 findings at 433c6067 (keyed "KIND
-# module:function  what"). The two BRIDGE entries are the one addition: the
-# legacy plan-dir seam the suite still patches, removed with 10.3.
-ALLOWED: Counter = Counter({
-    'ACCESS app:_bridge_plan_dir  _plan_dir()': 1,   # BRIDGE, gone with 10.3
-    'ACCESS paths:<module>  _DEFAULT_PLAN_DIR': 1,
-    "ACCESS paths:<module>  path / 'plans'": 1,
-    'ACCESS paths:_plan_dir  _DEFAULT_PLAN_DIR': 1,
-    'ACCESS profile_manager:ProfileManager.apply_training_dirs  PLAN_DIR': 1,
-    "ACCESS profile_manager:ProfileManager.plan_dir  path / 'plans'": 1,
-    'ACCESS training_planner:<module>  PLAN_DIR': 1,
-    "ACCESS training_planner:<module>  path / 'plans'": 1,
-    'OWNER app:<module>  plan_store._BRIDGE': 1,   # BRIDGE, gone with 10.3
-    'OWNER profile_manager:ProfileManager.plan_dir  raw Path.mkdir': 1,
-})
+# The worklist: every finding outside plan_store. 202 at 433c6067 (24 DOOR,
+# 21 OWNER, 1 LOOP, the rest ACCESS); empty since the one-plan round (10.3).
+ALLOWED: Counter = Counter()
 
 
 @pytest.fixture(scope="module")

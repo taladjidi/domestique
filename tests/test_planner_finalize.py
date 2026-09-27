@@ -6,6 +6,7 @@ its fix landed; the commit that fixed it records the mutation.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import pathlib
 import subprocess
@@ -33,7 +34,7 @@ daily = {"0": 2.0, "1": 2.0, "2": 2.0, "3": 2.0, "4": 0, "5": 3.0, "6": 2.5}
 body = {"goal": "event", "event_date": "2026-12-13", "event_km": 160, "event_climb": 2000,
         "rest_days": [4], "daily_availability": daily, "hours_per_week": 12.5,
         "max_weekday": 2.0, "max_weekend": 3.0}
-path = tp.PLAN_DIR / "current_plan.json"
+import plan_store; path = plan_store._paths(ProfileManager.get().active_id).live
 def weeks():
     p = json.loads(path.read_text())
     return [[[s["day"], s["session_type"], s.get("duration_min"), s.get("tss_estimate"),
@@ -599,7 +600,7 @@ def _app_plan(tmp_path, monkeypatch, today):
     clock.freeze(today)
     plan = {"goal": tp.goal_to_dict(owner()), "phases": [],
             "weeks": [tp.week_to_dict(w) for w in weeks]}
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     (tmp_path / "current_plan.json").write_text(json.dumps(plan))
     p = patch("db.query_activities", return_value=[])
     p.start()
@@ -1074,7 +1075,7 @@ def _through_app(tmp_path, monkeypatch, plan, url, body):
     from unittest.mock import patch
     from fastapi.testclient import TestClient
     import app as app_module
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     (tmp_path / "current_plan.json").write_text(json.dumps(plan))
     import ride_storage
     monkeypatch.setattr(ride_storage, "ride_record", lambda: list(_LIGHT))   # the one seam

@@ -9,6 +9,7 @@ because /api/plan/regenerate never stamped recalc_date, and a readiness
 exception on the fresh branch silently converted "fresh" into a rebuild.
 """
 from datetime import date, datetime, timedelta
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 
 import pytest
 
@@ -125,7 +126,7 @@ def test_fresh_branch_readiness_exception_returns_fresh(monkeypatch, tmp_path):
         "recalc_date": datetime.now().isoformat(),  # FRESH
     }
     (pdir / "current_plan.json").write_text(_json.dumps(plan), encoding="utf-8")
-    monkeypatch.setattr(tp, "PLAN_DIR", pdir)
+    plan_seam.bind_active(pdir)
 
     def _boom():
         raise ValueError("metrics down")

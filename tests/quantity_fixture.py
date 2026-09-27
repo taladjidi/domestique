@@ -10,6 +10,7 @@ endpoints is about the doors, not the state.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -221,7 +222,7 @@ def build(shift_one_endpoint: bool = False, scenario: str = "normal"):
     conn.commit()
 
     patches = [
-        patch.object(app_module, "_plan_dir", return_value=plan_dir),
+        plan_seam.patch_plan_dir(plan_dir),
         # EVERY profile-scoped archive, not just the rides. Redirecting
         # _icu_rides_dir alone left ride_storage._wellness_dir() pointing at
         # the real ~/.domestique, so the probe read the developer's own

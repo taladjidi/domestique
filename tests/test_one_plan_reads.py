@@ -12,6 +12,7 @@ newest backup); the health report describes it with the same code.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import timedelta
 from pathlib import Path
 
@@ -31,8 +32,8 @@ D5_ROUTES = ["/api/plan", "/api/weekly-plan", "/api/calendar", "/api/today-sessi
 
 @pytest.fixture
 def corrupt(tmp_path, monkeypatch):
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: tmp_path)
+    plan_seam.bind_active(tmp_path)
+    plan_seam.bind_active(tmp_path)
     (tmp_path / "current_plan.json").write_bytes(CORRUPT)
     return tmp_path
 

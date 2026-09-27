@@ -23,6 +23,7 @@ real ~/.domestique is never touched.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sqlite3
 import sys
@@ -53,7 +54,6 @@ def _module_state_guard():
     saved_env = {k: os.environ.get(k) for k in
                  ("ICU_ATHLETE_ID", "ICU_API_KEY", "ICU_ACCESS_TOKEN")}
     orig_db_path = db_mod.DB_PATH
-    orig_plan_dir = tp.PLAN_DIR
     orig_workout_dir = tp.WORKOUT_DIR
     yield
     db_mod.shutdown_sync()
@@ -64,7 +64,7 @@ def _module_state_guard():
             pass
     db_mod.close_all_connections()
     db_mod.set_db_path(orig_db_path)
-    tp.PLAN_DIR = orig_plan_dir
+    plan_seam.unbind_active()
     tp.WORKOUT_DIR = orig_workout_dir
     for k, v in saved_env.items():
         if v is None:
@@ -540,7 +540,8 @@ def test_a12_delete_last_then_create_no_resurrection(tmp_path):
     with pytest.raises(RuntimeError):
         pm.update_ftp(260)
     with pytest.raises(RuntimeError):
-        _ = pm.plan_dir
+        import plan_store
+        plan_store._paths(pm.active_id)          # no profile: no plan dir to name
     assert pm._set_wprime(10000, "icu") is False
     assert pm._set_pmax(900, "icu") is False
     assert pm._set_max_hr(190, "icu") is False

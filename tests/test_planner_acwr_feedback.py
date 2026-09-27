@@ -18,6 +18,7 @@ last week's actual/planned ratio actually scales next week's load.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -145,8 +146,7 @@ class TestRidesSyncLoadAlert(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._tmp = Path(self._tmpdir.name)
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
 
         # Write a minimal plan with today as a planned 100-TSS session.
         today = date.today()
@@ -197,7 +197,7 @@ class TestRidesSyncLoadAlert(unittest.TestCase):
     def tearDown(self):
         self._patch_sync_combined.stop()
         self._patch_sync_acts.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def test_rides_sync_emits_load_alert(self):

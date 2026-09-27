@@ -7,6 +7,7 @@ into a 7-week PEAK block."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sys
 import tempfile
@@ -24,7 +25,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 class TestBackdatedGenerateRecomputesWeeks(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="entry_api_"))
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
 
@@ -85,7 +86,7 @@ class TestPhaseEditorApi(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="phase_editor_api_"))
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
         self.event = (date.today() + timedelta(days=112)).isoformat()  # 16w
@@ -274,8 +275,7 @@ class TestEntryScanEndpoint(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="entry_scan_"))
-        self._plan_patch = patch.object(app_module, "_plan_dir",
-                                        return_value=self.tmp)
+        self._plan_patch = plan_seam.patch_plan_dir(self.tmp)
         self._plan_patch.start()
         today = date.today()
         rides = []
@@ -353,8 +353,7 @@ class TestRecognizedEntryModePersistence(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="entry_recog_"))
-        self._patch = patch.object(app_module, "_plan_dir",
-                                   return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.client = TestClient(app_module.app)
 

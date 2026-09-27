@@ -17,6 +17,7 @@ via `tp.plan_write_lock()`.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sys
 import time
@@ -80,7 +81,7 @@ def plan_on_disk(tmp_path, monkeypatch):
     plan = _mk_plan_dict(monday)
     plan_path = plan_dir / "current_plan.json"
     plan_path.write_text(json.dumps(plan, default=str), encoding="utf-8")
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: plan_dir)
+    plan_seam.bind_active(plan_dir)
     return plan_path, plan, date.today().isoformat(), monday
 
 
@@ -139,7 +140,7 @@ def test_no_persisted_plan_falls_through(monkeypatch, tmp_path):
     """If `_plan_dir()/current_plan.json` doesn't exist, skip the cache."""
     plan_dir = tmp_path / "plans"
     plan_dir.mkdir()
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: plan_dir)
+    plan_seam.bind_active(plan_dir)
     monday = date.today() - timedelta(days=date.today().weekday())
     plan = _mk_plan_dict(monday)
     today = date.today().isoformat()

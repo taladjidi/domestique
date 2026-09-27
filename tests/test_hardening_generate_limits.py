@@ -7,6 +7,7 @@ It accepted hours_per_week -3 / 1e6 / NaN (a 500 or a plan built on it) and
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import math
 import types
 from datetime import timedelta
@@ -29,7 +30,7 @@ def env(tmp_path_factory):
     patcher = mock.patch("pathlib.Path.home", return_value=home)
     patcher.start()
     saved = (ProfileManager._instance, db_module.DB_PATH, app_module.DATA_DIR,
-             app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR)
+             app_module.GPX_DIR, tp.WORKOUT_DIR)
     ProfileManager._instance = None
     app_module.DATA_DIR = home / ".domestique"
     try:
@@ -38,11 +39,11 @@ def env(tmp_path_factory):
         db_module.init_db()
         yield types.SimpleNamespace(
             c=TestClient(app_module.app, raise_server_exceptions=False),
-            plan=lambda: app_module._plan_dir() / "current_plan.json")
+            plan=lambda: plan_seam.active_plan_dir() / "current_plan.json")
     finally:
         patcher.stop()
         (ProfileManager._instance, old_db, app_module.DATA_DIR,
-         app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR) = saved
+         app_module.GPX_DIR, tp.WORKOUT_DIR) = saved
         db_module.set_db_path(old_db)
         db_module._sync_stop.clear()
         app_module.clear_cache()

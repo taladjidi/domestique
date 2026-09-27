@@ -15,6 +15,7 @@ end-to-end test through /api/setup/save is strict-xfail until then.
 from __future__ import annotations
 
 import shutil
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import types
 from datetime import timedelta
 from pathlib import Path
@@ -81,8 +82,7 @@ def stub(tmp_path):
     patcher.start()
     # getattr: Wave 2 may retire the app's own WORKOUT_DIR global.
     saved = (ProfileManager._instance, db_module.DB_PATH, app_module.DATA_DIR,
-             getattr(app_module, "WORKOUT_DIR", None), app_module.GPX_DIR,
-             tp.PLAN_DIR, tp.WORKOUT_DIR)
+             getattr(app_module, "WORKOUT_DIR", None), app_module.GPX_DIR, tp.WORKOUT_DIR)
     ProfileManager._instance = None
     app_module.DATA_DIR = tmp_path / ".domestique"
     try:
@@ -95,7 +95,7 @@ def stub(tmp_path):
     finally:
         patcher.stop()
         (ProfileManager._instance, old_db, app_module.DATA_DIR, old_app_wd,
-         app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR) = saved
+         app_module.GPX_DIR, tp.WORKOUT_DIR) = saved
         if old_app_wd is not None:
             app_module.WORKOUT_DIR = old_app_wd
         db_module.set_db_path(old_db)

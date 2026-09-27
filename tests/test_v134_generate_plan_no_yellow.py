@@ -27,6 +27,7 @@ The headline test: a 12-week plan with realistic high-volume availability
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import shutil
 import unittest
 from datetime import date, timedelta
@@ -67,7 +68,7 @@ class TestV134NoYellowOnGenerate(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tp.load_workout_library()
-        cls.plan_path = tp.PLAN_DIR / "current_plan.json"
+        cls.plan_path = plan_seam.active_plan_dir() / "current_plan.json"
         if cls.plan_path.exists():
             cls.backup = cls.plan_path.with_suffix(".json.v134_test_bak")
             shutil.copy(cls.plan_path, cls.backup)
@@ -86,10 +87,10 @@ class TestV134NoYellowOnGenerate(unittest.TestCase):
         # exists. This test used to piggyback on the machine's REAL
         # current_plan.json (and its generate below CLOBBERED the owner's
         # live plan when a run died before tearDownClass). Self-seed a plan
-        # in the sandbox instead of skipping. tp.PLAN_DIR is read LAZILY:
+        # in the sandbox instead of skipping. plan_seam.active_plan_dir() is read LAZILY:
         # the TestClient lifespan boot activates the profile and rebinds it
         # (the setUpClass snapshot predates that rebind).
-        plan_path = tp.PLAN_DIR / "current_plan.json"
+        plan_path = plan_seam.active_plan_dir() / "current_plan.json"
         if not plan_path.exists():
             today = date.today()
             with _client() as client:
@@ -100,7 +101,7 @@ class TestV134NoYellowOnGenerate(unittest.TestCase):
                     "event_climb": 1500, "event_type": "gran fondo",
                 })
             self.assertEqual(seed.status_code, 200, seed.text[:300])
-            plan_path = tp.PLAN_DIR / "current_plan.json"
+            plan_path = plan_seam.active_plan_dir() / "current_plan.json"
             self.assertTrue(plan_path.exists(),
                             f"seed generate did not persist at {plan_path}")
         _seed_high_volume_availability(plan_path)

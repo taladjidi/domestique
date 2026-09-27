@@ -20,6 +20,7 @@ Two-layer bug:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -29,7 +30,7 @@ import app as app_module
 
 def _isolate_plan_dir(tmp_path: Path, monkeypatch) -> Path:
     """Point ``_plan_dir()`` at a temp dir so we don't clobber the real plan."""
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: tmp_path)
+    plan_seam.bind_active(tmp_path)
     return tmp_path
 
 

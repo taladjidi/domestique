@@ -10,6 +10,7 @@ the score-None default is unified between /api/readiness and
 from __future__ import annotations
 
 import unittest
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -125,7 +126,7 @@ class TestLocalTrainingLoadFallback(unittest.TestCase):
                                      "session_type": "z2", "duration_min": 60, "tss_estimate": 45,
                                      "description": "", "zwo_file": "", "zwo_name": "",
                                      "status": "pending"}]}]}))
-        with patch.object(app_module, "_plan_dir", return_value=tmp), \
+        with plan_seam.patch_plan_dir(tmp), \
              patch.object(app_module, "get_today_metrics", return_value={}), \
              patch.object(app_module, "get_sleep_metrics", return_value={}), \
              patch("ride_storage.compute_local_ctl", return_value=None):

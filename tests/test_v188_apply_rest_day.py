@@ -8,6 +8,7 @@ Master decisions §Bug 7: POST ``/api/plan/auto-adjust`` with
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -58,8 +59,7 @@ class TestApplyRestDay(unittest.TestCase):
             "availability": {},
         }
         self._plan_path.write_text(json.dumps(plan), encoding="utf-8")
-        self._patch_dir = patch.object(app_module, "_plan_dir",
-                                        return_value=self._tmp)
+        self._patch_dir = plan_seam.patch_plan_dir(self._tmp)
         self._patch_dir.start()
         # Don't run real reforecast / DB queries.
         self._patch_reforecast = patch.object(

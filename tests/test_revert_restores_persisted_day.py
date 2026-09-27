@@ -20,6 +20,7 @@ touching the plan — never invent a restoration.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from datetime import date, timedelta
 
 import pytest
@@ -49,7 +50,7 @@ def client_with_plan(tmp_path, monkeypatch):
     d = tmp_path / "plans"; d.mkdir(parents=True)
     (d / "current_plan.json").write_text(json.dumps(
         {"goal": {}, "phases": [], "weeks": weeks}), encoding="utf-8")
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: d)
+    plan_seam.bind_active(d)
     # Point the one-day flag at the sandbox too, or a flag left by an earlier
     # test (or a real profile) leaks in.
     flag = tmp_path / "readiness_cap_reverted.txt"

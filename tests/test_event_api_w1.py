@@ -9,6 +9,7 @@ F4d (SM4): a second priority-A event in events[] → 400 "one A event per plan"
 from __future__ import annotations
 
 import tempfile
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -24,7 +25,7 @@ class TestGenerateEndpointRejections(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="evt_api_w1_"))
         self._patches = [
-            patch.object(app_module, "_plan_dir", return_value=self.tmp),
+            plan_seam.patch_plan_dir(self.tmp),
             # Pin the planner clock (the F4b guard compares against tp's
             # date.today()) and keep the endpoint's pre-generate fetches
             # off the network.

@@ -17,6 +17,7 @@ Fix verified here:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -74,8 +75,7 @@ class CalendarSingularAnchorBase(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._tmp = Path(self._tmpdir.name)
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
 
         self._fit_dir = self._tmp / "fit"
         self._fit_dir.mkdir(parents=True, exist_ok=True)
@@ -91,7 +91,7 @@ class CalendarSingularAnchorBase(unittest.TestCase):
     def tearDown(self):
         self._patch_rides.stop()
         self._patch_fit.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
 

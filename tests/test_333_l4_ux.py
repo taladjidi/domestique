@@ -27,6 +27,7 @@ on a backdated non-event plan with <1 schedulable week):
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import shutil
 import subprocess
@@ -203,10 +204,9 @@ class GenerateBase(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._tmp = Path(self._tmpdir.name)
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         self._patches = [
-            patch.object(app_module, "_plan_dir", return_value=self._tmp),
+            plan_seam.patch_plan_dir(self._tmp),
             patch.object(app_module, "cached",
                          side_effect=lambda key, fn, ttl=300: {"ctl": 55.0}),
             patch.object(app_module, "_longest_ride_h_90d", return_value=3.0),
@@ -226,7 +226,7 @@ class GenerateBase(unittest.TestCase):
         self._p_rides.stop()
         for p in self._patches:
             p.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
 

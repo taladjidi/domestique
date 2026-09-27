@@ -11,6 +11,7 @@ unknown id cleared the active pointer: `/` went to the setup wizard, settings
 from __future__ import annotations
 
 import types
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 from unittest import mock
 
 import pytest
@@ -28,7 +29,7 @@ def stub(tmp_path):
     patcher = mock.patch("pathlib.Path.home", return_value=tmp_path)
     patcher.start()
     saved = (ProfileManager._instance, db_module.DB_PATH, app_module.DATA_DIR,
-             app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR)
+             app_module.GPX_DIR, tp.WORKOUT_DIR)
     ProfileManager._instance = None
     app_module.DATA_DIR = tmp_path / ".domestique"
     try:
@@ -39,7 +40,7 @@ def stub(tmp_path):
     finally:
         patcher.stop()
         (ProfileManager._instance, old_db, app_module.DATA_DIR,
-         app_module.GPX_DIR, tp.PLAN_DIR, tp.WORKOUT_DIR) = saved
+         app_module.GPX_DIR, tp.WORKOUT_DIR) = saved
         db_module.set_db_path(old_db)
         db_module._sync_stop.clear()
         app_module.clear_cache()

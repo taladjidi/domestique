@@ -318,15 +318,6 @@ class ProfileManager:
             raise RuntimeError("no active profile")
 
     @property
-    def plan_dir(self) -> Path:
-        # AC6a: the mkdir makes this a writer — without a profile it would
-        # create <profiles root>/plans (root-dir artifact resurrection).
-        self._require_active()
-        d = self.active_dir / "plans"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    @property
     def prefs(self) -> dict:
         return self._prefs
 
@@ -661,9 +652,10 @@ class ProfileManager:
             # restart meant the second stop/join(5s) could silently refuse to
             # start a thread after a slow first pass — killing sync forever.
 
-            # Update PLAN_DIR + WORKOUT_DIR in training_planner so freshly
-            # loaded plans/workouts come from the new profile (AC2b: shared
-            # resolver, incl. the reset-to-bundled else-branch).
+            # Update WORKOUT_DIR in training_planner so freshly loaded
+            # workouts come from the new profile (AC2b: shared resolver, incl.
+            # the reset-to-bundled else-branch). Plans need nothing: every
+            # plan store call names its profile (contract 10.3).
             try:
                 self.apply_training_dirs()
             except Exception as e:
@@ -687,7 +679,7 @@ class ProfileManager:
             log.info(f"Profile switched to '{profile_id}'")
 
     def apply_training_dirs(self) -> None:
-        """Point training_planner.PLAN_DIR / WORKOUT_DIR at the active profile.
+        """Point training_planner.WORKOUT_DIR at the active profile.
 
         AC2b: ONE resolver shared by switch() and the boot path (app.py's
         lifespan calls this once post-activation so boot and switch agree).
@@ -703,7 +695,6 @@ class ProfileManager:
         if self._active_id is None:
             return
         import training_planner
-        training_planner.PLAN_DIR = self.plan_dir
 
         wp_dir: Optional[Path] = None
         paths = self._load_json(self.active_dir / "user_paths.json")

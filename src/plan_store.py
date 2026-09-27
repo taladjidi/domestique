@@ -187,16 +187,9 @@ class _Paths:
         return self.dir / (PLAN + (".bak" if n == 1 else f".bak{n}"))
 
 
-# BRIDGE (removed with 10.3): the app's legacy plan-dir seam for the active
-# profile, which the tests still patch (app._plan_dir, tp.PLAN_DIR).
-_BRIDGE = None
-
-
 def _paths(profile_id: str) -> _Paths:
     pid = _check_id(profile_id)
     d = _dirs.get(pid)
-    if d is None and _BRIDGE is not None:
-        d = _BRIDGE(pid)
     if d is None:
         root = _profiles_root if _profiles_root is not None else domestique_home() / "profiles"
         d = root / pid / "plans"

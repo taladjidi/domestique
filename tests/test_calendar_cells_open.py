@@ -15,6 +15,7 @@ dashboard's own calContentMatches and calContentCss under node."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import re
 import shutil
 import subprocess
@@ -57,7 +58,7 @@ class CalendarCellsOpen(unittest.TestCase):
     def setUp(self):
         clock.freeze(TODAY)
         self.tmp = Path(tempfile.mkdtemp(prefix="cal_cells_"))
-        self._patches = [patch.object(app_module, "_plan_dir", return_value=self.tmp)]
+        self._patches = [plan_seam.patch_plan_dir(self.tmp)]
         for p in self._patches:
             p.start()
         cache.clear_cache()

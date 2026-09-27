@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import time
 import unittest
 from pathlib import Path
@@ -35,7 +36,7 @@ def _corrupt_plan(text: str):
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "current_plan.json"
         p.write_text(text)
-        with mock.patch.object(app_module, "_plan_dir", lambda: Path(td)):
+        with plan_seam.patch_plan_dir(Path(td)):
             yield p
 
 

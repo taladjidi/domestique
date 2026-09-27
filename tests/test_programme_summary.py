@@ -13,6 +13,7 @@ Treff 2019, Hooper 1995, Coggan/Allen TR&P.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -66,8 +67,7 @@ class ProgrammeSummaryEndpointTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self._tmp.name)
         # Patch _plan_dir to point at our tmp.
-        self._patch = patch.object(
-            app_module, "_plan_dir", lambda: self.tmp_path)
+        self._patch = plan_seam.patch_plan_dir(self.tmp_path)
         self._patch.start()
 
     def tearDown(self) -> None:

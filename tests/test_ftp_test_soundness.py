@@ -4,6 +4,7 @@ had ZERO coverage before; these are the load-bearing invariants."""
 from __future__ import annotations
 
 import fitness_estimation as fe
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 
 
 def _ramp(warmup_sprint=False, cooldown=True):
@@ -82,7 +83,7 @@ def _plan_with_ftp_test(tmp):
 def test_ftp_test_type_endpoint_swaps_family():
     with tempfile.TemporaryDirectory() as tmp:
         day = _plan_with_ftp_test(tmp)
-        with mock.patch.object(app_module, "_plan_dir", lambda: Path(tmp)):
+        with plan_seam.patch_plan_dir(Path(tmp)):
             c = TestClient(app_module.app)
             # → ramp
             r = c.post("/api/plan/ftp-test-type", json={"date": day, "test_type": "ramp"})
@@ -100,7 +101,7 @@ def test_ftp_test_type_endpoint_swaps_family():
 def test_ftp_test_type_endpoint_rejects_bad_input():
     with tempfile.TemporaryDirectory() as tmp:
         day = _plan_with_ftp_test(tmp)
-        with mock.patch.object(app_module, "_plan_dir", lambda: Path(tmp)):
+        with plan_seam.patch_plan_dir(Path(tmp)):
             c = TestClient(app_module.app)
             assert c.post("/api/plan/ftp-test-type", json={"date": day, "test_type": "bogus"}).status_code == 400
             assert c.post("/api/plan/ftp-test-type", json={"date": "not-a-date", "test_type": "ramp"}).status_code == 400

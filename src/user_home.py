@@ -11,7 +11,7 @@ the old behavior (Path.home()/".domestique"). scripts/dev_preview.sh sets
 it to a scratch copy seeded from the real profile.
 
 Import-order contract: this module has NO project imports (stdlib only) so
-every module constant (db._USER_DATA, tp.PLAN_DIR, …) can resolve through
+every module constant (db._USER_DATA, …) can resolve through
 it at import time.
 """
 from __future__ import annotations

@@ -9,6 +9,7 @@ the stale per-day values.
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import os
 import sys
 import tempfile
@@ -26,7 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 class TestGenerateRepopulatesAvailability(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="gen_avail_"))
-        self._patch = patch.object(app_module, "_plan_dir", return_value=self.tmp)
+        self._patch = plan_seam.patch_plan_dir(self.tmp)
         self._patch.start()
         self.pp = self.tmp / "current_plan.json"
         self.client = TestClient(app_module.app)

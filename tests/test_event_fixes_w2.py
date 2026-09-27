@@ -25,6 +25,7 @@ scenarios advance "today" mid-test.
 from __future__ import annotations
 
 import asyncio
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import copy
 import json
 from datetime import date, timedelta
@@ -598,7 +599,7 @@ class _Req:
 
 @pytest.fixture()
 def _app_plan_env(tmp_path, monkeypatch):
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: tmp_path)
+    plan_seam.bind_active(tmp_path)
     monkeypatch.setattr(app_module.db, "query_activities",
                         lambda **k: [], raising=False)
     monkeypatch.setattr(app_module, "cached", lambda *a, **k: {})
@@ -781,7 +782,7 @@ def test_d4_generate_endpoint_carries_warning(_app_plan_env, tmp_path,
     import ride_storage
     monkeypatch.setattr(ride_storage, "chronic_weekly_tss",
                         lambda *a, **k: 650.0, raising=False)
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
+    plan_seam.bind_active(tmp_path)
     target = ANCHOR + timedelta(days=1)
     resp = asyncio.run(app_module.api_plan_generate(_Req({
         "goal": "event", "event_date": target.isoformat(),

@@ -22,6 +22,7 @@ Citations (each test pins one row of MASTER_DECISIONS_v466 §1):
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -155,8 +156,7 @@ class _IntegrationBase(unittest.TestCase):
         # has a HIT prescription to potentially downshift.
         self._tmpplan = tempfile.TemporaryDirectory()
         self._plan_path = Path(self._tmpplan.name)
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._plan_path
+        plan_seam.bind_active(self._plan_path)
         self._write_synth_plan()
 
         # Stub upstream calls (C6 revert flag sandboxed into the tmp plan dir).
@@ -167,7 +167,7 @@ class _IntegrationBase(unittest.TestCase):
     def tearDown(self):
         for p in self._patchers:
             p.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpplan.cleanup()
         self._db_module.close_all_connections()
         self._db_module.set_db_path(self._original_db_path)

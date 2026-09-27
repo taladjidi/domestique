@@ -18,6 +18,7 @@ module (the planner rewrites it on load).
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -286,12 +287,11 @@ class DeloadAdvanceBase(unittest.TestCase):
         app_module.clear_cache()
         self._tmpdir = tempfile.TemporaryDirectory()
         self._tmp = Path(self._tmpdir.name)
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         self.today = date.today()
 
     def tearDown(self):
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _write(self, plan: dict) -> Path:
@@ -519,8 +519,7 @@ class TodaySessionBase(unittest.TestCase):
         app_module.clear_cache()
         self._tmpdir = tempfile.TemporaryDirectory()
         self._tmp = Path(self._tmpdir.name)
-        self._orig_plan_dir = tp.PLAN_DIR
-        tp.PLAN_DIR = self._tmp
+        plan_seam.bind_active(self._tmp)
         self.today = date.today()
         self._patches = [
             patch.object(app_module, "_maybe_lazy_icu_sync", return_value=None),
@@ -537,7 +536,7 @@ class TodaySessionBase(unittest.TestCase):
     def tearDown(self):
         for p in self._patches:
             p.stop()
-        tp.PLAN_DIR = self._orig_plan_dir
+        plan_seam.unbind_active()
         self._tmpdir.cleanup()
 
     def _get(self, rides):

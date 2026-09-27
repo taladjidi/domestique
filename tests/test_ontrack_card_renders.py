@@ -9,6 +9,7 @@ and with CTL unknown (possible since fitness.state(), 070ad407)."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import shutil
 import subprocess
 import tempfile
@@ -52,7 +53,7 @@ def _calendar(icu):
     ride = {"started_at": f"{(today - timedelta(days=1)).isoformat()}T08:00:00", "tss": 60, "sport": "Ride",
             "time_in_zone": {"z1": 600, "z2": 1800, "z3": 600, "z4": 300, "z5": 200}}
     try:
-        with patch.object(app_module, "_plan_dir", return_value=tmp), \
+        with plan_seam.patch_plan_dir(tmp), \
              patch.object(app_module, "_kick_lazy_icu_sync", return_value=False), \
              patch.object(app_module, "_load_all_rides_safe", return_value=[ride]), \
              patch.object(app_module, "get_today_metrics", return_value=icu), \

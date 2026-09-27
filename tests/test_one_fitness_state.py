@@ -17,6 +17,7 @@ it was generated (plan["ctl_snapshot"]), on the day it was generated."""
 from __future__ import annotations
 
 import json
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -61,7 +62,7 @@ def env(tmp_path):
             "ctl_snapshot": {"current_ctl": 55.0, "recent_weekly_tss": 300.0,
                              "generated_on": plan_start.isoformat()}}
     (tmp_path / "current_plan.json").write_text(json.dumps(plan))
-    patches = [patch.object(app_module, "_plan_dir", return_value=tmp_path),
+    patches = [plan_seam.patch_plan_dir(tmp_path),
                patch.object(app_module, "_kick_lazy_icu_sync", return_value=False),
                patch("ride_storage.compute_local_ctl", return_value=99.0)]   # must never be read
     for p in patches:

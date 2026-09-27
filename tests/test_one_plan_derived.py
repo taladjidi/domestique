@@ -10,6 +10,7 @@ intervals.icu calendar (--push-icu).
 from __future__ import annotations
 
 from datetime import date, timedelta
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,8 +26,8 @@ GEN = {"goal": "general", "hours_per_week": 7.0, "plan_weeks": 4, "rest_days": [
 @pytest.fixture
 def client(tmp_path, monkeypatch, freeze_clock):
     freeze_clock(date(2026, 9, 23))
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp_path)
-    monkeypatch.setattr(app_module, "_plan_dir", lambda: tmp_path)
+    plan_seam.bind_active(tmp_path)
+    plan_seam.bind_active(tmp_path)
     monkeypatch.setattr(app_module, "get_today_metrics", lambda *a, **k: {})
     c = TestClient(app_module.app)
     assert c.post("/api/plan/generate", json=GEN).status_code == 200

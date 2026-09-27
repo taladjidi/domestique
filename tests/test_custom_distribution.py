@@ -7,6 +7,7 @@ realized mix is delivered via a dynamic per-week HIT-type blueprint so what the
 user requests actually shows up in the plan.
 """
 import tempfile
+import plan_seam  # noqa: E402  (the plan dir of the active profile)
 import pathlib
 from collections import Counter
 
@@ -89,7 +90,7 @@ def test_preset_typical_bands_present():
 @pytest.fixture
 def sandbox_plan_dir(monkeypatch):
     tmp = pathlib.Path(tempfile.mkdtemp())
-    monkeypatch.setattr(tp, "PLAN_DIR", tmp / "plans", raising=False)
+    plan_seam.bind_active(tmp / "plans")
     yield tmp
 
 

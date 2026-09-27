@@ -434,6 +434,8 @@ async def _plant_handler(request):
 
 
 def _plant_findings(code: str) -> list[str]:
+    if "plan_store" in code:
+        code = "import plan_store\n" + code
     return [plan_scan.key(f) for f in plan_scan.scan_full(SRC, {"app": code})
             if ("_plant" in f["func"] or "_Plant" in f["func"]) and f["kind"] != "CENSUS"]
 

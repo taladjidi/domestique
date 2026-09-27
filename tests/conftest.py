@@ -89,6 +89,7 @@ import pytest
 
 import app as app_module
 import training_planner as _tp
+import plan_store as _plan_store
 import clock as _clock
 import datetime as _dtmod
 
@@ -260,6 +261,16 @@ def _restore_tp_profile_dirs():
         _tp.PLAN_DIR = plan_dir
     if _tp.WORKOUT_DIR != workout_dir:
         _tp.WORKOUT_DIR = workout_dir
+
+
+@pytest.fixture(autouse=True)
+def _restore_plan_store_bindings():
+    """A test that points a profile's plans at a tmp dir (plan_store.bind)
+    gets the binding table back as it was."""
+    saved = dict(_plan_store._dirs)
+    yield
+    _plan_store._dirs.clear()
+    _plan_store._dirs.update(saved)
 
 
 @pytest.fixture(autouse=True)

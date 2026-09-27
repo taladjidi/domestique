@@ -251,7 +251,12 @@ INFO: dict = {"calls": [], "boots": {}}
 
 
 def dump():
+    INFO["refusals"] = list(PS.REFUSALS) if PS is not None and hasattr(PS, "REFUSALS") else []
     OUT.write_text(json.dumps({"records": REC, "mutators": MUT, **INFO}, indent=1, default=str))
+
+
+def _refusals() -> int:
+    return len(PS.REFUSALS) if PS is not None and hasattr(PS, "REFUSALS") else 0
 
 
 def probe_write(p: Path, data: bytes):
@@ -526,7 +531,7 @@ def main():
                 if hasattr(A, "_PLAN_HEAL_SEEN"):
                     A._PLAN_HEAL_SEEN.clear()
                 STATE["route"] = f"{m} {path}"
-                n0 = len(REC)
+                n0, r0 = len(REC), _refusals()
                 t0 = time.monotonic()
                 try:
                     code = _call(c, m, url, BODIES.get(path), path).status_code
@@ -538,7 +543,7 @@ def main():
                                   if k.split(".")[-1] in ENRICH_KEYS) if after else []
                 INFO["calls"].append({"route": STATE["route"], "url": url, "status": code,
                                       "secs": round(time.monotonic() - t0, 2),
-                                      "writes": len(REC) - n0,
+                                      "writes": len(REC) - n0, "refusals": _refusals() - r0,
                                       "plan_changed": (plan_path(pid_a).read_bytes() != seed)
                                       if plan_path(pid_a).exists() else "GONE",
                                       "enrichment_persisted": new_keys})

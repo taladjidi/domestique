@@ -34,17 +34,17 @@ daily = {"0": 2.0, "1": 2.0, "2": 2.0, "3": 2.0, "4": 0, "5": 3.0, "6": 2.5}
 body = {"goal": "event", "event_date": "2026-12-13", "event_km": 160, "event_climb": 2000,
         "rest_days": [4], "daily_availability": daily, "hours_per_week": 12.5,
         "max_weekday": 2.0, "max_weekend": 3.0}
-import plan_store; path = plan_store._paths(ProfileManager.get().active_id).live
+import plan_store; pid = ProfileManager.get().active_id
 def weeks():
-    p = json.loads(path.read_text())
+    p = plan_store.read(pid)
     return [[[s["day"], s["session_type"], s.get("duration_min"), s.get("tss_estimate"),
               s.get("zwo_file")] for s in w["sessions"]] for w in p["weeks"]]
 out = {}
 assert c.post("/api/plan/generate", json=body).status_code == 200
 out["generate"] = weeks()
-stored = path.read_text()
+stored = plan_store.read(pid)
 for i in (1, 2):
-    path.write_text(stored)
+    plan_store.update(pid, lambda _p: stored, reason="test: the same stored plan")
     assert c.post("/api/plan/regenerate", json={}).status_code == 200
     out[f"regenerate{i}"] = weeks()
 print("@@@" + json.dumps(out))

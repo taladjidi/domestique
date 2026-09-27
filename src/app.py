@@ -79,6 +79,9 @@ import ride_storage  # the one definition of a ride's duration (ride_moving_s)
 import training_planner as tp  # noqa: E402
 import plan_store  # noqa: E402  the plan's one owner: every plan read and write goes through it
 from plan_store import PlanCorrupt  # noqa: E402
+# G2 (contract 10.6): from here on, plan-file access that does not come
+# through the store is refused -- before the first boot pass or request.
+plan_store.install_guard()
 import continuous_policy as cpol  # 3.4.0 W2 — continuous-mode deload + rotation policy
 # v1.6.1 — register _log_error as the planner's observability hook so any
 # planner-internal failure (generate_plan phase build, reforecast, match_zwo

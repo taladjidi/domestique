@@ -154,6 +154,18 @@ def test_no_route_errors(sweep):
     assert not bad, bad
 
 
+def test_the_guards_refuse_nothing_but_the_plants(sweep):
+    """G1/G2 refusals are kept even when a best-effort caller swallows them:
+    outside the planted routes there are none."""
+    bad = [(c["route"], c["refusals"]) for c in sweep["calls"]
+           if c.get("refusals") and not c["route"].startswith("POST /api/zz_plant")]
+    assert not bad, (bad, sweep.get("refusals", [])[:5])
+    plants = sum(c.get("refusals", 0) for c in sweep["calls"]
+                 if c["route"].startswith("POST /api/zz_plant"))
+    assert plants >= 2, sweep.get("refusals")
+    assert len(sweep["refusals"]) == plants, sweep["refusals"]      # boots and hooks: none
+
+
 def test_nothing_writes_a_stale_copy_through_the_door(sweep):
     stale = [m for m in sweep["mutators"] if m["stale"] and not m["route"].startswith("POST /api/zz_plant")]
     assert not stale, stale

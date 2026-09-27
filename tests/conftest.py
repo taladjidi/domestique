@@ -90,6 +90,15 @@ import pytest
 import app as app_module
 import training_planner as _tp
 import plan_store as _plan_store
+
+# G2 (contract 10.6): importing app installed plan_store's audit hook, which
+# refuses plan-file access that does not come through the store. Tests seed
+# and inspect plans with plain file operations from their own files; those,
+# and only those, are exempt (production never calls this).
+_plan_store.install_guard()
+_plan_store.allow_test_writes(_Path(__file__).resolve().parent)
+import _pytest as _pytest_pkg  # noqa: E402  (pytest removes old tmp dirs, plans included)
+_plan_store.allow_test_writes(_Path(_pytest_pkg.__file__).resolve().parent)
 import clock as _clock
 import datetime as _dtmod
 

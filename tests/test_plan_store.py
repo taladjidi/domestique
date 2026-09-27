@@ -398,3 +398,16 @@ def test_copy_legacy_plans(tmp_path, pid):
     (legacy / "current_plan.json.bak").write_text('{"n": 0}')
     assert ps.copy_legacy_plans(pid, legacy) == 2
     assert ps.read(pid) == {"n": 1}
+
+
+def test_g2_is_installed_in_the_test_session_and_the_app(tmp_path):
+    """The hook the app installs on import is live here: product code (a
+    module outside tests/) writing a plan file is refused in-process."""
+    import app  # noqa: F401  -- installs it
+    assert ps._HOOKED
+    ps.bind("inproc", tmp_path / "plans")
+    _put("inproc", {"n": 1})
+    mod = _product_module(tmp_path, "def go(p):\n    p.write_text('{}')\n", name="zz_inproc")
+    with pytest.raises(ps.PlanStoreError, match="G2"):
+        mod.go(_live("inproc"))
+    assert ps.read("inproc") == {"n": 1}

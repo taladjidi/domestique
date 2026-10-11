@@ -230,7 +230,11 @@ def _build_event(s: dict, ext_id: str, pm, classifications: dict,
     zwo_path = _app._safe_path(workout_dir, zwo_file)
     if not zwo_path or not zwo_path.exists():
         return None, "file_missing"
-    name = _display_name(s, classifications)
+    # S3: a session served fitted to its slot says the slot's minutes.
+    name = _app.restate_minutes(
+        _display_name(s, classifications),
+        _app.served_fit(zwo_path, s.get("duration_min"), s.get("session_type") or ""),
+        s.get("duration_min"))
     if hr_mode:
         if not lthr_ok:
             # Guard BEFORE building: view='hr' silently degrades to a power FIT

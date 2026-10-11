@@ -767,6 +767,8 @@ from download_lib import (  # noqa: F401
     _zwo_download_response,
     _cap_active_for_download,
     served_zwo_bytes,
+    served_fit,
+    restate_minutes,
 )
 from search_lib import (  # noqa: F401
     _SEARCH_TRANSLIT,
@@ -12875,6 +12877,7 @@ def build_fit_workout_bytes(session_type: str, duration_min: int,
         _pmc = ProfileManager.get()
         _cap_on = hr_force is not True and _capacity_cap_active(_pmc, force=bool(cap))
         served = served_zwo_bytes(zwo_path, slot_min, session_type, _pmc, cap=_cap_on)
+        name = restate_minutes(name, served_fit(zwo_path, slot_min, session_type), slot_min)
         fit_data = _build_fit_workout_from_zwo(
             name, zwo_path, ftp, hr_force=hr_force,
             zwo_text=served.decode("utf-8", "replace"))

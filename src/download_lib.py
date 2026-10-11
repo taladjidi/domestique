@@ -77,10 +77,30 @@ _DEFAULT_EASY_POWER = "0.65"
 served_unfitted: "collections.Counter[str]" = collections.Counter()
 
 
+# A length a title or description states ("160min", "(119min)"), not a rep
+# or a rest ("8x1min", "-1min"): training_planner._DESC_MIN's rule.
+_MIN_TOKEN = re.compile(r"(?<![\d\-–×x~])(\d+)min")
+
+
 class Fit(NamedTuple):
     data: bytes
     status: str            # "verbatim" | "within" | "fitted" | "unfitted"
     file_min: int = 0      # the library file's own length, rounded
+
+
+def _restate(text: str, old_min: int, new_min: int) -> str:
+    """Every length in ``text`` that is ``old_min`` minutes reads ``new_min``."""
+    return _MIN_TOKEN.sub(
+        lambda m: f"{new_min}min" if int(m.group(1)) == old_min else m.group(0),
+        text)
+
+
+def restate_minutes(text: str, fit: Fit, slot_min) -> str:
+    """S3: a title for a fitted session states the slot's minutes where it
+    stated the file's; any other title is returned as it is."""
+    if fit.status != "fitted" or not text:
+        return text
+    return _restate(text, fit.file_min, int(slot_min))
 
 
 def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
@@ -93,8 +113,10 @@ def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
     before its Cooldown, at the power the file holds longest in Z2 (0.65 FTP
     when none). Shortening never takes the block below 10 min; a file that
     cannot reach the slot that way is "unfitted" and served as it is. Only
-    the one block's Duration changes (or the one block is added): every
-    other byte is the library's. Pure: no clock, no profile,
+    the one block's Duration changes (or the one block is added), and the
+    minutes the file's <name>/<description> state for its length (and, when
+    the description has one part per block, for that block) are restated
+    (S3): every other byte is the library's. Pure: no clock, no profile,
     no file system, so the same session serves the same bytes every time."""
     import zones
     import zwo_parse
@@ -146,6 +168,14 @@ def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
             if best is None or int(d) > best[1]:
                 best = (i, int(d))
 
+    # The description, when it is one " | " part per block (the library's
+    # generated form), restates the block that moved.
+    dm = re.search(r"<description>(.*?)</description>", text, re.S)
+    parts = dm.group(1).split(" | ") if dm else None
+    if parts is not None and len(parts) != len(segs):
+        parts = None
+    moved = -1
+
     if best is not None:
         i, d = best
         new_d = d + delta
@@ -155,8 +185,16 @@ def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
         a, b = w_open + m.start(), w_open + m.end()
         tag = re.sub(r'\bDuration="[^"]*"', f'Duration="{new_d}"', text[a:b], count=1)
         text = text[:a] + tag + text[b:]
+        if parts is not None:
+            parts[i] = _MIN_TOKEN.sub(f"{int(round(new_d / 60))}min", parts[i], count=1)
+            moved = i
     elif delta > 0:
         power = _main_easy_power(segs, z1_top, z2_top)
+        at = len(segs) - 1 if segs and segs[-1].tag == "Cooldown" else len(segs)
+        if parts is not None:
+            parts.insert(at, f"Steady: {int(round(delta / 60))}min @ "
+                             f"{int(round(float(power) * 100))}% FTP")
+            moved = at
         block = f'<SteadyState Duration="{delta}" Power="{power}" />'
         if segs and segs[-1].tag == "Cooldown":
             pos = w_open + tags[-1].start()
@@ -176,6 +214,17 @@ def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
             text = text[:pos] + block + "\n" + indent + text[pos:]
     else:
         return Fit(raw, "unfitted", file_min)
+
+    slot_m = slot_s // 60
+    dm = re.search(r"<description>(.*?)</description>", text, re.S)
+    if dm:
+        desc = (" | ".join(p if k == moved else _restate(p, file_min, slot_m)
+                           for k, p in enumerate(parts))
+                if parts is not None else _restate(dm.group(1), file_min, slot_m))
+        text = text[:dm.start(1)] + desc + text[dm.end(1):]
+    nm = re.search(r"<name>(.*?)</name>", text, re.S)
+    if nm:
+        text = text[:nm.start(1)] + _restate(nm.group(1), file_min, slot_m) + text[nm.end(1):]
     return Fit(text.encode("utf-8"), "fitted", file_min)
 
 

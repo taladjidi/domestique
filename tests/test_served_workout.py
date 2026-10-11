@@ -353,3 +353,79 @@ def test_the_dashboard_passes_the_slot_for_a_planned_session():
         re.search(r"false, \$\{Number\((adj|session|c)\.duration_min", m) for m in planned_fit), planned_fit
     assert "if (slotMin) url += `?slot_min=" in html
     assert "if (slotMin) url += `&slot_min=" in html
+
+
+# ── S3: every surface says what is served ────────────────────────────────────
+
+def _texts(data: bytes):
+    import xml.etree.ElementTree as ET
+    r = ET.fromstring(data)
+    return r.findtext("name"), r.findtext("description")
+
+
+def test_the_fitted_zwo_states_the_slots_minutes():
+    raw = (LIB / E160).read_bytes()
+    name, desc = _texts(dl.fit_zwo_to_slot(raw, 177, "z2").data)
+    assert name == "Endurance Steady (177min)"
+    assert desc == ("Warmup: 15min from 45% to 65% FTP | Steady: 152min @ 62% FTP"
+                    " | Cooldown: 10min from 60% to 40% FTP")
+    # served as written: the file's own words
+    assert _texts(dl.fit_zwo_to_slot(raw, 161, "z2").data) == _texts(raw)
+    assert _texts(dl.fit_zwo_to_slot(raw, 177, "tempo").data) == _texts(raw)
+
+
+def test_an_inserted_block_is_in_the_description():
+    data = INTERVALS_ONLY.replace(
+        b"<name>Micro</name>",
+        b"<name>Micro (35min)</name>\n    <description>Warmup: 10min | "
+        b"Micro: 10 x 30s | Cooldown: 10min</description>")
+    name, desc = _texts(dl.fit_zwo_to_slot(data, 60, "z2").data)
+    assert name == "Micro (60min)"
+    assert desc == "Warmup: 10min | Micro: 10 x 30s | Steady: 25min @ 68% FTP | Cooldown: 10min"
+
+
+def test_the_pushed_event_name_states_the_slots_minutes(easy):
+    import icu_calendar_push as icp
+    from test_icu_push import D1
+    cls = {E160: {"display_name": "Endurance 160min \u2014 Z2"}}
+    for slot, want in ((177, "Endurance 177min \u2014 Z2"),
+                       (161, "Endurance 160min \u2014 Z2")):
+        ev, _ = icp._build_event(_sess(D1, zwo=E160, stype="z2", duration_min=slot),
+                                 _eid(easy, D1), easy.pm, cls, easy.workouts, False, True)
+        assert ev["name"] == want
+    ev, _ = icp._build_event(_sess(D1, zwo=E160, stype="threshold", duration_min=177),
+                             _eid(easy, D1), easy.pm, cls, easy.workouts, False, True)
+    assert ev["name"] == "Endurance 160min \u2014 Z2"
+
+
+def test_the_fit_states_the_slots_minutes(easy):
+    fitparse = pytest.importorskip("fitparse")
+    data = __import__("app").build_fit_workout_bytes(
+        "z2", 177, "endurance_steady_62pct_160min", E160, view="power", slot_min=177)
+    names = [m.get_value("wkt_name") for m in
+             fitparse.FitFile(io.BytesIO(data)).get_messages("workout")]
+    assert names == ["endurance_steady_62pct_177min"]
+
+
+Z2_119 = "z2_steady_61pct_119min.zwo"
+
+
+@pytest.mark.parametrize("fname,slot", [(E160, 177), (Z2_119, 150)])
+def test_the_stored_session_says_what_is_served(fname, slot, monkeypatch):
+    """6.8 / S3: the session's length is the served workout's, and its TSS
+    (the file's intensity over the slot, _restamp) is the served workout's
+    load within _restamp's own tolerance. Served unfitted, the 160-min file
+    in a 177-min slot carried 10.6 % less than the session claimed."""
+    import types
+    import training_planner as tp
+    monkeypatch.setattr(tp, "WORKOUT_DIR", LIB)
+    row = next(r for r in tp.load_workout_library() if r["File"] == fname)
+    s = types.SimpleNamespace(session_type="z2", duration_min=slot, tss_estimate=0,
+                              zwo_file=fname, description=f"Z2 {slot}min")
+    tp._restamp(s, {fname: row})
+    served = dl.served_zwo_bytes(LIB / fname, s.duration_min, "z2", None)
+    facts = zwo_parse.scan_zwo(dl._NamedBytes(served))
+    assert facts["total_sec"] == s.duration_min * 60
+    load = facts["tss"]
+    assert abs(s.tss_estimate - load) <= (tp._MATCH_BUDGET_TOLERANCE - 1.0) * load + 0.5, \
+        (s.tss_estimate, load)

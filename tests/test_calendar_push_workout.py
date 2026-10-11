@@ -393,7 +393,7 @@ class TestGA5BuildEventByteIdentical:
 
     def test_build_event_six_key_contract_for_known_zwo(self, stub, fake):
         wd = Path(app_module.tp.WORKOUT_DIR)
-        s = _sess(D1)
+        s = _sess(D1, duration_min=35)   # the file's length: served as on disk
         ev, reason = icp._build_event(
             s, _eid(stub, D1), stub.pm, {}, wd, False, True)
         assert reason is None

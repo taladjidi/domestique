@@ -321,7 +321,10 @@ class TestG2NetState:
 class TestG3Format:
     def test_power_mode_pushes_zwo_byte_identical(self, stub, fake):
         _apikey(stub)
-        _write_plan([_sess(D1)])
+        # A slot the file fills (steady.zwo is 35 min): nothing to fit, so the
+        # push is the file on disk. slim/9.1 fits a file to a slot it does not
+        # fill (tests/test_served_workout.py).
+        _write_plan([_sess(D1, duration_min=35)])
         r = icp.reconcile()
         assert r["pushed"] == 1
         post = next(c for c in fake.calls if c[0] == "POST")

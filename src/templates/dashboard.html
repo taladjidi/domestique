@@ -18284,10 +18284,10 @@ function openTodaySessionDetail() {
     // power-only and demoted.
     if (d.target_mode === 'hr') {
       html += `<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="downloadFIT('${escJs(adj.session_type || 'z2')}', ${adj.duration_min || 60}, '${escJs(adj.zwo_file.replace(/\.zwo$/i, ''))}', '${escJs(adj.zwo_file)}', 'hr')">Download FIT (HR targets)</button>
+        <button class="btn btn-primary" onclick="downloadFIT('${escJs(adj.session_type || 'z2')}', ${adj.duration_min || 60}, '${escJs(adj.zwo_file.replace(/\.zwo$/i, ''))}', '${escJs(adj.zwo_file)}', 'hr', false, ${Number(adj.duration_min) || 0})">Download FIT (HR targets)</button>
         <button class="btn" disabled style="opacity:0.4;cursor:not-allowed;" title="ZWO is a power-only format — it cannot encode heart-rate targets. Only FIT carries your bpm ranges.">ZWO — can't encode HR</button></div>`;
     } else {
-      html += `<div style="margin-top:12px;"><button class="btn btn-primary" onclick="downloadZwoFile('${escJs(adj.zwo_file)}')">Download ZWO Workout</button></div>`;
+      html += `<div style="margin-top:12px;"><button class="btn btn-primary" onclick="downloadZwoFile('${escJs(adj.zwo_file)}', ${Number(adj.duration_min) || 0}, '${escJs(adj.session_type || '')}')">Download ZWO Workout</button></div>`;
     }
   }
 
@@ -18892,7 +18892,7 @@ async function openDayWorkout(sessionIdx, day) {
   // hr target_mode (red-team F2): a no-power rider's deliverable is the FIT
   // (bpm targets + RPE cues) — lead with it and demote the power-only ZWO.
   const _hrLead = window._targetMode === 'hr';
-  const _fitBtn = `<button class="btn${_hrLead ? ' btn-primary' : ''}" onclick="downloadFIT('${escJs(type)}', ${session.duration_min}, '${escJs(fitName)}', ${session.zwo_file ? `'${escJs(session.zwo_file)}'` : 'null'}${_hrLead ? ", 'hr'" : ''})">${_hrLead ? 'Download FIT (HR targets)' : 'Download FIT'}</button>`;
+  const _fitBtn = `<button class="btn${_hrLead ? ' btn-primary' : ''}" onclick="downloadFIT('${escJs(type)}', ${session.duration_min}, '${escJs(fitName)}', ${session.zwo_file ? `'${escJs(session.zwo_file)}', ${_hrLead ? "'hr'" : 'null'}, false, ${Number(session.duration_min) || 0}` : `null${_hrLead ? ", 'hr'" : ''}`})">${_hrLead ? 'Download FIT (HR targets)' : 'Download FIT'}</button>`;
   let _zwoBtn;
   if (_hrLead) {
     // ZWO cannot encode heart rate — greyed out, not hidden, so the user
@@ -18900,7 +18900,7 @@ async function openDayWorkout(sessionIdx, day) {
     _zwoBtn = `<button class="btn" disabled style="opacity:0.4;cursor:not-allowed;" title="ZWO is a power-only format — it cannot encode heart-rate targets. Only FIT carries your bpm ranges.">ZWO — can't encode HR</button>`;
   } else if (session.zwo_file) {
     // v1.0.3: route through downloadZwoFile() — WKWebView ignores <a download>.
-    _zwoBtn = `<button class="btn btn-primary" onclick="downloadZwoFile('${escJs(session.zwo_file)}')">Download ZWO (Virtual Trainer)</button>`;
+    _zwoBtn = `<button class="btn btn-primary" onclick="downloadZwoFile('${escJs(session.zwo_file)}', ${Number(session.duration_min) || 0}, '${escJs(type)}')">Download ZWO (Virtual Trainer)</button>`;
   } else {
     // Generate ZWO on-the-fly only when no matched library file is available.
     _zwoBtn = `<button class="btn btn-primary" onclick="downloadGeneratedZwo('${escJs(type)}', ${session.duration_min}, '${escJs(session.day_name)} ${escJs(typeUpper)}')">Download ZWO (Virtual Trainer)</button>`;
@@ -19355,10 +19355,10 @@ async function _rematchAccept(day) {
           &middot; ${n} session${n === 1 ? '' : 's'} reflowed
           <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
             ${window._targetMode === 'hr'
-              ? `<button class="btn btn-sm" onclick="downloadFIT('${escJs(String(c.session_type || 'z2'))}', ${Number(c.duration_min || 0)}, '${escJs(String((c.zwo_file||'').replace(/\.zwo$/i, '') || 'workout'))}', '${escJs(String(c.zwo_file || ''))}', 'hr')">Download FIT (HR targets)</button>
+              ? `<button class="btn btn-sm" onclick="downloadFIT('${escJs(String(c.session_type || 'z2'))}', ${Number(c.duration_min || 0)}, '${escJs(String((c.zwo_file||'').replace(/\.zwo$/i, '') || 'workout'))}', '${escJs(String(c.zwo_file || ''))}', 'hr', false, ${Number(c.duration_min || 0)})">Download FIT (HR targets)</button>
                  <button class="btn btn-sm" disabled style="opacity:0.4;cursor:not-allowed;" title="ZWO is a power-only format — it cannot encode heart-rate targets.">ZWO — can't encode HR</button>`
-              : `<button class="btn btn-sm" onclick="downloadZwoFile('${escJs(String(c.zwo_file || ''))}')">Download ZWO</button>
-                 <button class="btn btn-sm" onclick="downloadFIT('${escJs(String(c.session_type || 'z2'))}', ${Number(c.duration_min || 0)}, '${escJs(String((c.zwo_file||'').replace(/\.zwo$/i, '') || 'workout'))}', '${escJs(String(c.zwo_file || ''))}')">Download FIT</button>`}
+              : `<button class="btn btn-sm" onclick="downloadZwoFile('${escJs(String(c.zwo_file || ''))}', ${Number(c.duration_min || 0)}, '${escJs(String(c.session_type || ''))}')">Download ZWO</button>
+                 <button class="btn btn-sm" onclick="downloadFIT('${escJs(String(c.session_type || 'z2'))}', ${Number(c.duration_min || 0)}, '${escJs(String((c.zwo_file||'').replace(/\.zwo$/i, '') || 'workout'))}', '${escJs(String(c.zwo_file || ''))}', null, false, ${Number(c.duration_min || 0)})">Download FIT</button>`}
           </div>
         </div>`;
       }
@@ -19742,7 +19742,7 @@ async function _saveViaPywebview(kind, filename, fetchUrl, meta) {
     }
     let res;
     if (kind === 'zwo') {
-      res = await window.pywebview.api.save_zwo(filename, await r.text(), meta.zwo_file || filename);
+      res = await window.pywebview.api.save_zwo(filename, await r.text(), meta.zwo_file || filename, meta.slot_min || 0, meta.session_type || '');
     } else {
       // v1.8.12 BUG-FIX — base64-encode via FileReader.readAsDataURL()
       // instead of the manual String.fromCharCode + btoa chunk loop.
@@ -19775,7 +19775,7 @@ async function _saveViaPywebview(kind, filename, fetchUrl, meta) {
         try { showToast('FIT export error: empty body', 4000); } catch(_) {}
         return true;
       }
-      res = await window.pywebview.api.save_fit(filename, b64, meta.session_type || '', meta.duration_min || 0, meta.name || '', meta.zwo_file || '', meta.view || '');
+      res = await window.pywebview.api.save_fit(filename, b64, meta.session_type || '', meta.duration_min || 0, meta.name || '', meta.zwo_file || '', meta.view || '', meta.slot_min || 0);
     }
     if (res && res.ok) {
       try { showToast(`Saved to ${res.path}`, 4000); } catch(_) {}
@@ -19792,7 +19792,7 @@ async function _saveViaPywebview(kind, filename, fetchUrl, meta) {
 // v1.0.3: ZWO download click handler — when running in pywebview we route
 // through the JS bridge (native save dialog); in a regular browser we
 // recreate the original `<a download>` behaviour (synthetic anchor click).
-async function downloadZwoFile(filename) {
+async function downloadZwoFile(filename, slotMin = 0, sessionType = '') {
   // v1.6.4 fix: WKWebView (used by the packaged DMG) ignores the server's
   // Content-Disposition: attachment header for `application/xml` and renders
   // the ZWO inline — the user sees a white screen of Times New Roman text
@@ -19800,8 +19800,11 @@ async function downloadZwoFile(filename) {
   // the pywebview native bridge first, then fall back to fetch() + Blob +
   // synthetic anchor click. The blob URL forces the browser into save mode
   // regardless of the response's MIME type.
-  const url = `/api/download/zwo/${encodeURIComponent(filename)}`;
-  if (await _saveViaPywebview('zwo', filename, url, {zwo_file: filename})) return;
+  // slim/9.1: a planned session passes its slot; the server serves the
+  // workout fitted to it (a library download passes none: the file as written).
+  let url = `/api/download/zwo/${encodeURIComponent(filename)}`;
+  if (slotMin) url += `?slot_min=${Number(slotMin)}&session_type=${encodeURIComponent(sessionType || '')}`;
+  if (await _saveViaPywebview('zwo', filename, url, {zwo_file: filename, slot_min: Number(slotMin) || 0, session_type: sessionType || ''})) return;
   try {
     const r = await fetch(url);
     if (!r.ok) {
@@ -19827,7 +19830,7 @@ async function downloadZwoFile(filename) {
   }
 }
 
-async function downloadFIT(type, durationMin, name, zwoFile = null, view = null, cap = false) {
+async function downloadFIT(type, durationMin, name, zwoFile = null, view = null, cap = false, slotMin = 0) {
   // v1.0.1 fix: pre-fix the button used <a download href=...>.click(), which
   // is fire-and-forget — pywebview's webkit silently swallowed JSON 4xx/5xx
   // responses (no download dialog, no error). fetch() + Blob lets us inspect
@@ -19842,8 +19845,10 @@ async function downloadFIT(type, durationMin, name, zwoFile = null, view = null,
   if (view) url += `&view=${encodeURIComponent(view)}`;
   // task #24: cap=1 = PROMPT APPROVE — cap short reps to measured power.
   if (cap) url += `&cap=1`;
+  // slim/9.1: a planned session's slot -> the FIT of the fitted workout.
+  if (slotMin) url += `&slot_min=${Number(slotMin)}`;
   const fitName = name.replace(/[^a-zA-Z0-9]/g, '_') + '.fit';
-  if (await _saveViaPywebview('fit', fitName, url, {session_type: type, duration_min: durationMin, name: name, zwo_file: zwoFile || '', view: view || '', cap: cap ? 1 : 0})) return;
+  if (await _saveViaPywebview('fit', fitName, url, {session_type: type, duration_min: durationMin, name: name, zwo_file: zwoFile || '', view: view || '', cap: cap ? 1 : 0, slot_min: Number(slotMin) || 0})) return;
   try {
     const r = await fetch(url);
     if (!r.ok) {

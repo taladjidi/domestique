@@ -692,16 +692,19 @@ class JsApi:
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-    def _read_zwo_serverside(self, filename: str) -> bytes:
+    def _read_zwo_serverside(self, filename: str, slot_min=None,
+                             session_type: str = "") -> bytes:
         """issue #5 — read the ZWO straight off disk. We run IN-PROCESS with the
         FastAPI app (launcher imports it), so when the JS-side bridge fetch()
         hands us an empty body (the WKWebView download-interception failure mode)
-        we can still produce the real bytes instead of saving 0 bytes."""
+        we can still produce the real bytes instead of saving 0 bytes.
+        slim/9.1: the served workout, fitted to a planned session's slot."""
         try:
             import app
             p = app._safe_path(app.active_workout_dir(), filename)
             if p and p.exists():
-                return p.read_bytes()
+                return app.served_zwo_bytes(p, slot_min or None, session_type or "",
+                                            None, cap=False)
         except Exception as e:
             log = _log()
             if log is not None:
@@ -709,7 +712,7 @@ class JsApi:
         return b""
 
     def _build_fit_serverside(self, session_type, duration_min,
-                              name, zwo_file, view=None) -> bytes:
+                              name, zwo_file, view=None, slot_min=None) -> bytes:
         """issue #5 — generate the FIT in-process when the JS bridge handed us an
         empty body. Mirrors /api/export/fit-workout via the shared helper."""
         try:
@@ -718,7 +721,7 @@ class JsApi:
                 return b""
             return app.build_fit_workout_bytes(
                 session_type or "z2", int(duration_min or 0), name, zwo_file,
-                view=(view or None)) or b""
+                view=(view or None), slot_min=(slot_min or None)) or b""
         except Exception as e:
             log = _log()
             if log is not None:
@@ -726,12 +729,14 @@ class JsApi:
         return b""
 
     def save_zwo(self, filename: str, content: str = "",
-                 source_file: str = "") -> dict:
+                 source_file: str = "", slot_min: int = 0,
+                 session_type: str = "") -> dict:
         # filename = suggested save name (may be "<x>_outdoor.zwo"); source_file
         # = the real library filename for the server-side fallback read.
         data = (content or "").encode("utf-8")
         if not data:
-            data = self._read_zwo_serverside(source_file or filename)
+            data = self._read_zwo_serverside(source_file or filename,
+                                             slot_min, session_type)
         if not data:
             return {"ok": False, "error": "empty workout (could not read file)"}
         return self._save(
@@ -741,7 +746,8 @@ class JsApi:
 
     def save_fit(self, filename: str, content_b64: str = "",
                  session_type: str = "", duration_min: int = 0,
-                 name: str = "", zwo_file: str = "", view: str = "") -> dict:
+                 name: str = "", zwo_file: str = "", view: str = "",
+                 slot_min: int = 0) -> dict:
         data = b""
         b64_err = None
         if content_b64:
@@ -753,7 +759,7 @@ class JsApi:
         if not data:
             data = self._build_fit_serverside(
                 session_type, duration_min, name or filename, zwo_file or None,
-                view=view or None)
+                view=view or None, slot_min=slot_min)
         if not data:
             # If the JS body was malformed base64 AND we couldn't regenerate
             # server-side, surface the specific decode error (more useful).

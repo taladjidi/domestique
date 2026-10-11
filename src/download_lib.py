@@ -1,15 +1,27 @@
-"""Serving a .zwo: the capacity cap, the outdoor wrapper, the response.
+"""Serving a .zwo: the served workout, the capacity cap, the outdoor wrapper,
+the response.
 
-Five helpers shared by the six download endpoints and by both FIT builders.
-They are here rather than in the endpoints because `_cap_zwo_bytes` is the one
-place the capacity ceiling is applied -- the .zwo the athlete downloads and the
-.fit pushed to the head unit must be capped identically or the two disagree
-about the workout.
+Helpers shared by the download endpoints, both FIT builders and the calendar
+push. They are here rather than in the endpoints because `served_zwo_bytes` is
+the one place the workout a planned session serves is made (fitted to its
+slot, slim/9.1) and `_cap_zwo_bytes` the one place the capacity ceiling is
+applied -- the .zwo the athlete downloads and the .fit pushed to the head
+unit must be the same workout or the two disagree.
 
 Unlike the other extracted modules this one imports fastapi, because building
 the response is what it does.
 """
+import collections
+import io
+import logging
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import NamedTuple
+
 from fastapi.responses import FileResponse, Response
+
+log = logging.getLogger("domestique.download")
 
 
 def _capacity_cap_active(pm, force: bool = False) -> bool:
@@ -50,6 +62,181 @@ def _cap_zwo_bytes(raw: bytes, filename: str, pm) -> bytes:
         return raw  # byte-identical no-op
     return txt2.encode("utf-8")
 
+# The served workout (contract slim/9.1, S1/S2). A planned easy slot keeps the
+# length the plan gave it (6.8 / R4a) and the head unit ends a workout at the
+# file's last block, so the file served for an easy slot is fitted to the
+# slot: one owner for the session's length. Hard slots, and any download that
+# is not a planned session's (no slot), are served as the library wrote them.
+_EASY_SLOTS = frozenset({"recovery", "z2", "long_z2", "endurance"})
+_FIT_FROM_S = 120          # a file within 2 min of its slot is served as is
+_MIN_BLOCK_S = 600         # shortening never takes a block below 10 min
+_DEFAULT_EASY_POWER = "0.65"
+
+# Files an easy slot could not be fitted to, by file name: the evaluator's
+# counter (S2). Logged once per serve as well.
+served_unfitted: "collections.Counter[str]" = collections.Counter()
+
+
+class Fit(NamedTuple):
+    data: bytes
+    status: str            # "verbatim" | "within" | "fitted" | "unfitted"
+    file_min: int = 0      # the library file's own length, rounded
+
+
+def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
+    """The library bytes fitted to an easy slot (S2), or the bytes as they are.
+
+    For a recovery / z2 / long_z2 / endurance slot whose file is 2 min or more
+    off the slot: the longest SteadyState block in Z1-Z2 is lengthened or
+    shortened so the workout's total is the slot to the second; a file with no
+    such block and a slot longer than the file gets one SteadyState block,
+    before its Cooldown, at the power the file holds longest in Z2 (0.65 FTP
+    when none). Shortening never takes the block below 10 min; a file that
+    cannot reach the slot that way is "unfitted" and served as it is. Only
+    the one block's Duration changes (or the one block is added): every
+    other byte is the library's. Pure: no clock, no profile,
+    no file system, so the same session serves the same bytes every time."""
+    import zones
+    import zwo_parse
+    if (session_type or "") not in _EASY_SLOTS:
+        return Fit(raw, "verbatim")
+    try:
+        slot_s = int(slot_min or 0) * 60
+    except (TypeError, ValueError):
+        return Fit(raw, "verbatim")
+    if slot_s <= 0:
+        return Fit(raw, "verbatim")
+    try:
+        text = raw.decode("utf-8")
+        root = ET.fromstring(raw)
+    except (UnicodeDecodeError, ET.ParseError):
+        return Fit(raw, "unfitted")
+    workout = root.find("workout")
+    facts = zwo_parse.scan_zwo(_NamedBytes(raw)) if workout is not None else None
+    if facts is None:
+        return Fit(raw, "unfitted")
+    total_s = int(facts["total_sec"])
+    file_min = int(round(total_s / 60))
+    delta = slot_s - total_s
+    if abs(delta) < _FIT_FROM_S:
+        return Fit(raw, "within", file_min)
+
+    segs = list(workout)
+    w_open = text.find("<workout>")
+    w_close = text.rfind("</workout>")
+    if w_open < 0 or w_close < w_open:
+        return Fit(raw, "unfitted", file_min)
+    names = "|".join(sorted({re.escape(el.tag) for el in segs})) or "(?!)"
+    tags = list(re.finditer(rf"<({names})\b[^>]*>", text[w_open:w_close]))
+    if [m.group(1) for m in tags] != [el.tag for el in segs]:
+        return Fit(raw, "unfitted", file_min)   # the text and the tree disagree
+
+    z1_top, z2_top = (e / 100.0 for e in zones.power_zone_edges_pct()[:2])
+
+    def _f(el, attr):
+        try:
+            return float(el.get(attr))
+        except (TypeError, ValueError):
+            return None
+
+    best = None                                  # (index, seconds)
+    for i, el in enumerate(segs):
+        p, d = _f(el, "Power"), _f(el, "Duration")
+        if el.tag == "SteadyState" and p is not None and d and p < z2_top:
+            if best is None or int(d) > best[1]:
+                best = (i, int(d))
+
+    if best is not None:
+        i, d = best
+        new_d = d + delta
+        if delta < 0 and new_d < _MIN_BLOCK_S:
+            return Fit(raw, "unfitted", file_min)
+        m = tags[i]
+        a, b = w_open + m.start(), w_open + m.end()
+        tag = re.sub(r'\bDuration="[^"]*"', f'Duration="{new_d}"', text[a:b], count=1)
+        text = text[:a] + tag + text[b:]
+    elif delta > 0:
+        power = _main_easy_power(segs, z1_top, z2_top)
+        block = f'<SteadyState Duration="{delta}" Power="{power}" />'
+        if segs and segs[-1].tag == "Cooldown":
+            pos = w_open + tags[-1].start()
+        else:
+            pos = w_close
+        line = text.rfind("\n", 0, pos) + 1
+        indent = text[line:pos]
+        if indent.strip():                       # not on a line of its own
+            text = text[:pos] + block + text[pos:]
+        elif pos == w_close:                     # last in the workout
+            seg_indent = indent + "    "
+            if tags:
+                t0 = w_open + tags[-1].start()
+                seg_indent = text[text.rfind("\n", 0, t0) + 1:t0]
+            text = text[:line] + seg_indent + block + "\n" + text[line:]
+        else:                                    # before the cooldown
+            text = text[:pos] + block + "\n" + indent + text[pos:]
+    else:
+        return Fit(raw, "unfitted", file_min)
+    return Fit(text.encode("utf-8"), "fitted", file_min)
+
+
+def _main_easy_power(segs, z1_top: float, z2_top: float) -> str:
+    """The constant power the file holds longest in Z2 (its own attribute
+    text), or 0.65 FTP when it holds none."""
+    held: dict = {}
+    for el in segs:
+        legs = []
+        if el.tag == "SteadyState":
+            legs = [(el.get("Power"), el.get("Duration"), 1)]
+        elif el.tag == "IntervalsT":
+            reps = el.get("Repeat") or 1
+            legs = [(el.get("OnPower"), el.get("OnDuration"), reps),
+                    (el.get("OffPower"), el.get("OffDuration"), reps)]
+        for p, d, n in legs:
+            try:
+                if p is not None and z1_top <= float(p) < z2_top:
+                    held[p] = held.get(p, 0) + float(d or 0) * float(n)
+            except ValueError:
+                pass
+    if not held:
+        return _DEFAULT_EASY_POWER
+    return min(held, key=lambda p: (-held[p], float(p)))
+
+
+class _NamedBytes(io.BytesIO):
+    """Bytes zwo_parse.scan_zwo can read as it reads a path (it names a file
+    without a <name> after the path's stem)."""
+    stem = "workout"
+
+
+def served_fit(zwo_path, slot_min, session_type) -> Fit:
+    """The library file at ``zwo_path`` fitted to the slot (no capacity cap)."""
+    return fit_zwo_to_slot(Path(zwo_path).read_bytes(), slot_min, session_type)
+
+
+def served_zwo_bytes(zwo_file, slot_min, session_type, pm, *, cap=None) -> bytes:
+    """THE workout a planned session serves (S1): the library bytes fitted to
+    the slot (``fit_zwo_to_slot``), then the measured-capacity cap exactly as
+    before. The calendar push, the ZWO download and the FIT export all build
+    from here. ``zwo_file`` is the resolved path of the library file;
+    ``slot_min`` None (a library download, a library push) serves the file
+    unfitted. ``cap``: None applies the profile's own cap rule
+    (``_capacity_cap_active``); True/False is the caller's decision (a
+    PROMPT APPROVE download, an hr FIT that is never capped)."""
+    path = Path(zwo_file)
+    fit = served_fit(path, slot_min, session_type)
+    if fit.status == "unfitted":
+        served_unfitted[path.name] += 1
+        log.warning("served workout: %s cannot be fitted to a %s-min %s slot "
+                    "(file %s min); served as written",
+                    path.name, slot_min, session_type, fit.file_min)
+    out = fit.data
+    if cap is None:
+        cap = pm is not None and _capacity_cap_active(pm)
+    if cap and pm is not None:
+        out = _cap_zwo_bytes(out, path.name, pm)
+    return out
+
+
 def _wrap_zwo_outdoor(xml_text: str, transit_min: int, spin_min: int) -> str:
     """G1 (v2.1) — frame a prescribed indoor block inside a real OUTDOOR ride:
     prepend a flat transit warmup and append a spin-home cooldown. The prescribed
@@ -74,41 +261,36 @@ def _wrap_zwo_outdoor(xml_text: str, transit_min: int, spin_min: int) -> str:
 
 def _zwo_download_response(path, filename: str, outdoor: int,
                           transit_min: int, spin_min: int,
-                          cap_active: bool = False):
-    """Shared ZWO download: plain FileResponse, or (G1) an outdoor-wrapped copy.
+                          cap_active: bool = False,
+                          slot_min=None, session_type: str = ""):
+    """Shared ZWO download: plain FileResponse, or the served workout.
 
-    task #24: when ``cap_active`` the served body is first capped to the
-    rider's measured-power envelope (short reps only). A no-op cap (nothing
-    qualifies) still returns the byte-identical FileResponse, so the OFF /
-    non-qualifying paths are unchanged."""
+    The body is the served workout (``served_zwo_bytes``): fitted to
+    ``slot_min`` for a planned easy session (slim/9.1), capped to the rider's
+    measured-power envelope when ``cap_active`` (task #24, short reps only),
+    and (G1) wrapped for an outdoor ride when ``outdoor``. A library download
+    with none of these is the plain FileResponse, byte-identical to disk."""
     plain = FileResponse(
         path, filename=filename, media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
-    capped_bytes = None
-    if cap_active:
-        from profile_manager import ProfileManager
-        try:
-            raw = path.read_bytes()
-            capped = _cap_zwo_bytes(raw, filename, ProfileManager.get())
-            capped_bytes = capped if capped is not raw and capped != raw else None
-        except Exception:
-            capped_bytes = None
-    if not outdoor:
-        if capped_bytes is None:
-            return plain  # byte-identical to the file on disk
-        return Response(
-            capped_bytes, media_type="application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    if not (outdoor or slot_min or cap_active):
+        return plain
     try:
-        if capped_bytes is not None:
-            body_text = capped_bytes.decode("utf-8")
-        else:
-            body_text = path.read_text(encoding="utf-8")
-        wrapped = _wrap_zwo_outdoor(body_text, transit_min, spin_min)
+        from profile_manager import ProfileManager
+        body = served_zwo_bytes(path, slot_min, session_type,
+                                ProfileManager.get() if cap_active else None,
+                                cap=cap_active)
     except Exception:
-        return plain if capped_bytes is None else Response(
-            capped_bytes, media_type="application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        return plain
+    served = Response(
+        body, media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    if not outdoor:
+        return served
+    try:
+        wrapped = _wrap_zwo_outdoor(body.decode("utf-8"), transit_min, spin_min)
+    except Exception:
+        return served
     out_name = filename.rsplit(".", 1)[0] + "_outdoor.zwo"
     return Response(
         wrapped, media_type="application/octet-stream",

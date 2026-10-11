@@ -763,10 +763,10 @@ from http_util import (  # noqa: F401
 # --- EXTRACTED MODULES ---
 from download_lib import (  # noqa: F401
     _capacity_cap_active,
-    _cap_zwo_bytes,
     _wrap_zwo_outdoor,
     _zwo_download_response,
     _cap_active_for_download,
+    served_zwo_bytes,
 )
 from search_lib import (  # noqa: F401
     _SEARCH_TRANSLIT,
@@ -5888,8 +5888,8 @@ def download_workout_by_id(filename: str, cap: int = Query(0)):
         from profile_manager import ProfileManager
         try:
             raw = path.read_bytes()
-            capped = _cap_zwo_bytes(raw, filename, ProfileManager.get())
-            if capped is not raw and capped != raw:
+            capped = served_zwo_bytes(path, None, "", ProfileManager.get(), cap=True)
+            if capped != raw:
                 return Response(
                     capped, media_type="application/octet-stream",
                     headers={"Content-Disposition":
@@ -7096,7 +7096,8 @@ def api_route_profile(url: str = Query(...)):
 @app.get("/api/download/zwo/{filename}")
 def download_zwo_flat(filename: str, outdoor: int = Query(0),
                       transit_min: int = Query(10), spin_min: int = Query(20),
-                      cap: int = Query(0)):
+                      cap: int = Query(0), slot_min: int | None = Query(None),
+                      session_type: str = Query("")):
     """Single-segment path used by the dashboard's planner-modal "Download ZWO"
     button. v1.0.0 fix: pre-fix the dashboard called /api/download/zwo/<file>
     (one segment) but the only registered route was /api/download/zwo/{category}
@@ -7113,12 +7114,15 @@ def download_zwo_flat(filename: str, outdoor: int = Query(0),
     spin-home cooldown (transit_min / spin_min minutes).
     task #24: ``cap=1`` (PROMPT APPROVE) or the profile "on" toggle caps short
     reps to the rider's measured-power envelope for THIS download only.
+    slim/9.1: a planned session's download passes its ``slot_min`` and
+    ``session_type`` and gets the served workout (fitted to an easy slot).
     """
     path = _safe_path(active_workout_dir(), filename)
     if not path or not path.exists():
         return JSONResponse({"error": "not found"}, 404)
     return _zwo_download_response(path, filename, outdoor, transit_min, spin_min,
-                                 cap_active=_cap_active_for_download(cap))
+                                 cap_active=_cap_active_for_download(cap),
+                                 slot_min=slot_min, session_type=session_type)
 
 
 @app.get("/api/download/zwo/{category}/{filename}")
@@ -12825,7 +12829,8 @@ async def api_plan_update(debounce: int = Query(0)):
 
 def build_fit_workout_bytes(session_type: str, duration_min: int,
                             name: str, zwo_file: str | None = None,
-                            view: str | None = None, cap: int = 0) -> bytes:
+                            view: str | None = None, cap: int = 0,
+                            slot_min: int | None = None) -> bytes:
     """Generate FIT workout bytes. Shared by ``/api/export/fit-workout`` AND
     ``launcher.JsApi.save_fit`` (issue #5) so the desktop native-save path can
     produce the bytes IN-PROCESS, with no WKWebView ``fetch()`` that can resolve
@@ -12839,6 +12844,10 @@ def build_fit_workout_bytes(session_type: str, duration_min: int,
     task #24: ``cap=1`` (PROMPT APPROVE) or the profile "on" toggle caps the
     ZWO's short reps to the rider's measured-power envelope BEFORE transcode
     (only for a power FIT -- hr view wins, bpm prescriptions untouched).
+
+    slim/9.1: the ZWO is the served workout (download_lib.served_zwo_bytes),
+    fitted to ``slot_min`` for a planned easy session; a library export
+    passes no slot and transcodes the file as written.
 
     Raises ImportError if fit_tool is missing, FileNotFoundError if ``zwo_file``
     is named but absent, ValueError if the result has zero workout steps.
@@ -12860,18 +12869,15 @@ def build_fit_workout_bytes(session_type: str, duration_min: int,
         zwo_path = _safe_path(active_workout_dir(), zwo_file)
         if not zwo_path or not zwo_path.exists():
             raise FileNotFoundError(f"ZWO file not found: {zwo_file}")
-        # task #24: cap the ZWO text pre-transcode when active + power FIT.
-        # hr_force=True means an hr FIT is being built -> no cap (hr wins).
-        cap_text = None
-        if hr_force is not True:
-            from profile_manager import ProfileManager
-            _pmc = ProfileManager.get()
-            if _capacity_cap_active(_pmc, force=bool(cap)):
-                capped = _cap_zwo_bytes(zwo_path.read_bytes(),
-                                        Path(zwo_file).name, _pmc)
-                cap_text = capped.decode("utf-8", "replace")
+        # The served workout (S1). task #24: capped pre-transcode when active
+        # + power FIT; hr_force=True means an hr FIT -> no cap (hr wins).
+        from profile_manager import ProfileManager
+        _pmc = ProfileManager.get()
+        _cap_on = hr_force is not True and _capacity_cap_active(_pmc, force=bool(cap))
+        served = served_zwo_bytes(zwo_path, slot_min, session_type, _pmc, cap=_cap_on)
         fit_data = _build_fit_workout_from_zwo(
-            name, zwo_path, ftp, hr_force=hr_force, zwo_text=cap_text)
+            name, zwo_path, ftp, hr_force=hr_force,
+            zwo_text=served.decode("utf-8", "replace"))
     else:
         st_norm = (session_type or "").lower().replace("_", "").replace("-", "")
         blocks = []
@@ -12919,6 +12925,7 @@ def api_export_fit_workout(
     zwo_file: str | None = Query(None),
     view: str | None = Query(None),  # 'hr'|'power' — modal toggle: WYSIWYG FIT
     cap: int = Query(0),  # task #24: 1 = PROMPT APPROVE (cap short reps)
+    slot_min: int | None = Query(None),  # slim/9.1: a planned session's slot
 ):
     """Generate a FIT binary workout file for Garmin Edge / Wahoo ELEMNT / Karoo.
 
@@ -12927,7 +12934,8 @@ def api_export_fit_workout(
     """
     from fastapi.responses import Response
     try:
-        fit_data = build_fit_workout_bytes(session_type, duration_min, name, zwo_file, view=view, cap=cap)
+        fit_data = build_fit_workout_bytes(session_type, duration_min, name, zwo_file, view=view, cap=cap,
+                                           slot_min=slot_min)
     except ImportError as ie:
         return JSONResponse({"error": f"fit_tool not installed. Run: pip install fit_tool. Detail: {ie}"}, 500)
     except FileNotFoundError as fe:

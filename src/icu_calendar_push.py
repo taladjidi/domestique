@@ -9,7 +9,8 @@ Contract highlights (GRILL OUTCOME — LOCKED, /tmp/IP_ICU_PUSH.md):
   - external_id = "domestique:<profile_id>:<day_iso>:<n>" where n is the
     session's index within that day's sessions in stored plan order
     (double-threshold pairs → :0 and :1; singletons → :0).
-  - Format by mode: power → the matched ZWO bytes VERBATIM (ICU forwards ZWO
+  - Format by mode: power → the served ZWO (download_lib.served_zwo_bytes:
+    the matched file fitted to an easy slot, slim/9.1; ICU forwards ZWO
     to Garmin natively, forum #1521); hr target_mode → the HR-target FIT from
     app.build_fit_workout_bytes(view='hr'), guarded: a broken lthr invariant
     skips with reason "needs_lthr" (never a silently-degraded power FIT), and
@@ -212,9 +213,9 @@ def _build_event(s: dict, ext_id: str, pm, classifications: dict,
     is the regression bar (test_icu_push stays green).
 
     The structured workout rides entirely on filename + file_contents_base64
-    (there is NO description/workout_doc field): a power profile ships the ZWO
-    bytes verbatim (ICU forwards ZWO to Garmin natively); an hr profile ships
-    the transcoded HR-target FIT. ``ext_id`` is passed IN (the caller owns the
+    (there is NO description/workout_doc field): a power profile ships the
+    served ZWO (served_zwo_bytes; ICU forwards ZWO to Garmin natively); an hr
+    profile ships the transcoded HR-target FIT, built from the same. ``ext_id`` is passed IN (the caller owns the
     day-relative <n> for planner events / the manual uuid for library pushes).
     """
     import app as _app
@@ -239,7 +240,7 @@ def _build_event(s: dict, ext_id: str, pm, classifications: dict,
             fit_bytes = _app.build_fit_workout_bytes(
                 s.get("session_type") or "z2",
                 int(s.get("duration_min") or 60),
-                name, zwo_file, view="hr")
+                name, zwo_file, view="hr", slot_min=s.get("duration_min"))
         except Exception as e:
             _log.warning("icu push: FIT build failed for %s: %s", zwo_file, e)
             return None, "build_failed"
@@ -249,15 +250,11 @@ def _build_event(s: dict, ext_id: str, pm, classifications: dict,
         contents = fit_bytes
     else:
         try:
-            contents = zwo_path.read_bytes()
-            # task #24: when the profile's measured-capacity cap is ON
-            # (pmax_is_set + power mode + toggle "on"), push the CAPPED file --
-            # the workout the rider should actually do. With the cap OFF (or a
-            # no-op) the bytes remain byte-identical to disk. hr branch above is
-            # untouched (target_mode wins).
-            if _app._capacity_cap_active(pm):
-                contents = _app._cap_zwo_bytes(
-                    contents, Path(zwo_file).name, pm)
+            # The served workout (S1): the file fitted to an easy slot, then
+            # task #24's measured-capacity cap when the profile has it ON. A
+            # library push carries no duration_min and is served unfitted.
+            contents = _app.served_zwo_bytes(
+                zwo_path, s.get("duration_min"), s.get("session_type") or "", pm)
         except OSError:
             return None, "file_missing"
         filename = Path(zwo_file).name

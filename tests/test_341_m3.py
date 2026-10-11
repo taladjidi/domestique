@@ -460,8 +460,9 @@ def test_unadjusted_day_renders_exactly_as_before():
   if (!modalHtml.includes('Today — SWEET SPOT (80min)')) throw new Error('hero must be the stored session: ' + modalHtml.match(/<h2>[^<]*<\\/h2>/));
   if (!modalHtml.includes('Matched library file:')) throw new Error('matched-file line missing');
   if (!modalHtml.includes('data-real="1"')) throw new Error('real segment chart missing');
-  if (!modalHtml.includes("downloadZwoFile('sweet_spot_steady_80.zwo')")) throw new Error('original ZWO download missing');
-  if (!/downloadFIT\\('sweetspot', 80, '[^']*', 'sweet_spot_steady_80\\.zwo'\\)/.test(modalHtml))
+  // slim/9.1: a planned session's downloads carry its slot (80 min, its type).
+  if (!modalHtml.includes("downloadZwoFile('sweet_spot_steady_80.zwo', 80, 'sweetspot')")) throw new Error('original ZWO download missing');
+  if (!/downloadFIT\\('sweetspot', 80, '[^']*', 'sweet_spot_steady_80\\.zwo', null, false, 80\\)/.test(modalHtml))
     throw new Error('FIT must transcode the matched file when unadjusted');
   if (!modalHtml.includes('calPushPlanner')) throw new Error('calendar-push missing when unadjusted');
   if (!modalHtml.includes('Change this workout')) throw new Error('action cluster missing when unadjusted');

@@ -429,3 +429,62 @@ def test_the_stored_session_says_what_is_served(fname, slot, monkeypatch):
     load = facts["tss"]
     assert abs(s.tss_estimate - load) <= (tp._MATCH_BUDGET_TOLERANCE - 1.0) * load + 0.5, \
         (s.tss_estimate, load)
+
+
+# ── S3: the planned-session modal shows the served workout ───────────────────
+
+def test_the_workout_payload_of_a_planned_session_is_the_served_workout(easy):
+    """/api/workout/all/<file> feeds the modal's chart and minutes: with the
+    session's slot it is the fitted workout, without one the file."""
+    r = easy.client.get(f"/api/workout/all/{E160}?slot_min=177&session_type=z2&view=power")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["total_seconds"] == 177 * 60 and d["name"] == "Endurance Steady (177min)"
+    assert sum(s.get("duration", 0) for s in d["segments"]) == 177 * 60
+    d = easy.client.get(f"/api/workout/all/{E160}?view=power").json()
+    assert d["total_seconds"] == 160 * 60
+
+
+def test_the_modal_headline_and_chart_are_the_served_workout():
+    import json
+    import shutil
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    import test_341_m3 as m3
+    src = m3.DASHBOARD.read_text(encoding="utf-8")
+    session = {"day": "__TODAY__", "day_name": "Monday", "session_type": "z2",
+               "content_class": "", "duration_min": 177, "tss_estimate": 110,
+               "zwo_file": E160, "zwo_name": "Endurance Steady (160min)",
+               "display_name": "", "zwo_duration_min": 160,
+               "description": "Z2 177min", "zone_dist": None, "status": "pending"}
+    harness = m3._MODAL_STUBS + m3._fns(
+        src, "_sessTypeLabel", "_adjPlannedNowHtml", "_effectiveTodaySession",
+        "_dayModalModel", "_todayDayModalModel", "_calTodayStr",
+        "_dayModalTitle", "_adjBannerHtml", "_adjOriginalBlockHtml",
+        "dayModalTssStat", "openDayWorkout"
+    ) + """
+const SESSION = %s; SESSION.day = new Date().toLocaleDateString('en-CA');
+(async () => {
+  global.window = {_weekPlanSessions: [SESSION], _targetMode: 'power'};
+  const asked = [];
+  global.fetch = async (url) => {
+    if (url === '/api/settings') return {ok: true, json: async () => ({ftp: 250, lthr: 170})};
+    if (String(url).startsWith('/api/workout/all/')) {
+      asked.push(String(url));
+      const served = String(url).includes('slot_min=177') && String(url).includes('session_type=z2');
+      const s = served ? 10620 : 9600;
+      return {ok: true, json: async () => ({segments: [{type: 'SteadyState', duration: s, power: 155}],
+                                            ftp: 250, total_seconds: s})};
+    }
+    if (String(url).startsWith('/api/')) return {ok: false, json: async () => ({})};
+    throw new Error('unexpected fetch ' + url);
+  };
+  await openDayWorkout(0);
+  const h2 = (modalHtml.match(/<h2>[\\s\\S]*?<\\/h2>/) || [''])[0];
+  if (!h2.includes('(177min)')) throw new Error('headline is not the served length: ' + h2 + ' ' + asked);
+  if (!asked.some(u => u.includes('slot_min=177'))) throw new Error('chart not asked for the served workout: ' + asked);
+  if (!modalHtml.includes('data-real="1"')) throw new Error('real segment chart missing');
+  console.log('OK');
+})().catch(e => { console.error(e && e.stack || e); process.exit(1); });
+""" % json.dumps(session)
+    m3._run_node(harness)

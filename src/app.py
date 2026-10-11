@@ -5907,7 +5907,8 @@ def download_workout_by_id(filename: str, cap: int = Query(0)):
 
 
 @app.get("/api/workout/{category}/{filename}")
-def api_workout_detail(category: str, filename: str, view: str | None = Query(None)):
+def api_workout_detail(category: str, filename: str, view: str | None = Query(None),
+                       slot_min: int | None = Query(None), session_type: str = Query("")):
     """Parse a ZWO file and return segment data for visualization.
 
     ``view`` overrides the athlete's target_mode for THIS response only —
@@ -5915,7 +5916,11 @@ def api_workout_detail(category: str, filename: str, view: str | None = Query(No
     view to an hr-mode user), powering the modal's ⚡/❤ peek toggle. The hr
     view is only honoured when the profile has a sane LTHR (same invariant
     as the settings gate); downloads follow the same param so what you see
-    is what the head unit gets."""
+    is what the head unit gets.
+
+    slim/9.1: a planned session passes its ``slot_min`` and ``session_type``
+    and the payload is the served workout (served_zwo_bytes, fitted to an
+    easy slot), so the modal's chart and minutes are what the rider gets."""
     # Flat layout first, legacy category/file fallback
     path = _safe_path(active_workout_dir(), filename)
     if not path or not path.exists():
@@ -5923,11 +5928,15 @@ def api_workout_detail(category: str, filename: str, view: str | None = Query(No
     if not path or not path.exists():
         return JSONResponse({"error": "not found"}, 404)
     try:
-        tree = ET.parse(path)
+        if slot_min:
+            from profile_manager import ProfileManager
+            root = ET.fromstring(served_zwo_bytes(path, slot_min, session_type,
+                                                  ProfileManager.get()))
+        else:
+            root = ET.parse(path).getroot()
     except ET.ParseError:
         return JSONResponse({"error": "parse error"}, 400)
 
-    root = tree.getroot()
     name = (root.findtext("name") or filename).strip()
     desc = (root.findtext("description") or "").strip()
     workout_el = root.find("workout")

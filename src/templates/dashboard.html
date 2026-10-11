@@ -18731,12 +18731,15 @@ async function openDayWorkout(sessionIdx, day) {
   let blocksSvg = '';
   let segmentChartSvg = '';
   let wuMin = 0, mainMin = 0, cdMin = 0, haveBreakdown = false;
+  let servedMin = 0;
   if (session.zwo_file) {
     try {
-      const segRes = await fetch(`/api/workout/all/${encodeURIComponent(session.zwo_file)}`);
+      // slim/9.1: the served workout (fitted to the slot), not the file.
+      const segRes = await fetch(`/api/workout/all/${encodeURIComponent(session.zwo_file)}?slot_min=${Number(session.duration_min) || 0}&session_type=${encodeURIComponent(type || '')}`);
       if (segRes.ok) {
         const segData = await segRes.json();
         if (segData && segData.segments && segData.segments.length > 0) {
+          if (segData.total_seconds) servedMin = Math.round(segData.total_seconds / 60);
           segmentChartSvg = workoutProfileSVG(segData.segments, segData.ftp || settingsFtp, segData.total_seconds,
             segData.target_mode === 'hr' ? {mode: 'hr', lthr: segData.lthr, maxHr: segData.max_hr, axis: segData.hr_axis} : null);
           // v2.4.0 — explicit warmup budgeting: surface the warmup / main /
@@ -18796,7 +18799,7 @@ async function openDayWorkout(sessionIdx, day) {
   // durations). The matched file is now ONE secondary line; B5 makes the file
   // actually fit the slot so the two agree (and the gap note disappears).
   const sessionDur = Number(session.duration_min) || 0;
-  const fileDur = Number(session.zwo_duration_min) || 0;
+  const fileDur = servedMin || Number(session.zwo_duration_min) || 0;
   const slotLabel = CAL_CONTENT_LABEL[session.content_class]
                  || CAL_SESSION_LABEL[session.session_type]
                  || String(session.session_type || 'Session').toUpperCase();

@@ -90,3 +90,23 @@ Implementer commits after every item, each with a test that fails without it
 `unshare -rn`) and characterization with every golden change read before
 `--bless`. Then an independent evaluator on a sandbox copy of the owner's
 data (S6, C1), then the owner's deploy decision.
+
+## Decisions (2026-10-11)
+
+1. **S3 TSS.** A session's TSS stays on the existing `_restamp` rule (the
+   file's intensity over the slot, within `_MATCH_BUDGET_TOLERANCE` of the
+   fitted workout's load). Stamping the exact fitted load was built and
+   rejected: it moved files and minutes in 57 characterization cases (S5) and
+   destabilised the final step's 4-round loop (test 9.10, the continuous
+   unload week ended at 385 > 0.9 x 415). Measured: 473 of the golden's 474
+   fitted easy sessions are within tolerance (outlier:
+   recovery_steady_37pct_30min in a 33-min recovery slot, 9 vs 11.4); on the
+   owner's plan every fitted session is within 2.3 %.
+2. **S6 amended.** Every EASY event in the window equals its slot to the
+   minute; hard slots serve as before (week of 10-19: 662.9 min, the sprint
+   slot's 43.9-min file).
+3. **S3 surfaces, fix-forward.** The planned-session modal's headline minutes
+   and chart come from the served workout: `/api/workout/all/<file>` takes
+   the session's `slot_min` and `session_type` and returns the
+   `served_zwo_bytes` workout. The "Original workout (ZWO)" button and
+   library filenames stay as written, by design.

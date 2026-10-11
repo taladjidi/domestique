@@ -2103,13 +2103,38 @@ def carried_in(today, rides=None) -> "float | None":
         return None
 
 
+# Wellness readings where 0 means "no reading": nobody has an HRV, a resting
+# HR or a night's sleep of zero, and every reader already treats 0 as missing.
+# (Fitness ctl/atl can be a real 0, so they are not in this set.)
+_WELLNESS_ZERO_IS_EMPTY = frozenset({
+    "hrv", "hrvSDNN", "restingHR", "avgSleepingHR", "sleepSecs", "sleepScore",
+    "sleepQuality", "spO2", "respiration", "weight",
+})
+
+
+def wellness_value(key: str, value):
+    """The value a sync may store for one intervals.icu wellness field, or
+    None when it is empty: missing, null, an empty list/dict/string, or a 0
+    where 0 cannot be a reading. One rule for both stores (the day's JSON file
+    here, the SQLite wellness row in db.sync_wellness): a sync that returns
+    less never erases what was stored (#29)."""
+    if value is None or value == "" or value == [] or value == {}:
+        return None
+    if (key in _WELLNESS_ZERO_IS_EMPTY and isinstance(value, (int, float))
+            and not isinstance(value, bool) and value <= 0):
+        return None
+    return value
+
+
 def persist_wellness(record: dict) -> Path | None:
     """v4.5.0 — write a single ICU wellness record to ``~/.domestique/wellness/``.
 
     The record's ``id`` field is the ISO date (YYYY-MM-DD) — used as the
-    filename. Idempotent: overwrites any existing file with the same date.
-    Returns the written path, or None on a malformed record (no id) or write
-    failure.
+    filename. Merges over the day's existing file: a field the new record
+    leaves empty (``wellness_value``) keeps the stored value, so a sync that
+    stops carrying HRV, resting HR or sleep does not erase them (#29); a field
+    with a value replaces the stored one. Returns the written path, or None on
+    a malformed record (no id) or write failure.
     """
     if not isinstance(record, dict):
         return None
@@ -2121,8 +2146,21 @@ def persist_wellness(record: dict) -> Path | None:
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", rid):
         return None
     path = _wellness_dir() / f"{rid}.json"
+    merged: dict = {}
+    if path.exists():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(prior, dict):
+                merged = prior
+        except (OSError, ValueError):
+            merged = {}
+    for k, v in record.items():
+        v = wellness_value(k, v)
+        if v is not None:
+            merged[k] = v
+    merged["id"] = rid
     try:
-        path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     except OSError as e:
         log.warning(f"persist_wellness({rid}) failed: {e}")
         return None

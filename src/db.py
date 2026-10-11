@@ -33,6 +33,7 @@ for _env_candidate in [_USER_DATA / ".env", Path(__file__).parent / ".env",
 
 from training import fetch_wellness, fetch_activities, ICUCredentialsMissing, cycling_sport_info
 from ride_storage import is_icu_stub  # v3.11.6 — one stub rule for every reader
+from ride_storage import wellness_value as _wv  # one empty-value rule, both wellness stores
 
 log = logging.getLogger(__name__)
 
@@ -453,7 +454,10 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                     # through an HRV-less record stays in raw_json, so
                     # _manual_hrv_sql still reads it as ICU's -- otherwise a
                     # purge parked the previous athlete's HRV as "typed"
-                    # (review of 2026-09-23).
+                    # (review of 2026-09-23). "Omits" is excluded.hrv IS NULL,
+                    # the parameter wellness_value emptied: a record carrying
+                    # hrv 0 left 0 in raw_json beside the kept HRV, and the
+                    # guard then read ICU's own reading as typed and froze it.
                     """INSERT INTO wellness
                        (date, ctl, atl, hrv, rhr, sleep_secs, sleep_score, eftp, raw_json)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -468,20 +472,22 @@ def sync_wellness(days: int = 90, _snapshot=None) -> int:
                            sleep_score = COALESCE(excluded.sleep_score, wellness.sleep_score),
                            eftp        = COALESCE(excluded.eftp, wellness.eftp),
                            raw_json    = CASE
-                               WHEN json_extract(excluded.raw_json, '$.hrv') IS NULL
+                               WHEN excluded.hrv IS NULL
                                     AND wellness.hrv IS NOT NULL AND NOT {manual}
                                THEN json_set(excluded.raw_json, '$.hrv', wellness.hrv)
                                ELSE excluded.raw_json END""".format(
                         manual=_manual_hrv_sql("wellness.")),
                     (
                         dt,
-                        w.get("ctl"),
-                        w.get("atl"),
-                        w.get("hrv"),
-                        w.get("restingHR"),
-                        w.get("sleepSecs"),
-                        w.get("sleepScore"),
-                        eftp,
+                        # Empty is NULL, so COALESCE keeps the stored value:
+                        # an hrv/restingHR/sleep of 0 is no reading either.
+                        _wv("ctl", w.get("ctl")),
+                        _wv("atl", w.get("atl")),
+                        _wv("hrv", w.get("hrv")),
+                        _wv("restingHR", w.get("restingHR")),
+                        _wv("sleepSecs", w.get("sleepSecs")),
+                        _wv("sleepScore", w.get("sleepScore")),
+                        _wv("eftp", eftp),
                         json.dumps(w),
                     ),
                 )

@@ -9919,6 +9919,34 @@ _SIGNAL_OF_METHOD = {"time in zone": "time_in_zone", "hybrid (HR)": "hybrid_hr",
                      "HR time in zone": "hr_time_in_zone", "average HR": "hr", "TRIMP": "trimp"}
 
 
+def _hr_zone_maps() -> dict:
+    """{ride key: zones.hr_zone_map} from the HR zone boundaries and LTHR
+    intervals.icu sent with each activity (icu_hr_zones, lthr), as the
+    activities table keeps them in raw_json: the ride record does not carry
+    them. A ride not found here is counted on Friel's seven zones, the
+    intervals.icu default (zones.FRIEL7_HR_ZONE_MAP)."""
+    def _fill():
+        out: dict = {}
+        try:
+            rows = db.get_db().execute(
+                "SELECT id, raw_json FROM activities WHERE raw_json LIKE '%icu_hr_zones%'").fetchall()
+        except Exception:  # noqa: BLE001 -- no table, no maps: the default scale
+            return out
+        for row in rows:
+            try:
+                raw = json.loads(row["raw_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            m = _zones_mod.hr_zone_map(raw.get("icu_hr_zones"), raw.get("lthr"))
+            if m:
+                out[_ride_key(str(row["id"]))] = m
+        return out
+    try:
+        return cached("hr_zone_maps", _fill) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _ride_count(ride: dict, goal, power_tiz: "dict | None" = None,
                 minutes: "float | None" = None):
     """(minutes per zone, method) of a ride: the one count the week summary,
@@ -9930,7 +9958,8 @@ def _ride_count(ride: dict, goal, power_tiz: "dict | None" = None,
     when nothing says how hard it was."""
     import week_view as _wv
     res = _wv.ride_minutes(power_tiz if power_tiz is not None else ride.get("time_in_zone"),
-                           ride.get("hr_time_in_zone"), goal)
+                           ride.get("hr_time_in_zone"), goal,
+                           _hr_zone_maps().get(_ride_key(ride)))
     if res:
         return res
     mins = float(minutes if minutes is not None else ride_storage.ride_moving_s(ride) / 60.0)

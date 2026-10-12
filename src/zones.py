@@ -197,26 +197,57 @@ def tiz_minutes(workout) -> dict[str, float]:
     return out
 
 
-def hr_hybrid_minutes(hr_tiz: "dict | None", goal: "int | None") -> dict[str, float]:
+# intervals.icu's default HR zones are Friel's seven, anchored on LTHR (Z1-Z2
+# below 90 %, Z3-Z4 to 99 %, Z5a-c from LTHR). Used when a ride's own zone
+# boundaries are not known: an athlete with other zones in intervals.icu would
+# have the zone 2 / zone 3 split of an HR-only ride misplaced (the zone 1 seam
+# is the same for both of Friel's scales).
+FRIEL7_HR_ZONE_MAP = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 3}
+
+
+def hr_zone_map(tops: "list | None", lthr: "float | None") -> "dict[int, int] | None":
+    """The three zone of each of a ride's HR zones, from the zones' upper
+    bounds in bpm (intervals.icu's icu_hr_zones) and LTHR. A zone goes where
+    its midpoint lies: below 90 % LTHR zone 1 (the LT1 proxy, Friel's Z1-Z2),
+    below LTHR zone 2, from LTHR (LT2) zone 3. Midpoints rather than edges,
+    because the scales round: Friel's Z3 starts at 157 bpm for an LTHR of
+    175, 89.7 %. None when either is missing."""
+    try:
+        tops = [float(t) for t in tops or []]
+        lthr = float(lthr or 0)
+    except (TypeError, ValueError):
+        return None
+    if not tops or lthr <= 0:
+        return None
+    out, low = {}, 0.0
+    for i, top in enumerate(tops[:7], start=1):
+        mid = (low + top) / 2
+        out[i] = 1 if mid < 0.90 * lthr else 2 if mid < lthr else 3
+        low = top + 1
+    return out
+
+
+def hr_hybrid_minutes(hr_tiz: "dict | None", goal: "int | None",
+                      zone_map: "dict | None" = None) -> dict[str, float]:
     """Minutes per zone of a ride known by heart rate only (contract slim/9.3,
     amendment 2): the hybrid session-goal / time-in-zone count (Sylta,
     Tonnessen and Seiler 2014), which exists to correct HR's lag. ``hr_tiz``
-    is the ride's HR time in zone in seconds, z1..z7 on intervals.icu's
-    LTHR-anchored zones (Friel: Z1-Z2 below 90 % LTHR, Z3-Z4 to LTHR, Z5a-c
-    above). Matched by completion to a session with a goal zone, the time
-    below the zone 1/2 seam (HR Z1-Z2) is zone 1 and the rest counts to that
-    goal zone 2 or 3; unmatched, or matched to an easy session (goal 1 or
-    None), plain HR time in zone, folded at the same seams as power (zone 3
-    above LT2): the hybrid credits the work bouts of a hard goal, and an easy
-    ride's surges are not reclassified (contract I1)."""
-    h = {k: float((hr_tiz or {}).get(k) or 0) for k in ("z1", "z2", "z3", "z4", "z5", "z6", "z7")}
-    z1 = h["z1"] + h["z2"]
-    rest = sum(h.values()) - z1
+    is the ride's HR time in zone in seconds, z1..z7 on the athlete's
+    intervals.icu HR zones; ``zone_map`` (hr_zone_map) places each on the
+    three zones, FRIEL7_HR_ZONE_MAP when the ride's zones are not known.
+    Matched by completion to a session of goal zone 2 or 3, the time in zone
+    1 counts to zone 1 and the rest to that goal zone; unmatched, or matched
+    to an easy session (goal 1 or None), plain HR time in zone: the hybrid
+    credits the work bouts of a hard goal, and an easy ride's surges are not
+    reclassified (contract I1)."""
+    zmap = zone_map or FRIEL7_HR_ZONE_MAP
+    out = {"z1": 0.0, "z2": 0.0, "z3": 0.0}
+    for i in range(1, 8):
+        sec = float((hr_tiz or {}).get(f"z{i}") or 0)
+        if sec:
+            out[f"z{zmap.get(i, 3)}"] += sec
     if goal in (2, 3):
-        out = {"z1": z1, "z2": 0.0, "z3": 0.0}
-        out[f"z{goal}"] += rest
-    else:
-        out = {"z1": z1, "z2": h["z3"] + h["z4"], "z3": h["z5"] + h["z6"] + h["z7"]}
+        out = {"z1": out["z1"], "z2": 0.0, "z3": 0.0} | {f"z{goal}": out["z2"] + out["z3"]}
     return {k: v / 60.0 for k, v in out.items()}
 
 
@@ -378,4 +409,4 @@ def zone_distribution(
 
 __all__ = ["Zone", "power_zones", "hr_zones",
            "power_zone_at", "hr_zone_at", "zone_distribution",
-           "estimated_hr_max", "goal_zone", "tiz_minutes", "hr_hybrid_minutes"]
+           "estimated_hr_max", "goal_zone", "tiz_minutes", "hr_hybrid_minutes", "hr_zone_map"]

@@ -233,3 +233,26 @@ class TestAnHrOnlyRideTakesAGoalOnlyThroughItsMatch(_Week):
         cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
         for z in wv.ZONES:
             self.assertAlmostEqual(cw[f"actual_{z}_min"], want[z], delta=0.6)
+
+
+def test_a_rides_hr_zones_come_from_its_icu_activity():
+    """_ride_count reads the ride's HR zone boundaries from the activity
+    intervals.icu sent (icu_hr_zones, lthr in raw_json)."""
+    import json as _json
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE activities (id TEXT PRIMARY KEY, raw_json TEXT)")
+    conn.execute("INSERT INTO activities VALUES (?, ?)",
+                 ("i5", _json.dumps({"icu_hr_zones": [148, 165, 174, 183, 193], "lthr": 175})))
+    ride = {"ride_id": "icu_i5", "time_in_zone": {},
+            "hr_time_in_zone": {"z1": 600, "z2": 600, "z3": 600, "z4": 600, "z5": 600}}
+    app_module.clear_cache()
+    try:
+        with patch.object(app_module.db, "get_db", return_value=conn):
+            m, how = app_module._ride_count(ride, None)
+    finally:
+        app_module.clear_cache()
+    assert how == "HR time in zone"
+    # its z4 (175-183 bpm) is above LTHR: zone 3 (Friel's seven would say 20/20/10)
+    assert {k: round(v) for k, v in m.items()} == {"zone1": 20, "zone2": 10, "zone3": 20}

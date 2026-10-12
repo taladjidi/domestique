@@ -17555,7 +17555,7 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
     if (unclass > 0) {
       legendBits.push(`<span title="Activities without HR or TRIMP signal — not counted in zone breakdown."><span class="leg-dot" style="background:var(--text3);"></span>? ${unclass}m</span>`);
     }
-    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Power counts by time in zone, every second; a ride with heart rate only by the hybrid (its work to the matched session's goal zone); a session whose file cannot be read by its type.">planned: ${esc(s.zone_method || 'time in zone')}; ridden: ${esc(s.zone_method_ridden || 'time in zone')}</span>`);
+    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Power counts by time in zone, every second; a ride with heart rate only by the hybrid (its work to the matched session's goal zone); a session whose file cannot be read by its type. Heart rate is read on the ride's own intervals.icu zones, or on Friel's seven (zone 3 from LTHR) when they are not known.">planned: ${esc(s.zone_method || 'time in zone')}; ridden: ${esc(s.zone_method_ridden || 'time in zone')}</span>`);
 
     // Planned bar — dashed border outline + 70% opacity to read as a target.
     const plannedBar = totalPlan > 0
@@ -20644,7 +20644,7 @@ function renderOnTrackBar(data) {
         <div style="font-size:10px;color:var(--text3);">${esc(nextPhaseLbl)}</div>
       </div>
     </div>
-    <div class="ontrack-rails" title="Minutes per zone: power by time in zone, every second; heart-rate-only rides by the hybrid; a session without a readable file by its type">
+    <div class="ontrack-rails" title="Minutes per zone: power by time in zone, every second; heart-rate-only rides by the hybrid, on the ride's own intervals.icu HR zones or Friel's seven when they are not known; a session without a readable file by its type">
       ${railZ12}
       ${railZ34}
       ${railZ5}

@@ -107,3 +107,21 @@ def test_a_matched_hr_only_ride_for_each_goal_zone(goal, want, method):
     m, how = week_view.ride_minutes({}, HR, goal)
     assert how == method
     assert m == pytest.approx({f"zone{k[1]}": v for k, v in want.items()})
+
+
+ICU_7 = [140, 156, 163, 174, 179, 184, 193]      # the owner's icu_hr_zones, LTHR 175
+
+
+def test_hr_zone_map_from_the_athletes_own_zones():
+    """Re-evaluation of 33b519c2: the HR scale was assumed to be Friel's
+    seven. A ride's own zone boundaries (icu_hr_zones) and LTHR place each
+    zone by its midpoint: zone 1 below 90 % LTHR, zone 3 from LTHR."""
+    assert zones.hr_zone_map(ICU_7, 175) == zones.FRIEL7_HR_ZONE_MAP   # the owner: unchanged
+    five = [148, 165, 174, 183, 193]          # an athlete with five zones
+    m5 = zones.hr_zone_map(five, 175)
+    assert m5 == {1: 1, 2: 1, 3: 2, 4: 3, 5: 3}
+    hr = {"z1": 600, "z2": 600, "z3": 600, "z4": 600, "z5": 600}
+    # on its own scale, its z4 is above LTHR: zone 3, not Friel's zone 2
+    assert zones.hr_hybrid_minutes(hr, None, m5) == pytest.approx({"z1": 20, "z2": 10, "z3": 20})
+    assert zones.hr_hybrid_minutes(hr, None) == pytest.approx({"z1": 20, "z2": 20, "z3": 10})
+    assert zones.hr_zone_map(None, 175) is None and zones.hr_zone_map(ICU_7, None) is None

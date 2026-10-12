@@ -165,7 +165,8 @@ def _blocks(workout_el):
     """(%FTP, seconds, kind) for every slice of the file, read the way
     zwo_parse.scan_zwo reads it (its defaults, its 1-s ramp slices), so the
     time in zone here is the planner's to the second. kind is "easy" for a
-    Warmup or Cooldown, "off" for an IntervalsT recovery leg, else "block"."""
+    Warmup or Cooldown, else "block" (an IntervalsT leg is a block like any
+    other: its power, not its element, says whether it is work)."""
     for seg in workout_el if workout_el is not None else ():
         tag = seg.tag
         if tag in ("Warmup", "Cooldown", "Ramp"):
@@ -183,7 +184,7 @@ def _blocks(workout_el):
             yield (float(seg.get("OnPower", 1.0)) * 100,
                    reps * int(float(seg.get("OnDuration", 0))), "block")
             yield (float(seg.get("OffPower", 0.5)) * 100,
-                   reps * int(float(seg.get("OffDuration", 0))), "off")
+                   reps * int(float(seg.get("OffDuration", 0))), "block")
         elif tag == "FreeRide":
             yield 65.0, int(float(seg.get("Duration", 0))), "block"
 
@@ -201,9 +202,11 @@ def tiz_minutes(workout) -> dict[str, float]:
 def hybrid_minutes(workout, goal: "int | None") -> dict[str, float]:
     """Minutes per zone of a planned workout (the served bytes) by the hybrid
     session-goal / time-in-zone method (Sylta, Tonnessen and Seiler 2014):
-    warm-up, cool-down and every block below 76% FTP count to zone 1, an
-    IntervalsT recovery leg to zone 1 (active) or not at all (power 0), every
-    other block at or above 76% FTP (a work bout) to the session's goal zone.
+    warm-up, cool-down and every block or leg below 76% FTP count to zone 1
+    (an IntervalsT off-leg below 76% is active recovery; power 0 is passive
+    and not counted); every block or leg at or above 76% FTP is a work bout
+    and counts to the session's goal zone, whatever its element (the unders
+    of an over-under at 90-95% are work: contract amendment 2026-10-12).
     With goal zone 1 or None the file is counted by time in zone: an easy
     ride's surges are not reclassified."""
     if goal not in (2, 3):

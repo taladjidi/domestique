@@ -67,10 +67,16 @@ def test_hybrid_does_not_count_passive_recovery():
     assert sum(t.values()) - sum(h.values()) == pytest.approx(2 + 2)
 
 
-def test_hybrid_off_legs_are_zone_1_even_when_hard():
-    # an IntervalsT recovery leg is counted to zone 1 (I1), whatever its power
+def test_hybrid_an_off_leg_at_or_above_76_percent_is_work():
+    # the unders of an over-under (0.90 FTP) are work bouts: goal zone, not
+    # recovery (contract amendment 2026-10-12)
     b = _zwo('<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.90"/>')
-    assert zones.hybrid_minutes(b, 2) == pytest.approx({"z1": 3, "z2": 3, "z3": 0})
+    assert zones.hybrid_minutes(b, 2) == pytest.approx({"z1": 0, "z2": 6, "z3": 0})
+    # at exactly 76% too; below it the leg is active recovery
+    b = _zwo('<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.76"/>')
+    assert zones.hybrid_minutes(b, 3) == pytest.approx({"z1": 0, "z2": 0, "z3": 6})
+    b = _zwo('<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.75"/>')
+    assert zones.hybrid_minutes(b, 3) == pytest.approx({"z1": 3, "z2": 0, "z3": 3})
 
 
 def test_hybrid_ramp_is_split_at_76_percent():

@@ -98,8 +98,8 @@ def report_library(rows) -> str:
                    f"uncounted (power 0) {uncounted:.0f} min")
         out.append("")
     n_off = sum(1 for r in rows if r["hard_off_legs"])
-    out.append(f"Files with an IntervalsT recovery leg at or above 76% FTP (counted to zone 1 "
-               f"by the contract's I1 rule): {n_off}")
+    out.append(f"Files with an IntervalsT off-leg at or above 76% FTP (a work bout, counted "
+               f"to the goal zone since the 2026-10-12 amendment): {n_off}")
     out.append("")
     return "\n".join(out)
 

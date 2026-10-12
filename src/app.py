@@ -6275,6 +6275,26 @@ def api_picker(subjective: float = Query(7), duration: int = Query(75)):
         status = "UNKNOWN"
         advice = "Readiness unknown: today's planned session family"
         types = _PICKER_TYPES.get(_today_planned_type()) or ["recovery", "endurance"]
+    # Map readiness to session type + fallback types. Grill
+    # PICKER-DEAD-TYPE-KEYWORDS: session_type is substring-matched against
+    # the library's Protocol values — "z2"/"helgerud"/"rønnestad"/"seiler"
+    # match ZERO of the 17 Protocol strings, so the ≥80 pool was vo2-only
+    # and the 60-69 pool endurance-only. Every keyword below matches a real
+    # Protocol family (the Helgerud/Rønnestad-style sessions live inside
+    # VO2max/Over-Unders protocols anyway).
+    elif score >= 80:
+        types = ["vo2", "over-under", "anaerobic"]
+    elif score >= 70:
+        types = ["sweet spot", "threshold", "endurance"]
+    elif score >= 60:
+        types = ["tempo", "endurance"]
+    elif score >= 40:
+        types = ["endurance", "recovery"]
+    else:
+        # REST-level readiness: still show 3 light suggestions rather
+        # than an empty card (Bug D.2).
+        types = ["recovery", "endurance"]
+
     # Search with multiple type keywords for better matches. Fix D.1:
     # pass tags=None explicitly — api_workouts' Query() default object
     # is truthy and crashes .split().

@@ -204,3 +204,17 @@ def test_local_wellness_reads_the_sqlite_table_too():
          patch.object(app_module.db, "get_db", return_value=conn):
         m = app_module._local_sleep_metrics(days=14)
     assert m.get("ln_rmssd_7d") is not None and m.get("sleep_h") == 7.5 and m.get("rhr_today") == 45
+
+
+def test_picker_with_a_known_readiness_keeps_its_ladder():
+    """A computed score still picks by the readiness ladder (R1 only changed
+    the unknown case; its first cut dropped the ladder, and the picker
+    raised for any known score)."""
+    def _score(s):
+        return lambda *a, **k: {"score": s, "status": "GOOD", "advice": "", "missing": []}
+    client = TestClient(app_module.app)
+    for s, first in ((85, "vo2"), (72, "sweet spot"), (65, "tempo"), (45, "endurance"), (20, "recovery")):
+        app_module.clear_cache()
+        with patch("app.compute_readiness", side_effect=_score(s)):
+            d = client.get("/api/picker", params={"subjective": 7, "duration": 75}).json()
+        assert (d["readiness"], d["type"]) == (s, first), d

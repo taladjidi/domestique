@@ -9103,9 +9103,12 @@ def _classify_exposure(activity: dict, lthr: float) -> str:
     """The zone ("zone1" | "zone2" | "zone3") of an activity with no power
     time in zone, from its average HR or TRIMP per minute.
 
-    Preferred signal: average HR relative to LTHR, on the three zones folded
-    from the Friel HR zones (zones._HR_FRACS: HR Z1-Z2 below 90% LTHR is
-    zone 1, Z3-Z4 to 102% zone 2, Z5 zone 3). Until slim/9.3 it had a
+    Preferred signal: average HR relative to LTHR. Zone 1 is below 90% LTHR
+    (Friel's Z1-Z2, zones._HR_FRACS); zone 3 starts at LTHR itself: LTHR is
+    the HR at LT2, and the three zones put zone 3 above LT2 (owner's D1).
+    Friel's 5-zone table starts its Z5 at 103% only because it folds his
+    5a (100-102% LTHR) into Z4; no source places LT2 at 103%. Until slim/9.3
+    it had a
     four-band table of its own (75/88/96% LTHR), and a ride's measured time
     in zone went through a second one (_exposure_split_from_tiz).
     Fallback: TRIMP per minute (rough intensity proxy).
@@ -9127,7 +9130,7 @@ def _classify_exposure(activity: dict, lthr: float) -> str:
         ratio = avg_hr_val / lthr_val
         if ratio < _zones_mod._HR_FRACS[2][0]:
             return "zone1"
-        if ratio < _zones_mod._HR_FRACS[4][0]:
+        if ratio < 1.0:                 # LTHR is LT2: zone 3 above it
             return "zone2"
         return "zone3"
 

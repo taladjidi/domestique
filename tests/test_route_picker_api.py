@@ -878,20 +878,21 @@ def test_week_summary_planned_day_accounting_invariant(client):
 
 def test_classify_exposure_hr_based_bands():
     """With both avg_hr and lthr, the HR ratio picks the zone: the three
-    zones folded from the Friel HR zones (slim/9.3), zone 1 below 90% LTHR,
-    zone 2 to 102%, zone 3 above."""
+    zones (slim/9.3): zone 1 below 90% LTHR (Friel Z1-Z2), zone 3 from LTHR,
+    which is the HR at LT2."""
     from app import _classify_exposure
 
     lthr = 175
     assert _classify_exposure({"avg_hr": 120}, lthr) == "zone1"     # 0.69
     assert _classify_exposure({"avg_hr": 150}, lthr) == "zone1"     # 0.86
     assert _classify_exposure({"avg_hr": 160}, lthr) == "zone2"     # 0.91
-    assert _classify_exposure({"avg_hr": 175}, lthr) == "zone2"     # 1.00
-    assert _classify_exposure({"avg_hr": 182}, lthr) == "zone3"     # 1.04
+    assert _classify_exposure({"avg_hr": 172}, lthr) == "zone2"     # 0.98
+    assert _classify_exposure({"avg_hr": 178}, lthr) == "zone3"     # 1.02
     # Exact boundary checks
     assert _classify_exposure({"avg_hr": 0.899 * lthr}, lthr) == "zone1"
     assert _classify_exposure({"avg_hr": 0.90 * lthr}, lthr) == "zone2"
-    assert _classify_exposure({"avg_hr": 1.03 * lthr}, lthr) == "zone3"
+    assert _classify_exposure({"avg_hr": 0.999 * lthr}, lthr) == "zone2"
+    assert _classify_exposure({"avg_hr": 1.00 * lthr}, lthr) == "zone3"
 
 
 def test_classify_exposure_trimp_fallback():

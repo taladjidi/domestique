@@ -9099,6 +9099,23 @@ def _guarded_check_and_auto_apply_eftp(wellness_series):
 # WEEK SUMMARY API (for dashboard week tile)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# TRIMP per minute at which an activity with no HR average and no power is
+# counted in zone 2 / zone 3. UNCITED app values: the old four-band table's
+# 0.6 / 1.2 / 2.0 cuts, kept as they were (1.2 was its mid/high seam, 2.0 its
+# anaerobic one); no source gives TRIMP-per-minute zone seams. What they mean,
+# if intervals.icu's trimp is Banister's (TRIMP/min = HRr x 0.64 e^(1.92 HRr),
+# male weighting): 0.6 / 1.2 / 2.0 per min sit at about 42 / 60 / 75 % of HR
+# reserve. The old "mid" band (0.6-1.2, about 42-60 % HRR) now counts to zone
+# 1, which agrees with the app's own HRR zones (zones._HRR_FRACS: Z1-Z2 below
+# 70 % HRR, the analogue of Coggan Z1-Z2 that THREE_ZONE_FROM_COGGAN folds
+# into zone 1). The seams themselves sit LOWER than that fold would put them
+# (70 % and 90 % HRR are about 1.72 and 3.24 per min): an activity known only
+# by TRIMP reads harder here than its HR would. Left for the owner (slim/9.3
+# evaluation, SF5).
+_TRIMP_ZONE2_PER_MIN = 1.2
+_TRIMP_ZONE3_PER_MIN = 2.0
+
+
 def _classify_exposure(activity: dict, lthr: float) -> str:
     """The zone ("zone1" | "zone2" | "zone3") of an activity with no power
     time in zone, from its average HR or TRIMP per minute.
@@ -9144,9 +9161,9 @@ def _classify_exposure(activity: dict, lthr: float) -> str:
 
     if trimp_val is not None and dur_min and dur_min > 0:
         tpm = trimp_val / dur_min
-        if tpm < 1.2:
+        if tpm < _TRIMP_ZONE2_PER_MIN:
             return "zone1"
-        if tpm < 2.0:
+        if tpm < _TRIMP_ZONE3_PER_MIN:
             return "zone2"
         return "zone3"
 

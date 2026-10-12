@@ -1249,3 +1249,20 @@ def test_lap_route_hidden_cruise_47_covers_full_distance(client):
     assert any(s["end_km"] > 8.15 for s in segs), (
         "no segments beyond first lap — tiling did not fire"
     )
+
+
+def test_trimp_cuts_are_named_and_their_meaning_holds():
+    """SF5 (evaluation of 2382cfd1): the TRIMP-per-minute seams are uncited
+    app values, named and documented in app.py. What the comment claims is
+    checked here: by Banister's per-minute TRIMP (male weighting) the zone 2
+    seam sits near 60 % HR reserve, the zone 3 seam near 75 %, and the old
+    "mid" band (0.6-1.2/min) lies below the app's HRR zone-1 fold (70 %)."""
+    import math
+    import app
+    import zones
+    banister = lambda hrr: hrr * 0.64 * math.exp(1.92 * hrr)  # noqa: E731
+    assert (app._TRIMP_ZONE2_PER_MIN, app._TRIMP_ZONE3_PER_MIN) == (1.2, 2.0)
+    assert abs(banister(0.60) - app._TRIMP_ZONE2_PER_MIN) < 0.03
+    assert abs(banister(0.75) - app._TRIMP_ZONE3_PER_MIN) < 0.05
+    zone1_top_hrr = zones._HRR_FRACS[1][1]          # top of HRR Z2: 0.70
+    assert banister(zone1_top_hrr) > app._TRIMP_ZONE2_PER_MIN

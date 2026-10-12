@@ -256,3 +256,12 @@ def test_a_rides_hr_zones_come_from_its_icu_activity():
     assert how == "HR time in zone"
     # its z4 (175-183 bpm) is above LTHR: zone 3 (Friel's seven would say 20/20/10)
     assert {k: round(v) for k, v in m.items()} == {"zone1": 20, "zone2": 10, "zone3": 20}
+
+
+def test_the_method_tooltips_say_only_hard_matched_hr_rides_use_the_hybrid():
+    """Re-evaluation of 33b519c2: the rollup tooltip said HR-only rides are
+    counted "by the hybrid"; only those matched to a zone 2/3 session are."""
+    assert ("a ride with heart rate only by the hybrid only when its completion match makes it "
+            "a zone 2 or zone 3 session") in DASH
+    assert "heart-rate-only rides matched to a zone 2 or zone 3 session by the hybrid" in DASH
+    assert "a ride with heart rate only by the hybrid (its work to the matched" not in DASH

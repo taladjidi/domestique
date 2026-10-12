@@ -16940,7 +16940,13 @@ def adjust_today_session(
             description=f"Z2 (DFA α1 cap: mean {dfa_cap.get('mean_alpha1')} < 0.5)",
             adapted=True,
         ), f"DFA α1 {dfa_cap.get('mean_alpha1')} < 0.5 → capped at Z2"
-    score = float(readiness.get("score") or 50)
+    # A readiness that could not be computed is unknown, not 50 (contract
+    # slim/9.3, R1, owner's D3): the score rules below are skipped and the
+    # gates with data (soreness, Hooper, 48 h, the HRV streak on real HRV,
+    # DFA above) still decide. 50 used to fall in the 40-59 rule, which made
+    # every hard session Z2 on a morning with no wellness.
+    _raw_score = readiness.get("score")
+    score = None if _raw_score is None else float(_raw_score)
 
     # ── v4.6.6 INJURY-GATES — priority: G5 > G6 > G2 > HRV/score > G1 > G7 ──
     if daily_log_today is None:
@@ -17059,7 +17065,7 @@ def adjust_today_session(
         return planned, ""
 
     # Readiness-based adjustments
-    if score < 40:
+    if score is not None and score < 40:
         return PlannedSession(
             day=planned.day, day_name=planned.day_name,
             session_type="rest", duration_min=0, tss_estimate=0,
@@ -17067,7 +17073,7 @@ def adjust_today_session(
             adapted=True, rest_reason="readiness",
         ), f"Readiness {score:.0f} < 40 → forced rest"
 
-    if score < 60 and planned.session_type in ("vo2max", "threshold", "overunder", "sweetspot", "tempo", "long_z2", "ftp_test"):
+    if score is not None and score < 60 and planned.session_type in ("vo2max", "threshold", "overunder", "sweetspot", "tempo", "long_z2", "ftp_test"):
         return PlannedSession(
             day=planned.day, day_name=planned.day_name,
             session_type="z2", duration_min=planned.duration_min,

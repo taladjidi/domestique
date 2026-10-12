@@ -88,9 +88,9 @@ class TestLocalTrainingLoadFallback(unittest.TestCase):
             self.assertEqual((t.get("source"), t.get("ctl")), ("icu_cached", 40.0))
 
     def test_readiness_data_status_field_set_when_insufficient(self):
-        """§B6: readiness payload carries ``data_status`` and a numeric score
-        when a training load is known (here ICU's stored values), instead of
-        raw None."""
+        """§B6: readiness payload carries ``data_status``. A score that could
+        not be computed stays None even when a training load is known (here
+        ICU's stored values): slim/9.3 R1/R2 retired the neutral 50."""
         self._store(40.0, 30.0)
         with patch.object(app_module, "get_today_metrics", return_value={}), \
              patch.object(app_module, "get_sleep_metrics", return_value={}), \
@@ -98,7 +98,9 @@ class TestLocalTrainingLoadFallback(unittest.TestCase):
             r = self.client.get("/api/readiness").json()
             readiness = r.get("readiness") or {}
             self.assertEqual(readiness.get("data_status"), "insufficient_data")
-            self.assertEqual(readiness.get("score"), 50)
+            self.assertIsNone(readiness.get("score"))
+            self.assertIsNone(r.get("score_0_100"))
+            self.assertIsNone(r.get("score_0_10"))
 
     def test_today_session_score_uses_unified_helper(self):
         """§B6: /api/today-session uses the shared helper instead of a
@@ -131,8 +133,9 @@ class TestLocalTrainingLoadFallback(unittest.TestCase):
              patch("ride_storage.compute_local_ctl", return_value=None):
             data = self.client.get("/api/today-session").json()
             self.assertIsNotNone(data.get("planned"))
-            # Final-fallback path: score=50 retained when no local data.
-            self.assertEqual(data.get("readiness"), 50)
+            # slim/9.3 R1/R2: no data is unknown, never a neutral 50.
+            self.assertIsNone(data.get("readiness"))
+            self.assertEqual(data["readiness_detail"]["data_status"], "insufficient_data")
 
 
 if __name__ == "__main__":

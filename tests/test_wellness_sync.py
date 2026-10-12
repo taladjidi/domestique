@@ -166,9 +166,13 @@ class TestReadinessUsesLocalWellnessWhenIcuEmpty(_WellnessDirBase):
         sleep = data.get("sleep") or {}
         self.assertIsNotNone(sleep.get("rhr_today"),
                              f"rhr_today is None despite local wellness: {sleep}")
-        # data_status should signal local_wellness path
+        # data_status signals the local_wellness path when a score was
+        # computed from it; a score that could not be computed (here sleep
+        # alone) is "insufficient_data" with what is missing (slim/9.3 R2).
         readiness = data.get("readiness") or {}
-        self.assertEqual(readiness.get("data_status"), "local_wellness", readiness)
+        want = "insufficient_data" if readiness.get("score") is None else "local_wellness"
+        self.assertEqual(readiness.get("data_status"), want, readiness)
+        self.assertTrue(readiness.get("missing"), readiness)
 
 
 class TestComputeLocalAtl(unittest.TestCase):

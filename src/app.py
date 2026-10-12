@@ -3795,27 +3795,74 @@ def _merge_training_load(icu_t: dict | None) -> dict:
     return out
 
 
-def _readiness_with_data_status(r: dict, has_local_load: bool) -> dict:
+def _readiness_with_data_status(r: dict) -> dict:
     """v4.4.2 §B6 — unify the readiness default shape across endpoints.
 
     Adds a top-level ``data_status`` field to the readiness dict
-    ("ok" | "insufficient_data" | "no_data") and replaces the score-None
-    with a numeric neutral default (50) when local rides exist (so the
-    frontpage gauges aren't blank).
+    ("ok" | "insufficient_data"). A score that could not be computed stays
+    None (contract slim/9.3, R1/R2): until 2026-10-12 it became a neutral 50
+    whenever a training load was known, and adjust_today_session's 40-59 rule
+    then turned every hard session into Z2 on a day with no wellness at all.
+    ``missing`` (from compute_readiness) names what was not there.
 
     Mutates ``r`` in place AND returns it for chaining.
     """
     status = r.get("status") or "OK"
-    if status == "INSUFFICIENT_DATA":
+    if status == "INSUFFICIENT_DATA" or r.get("score") is None:
         r["data_status"] = "insufficient_data"
-        if r.get("score") is None:
-            # If local rides exist (so frontpage has something to base a
-            # neutral default on), fall back to 50. Otherwise leave None
-            # so callers know there's truly no data.
-            r["score"] = 50 if has_local_load else None
+        r["score"] = None
     else:
         r["data_status"] = "ok"
     return r
+
+
+def _readiness_today(subjective: "float | None" = None):
+    """THE readiness for today (contract slim/9.3, R3): /api/readiness and
+    /api/today-session both read it, so the gauge and the adjustment cannot
+    read different data. Returns (readiness, sleep, training, merged_load).
+
+    Sleep, HRV and RHR come from intervals.icu, else from the local wellness
+    store (v4.5.0); the soreness / Hooper log feeds the subjective channel
+    when the caller gives none. Until 2026-10-12 only /api/readiness fell
+    back to the local store, so the two endpoints could disagree on one
+    morning's data."""
+    training = cached("training", get_today_metrics)
+    sleep = cached("sleep", get_sleep_metrics)
+    local_wellness = False
+    if not sleep:
+        sleep = _local_sleep_metrics(days=14)
+        local_wellness = bool(sleep)
+    # Auto-feed soreness/Hooper from morning log into subjective score.
+    # v4.6.6 IMPL-B: route through `_get_soreness_subjective()` so we read
+    # all 4 Hooper fields (sleep/fatigue/stress/soreness). Wrapped because
+    # some test fixtures use mocked DBs that don't have the daily_log table.
+    if subjective is None:
+        try:
+            subjective = _get_soreness_subjective()
+        except Exception:  # noqa: BLE001
+            subjective = None
+    dfa_vals, last_dec, last_dec_date, newest_dfa_date = _recent_dfa_and_decoupling()
+    r = compute_readiness(
+        ln_rmssd_7d=sleep.get("ln_rmssd_7d"),
+        swc_lower=sleep.get("swc_lower"), swc_upper=sleep.get("swc_upper"),
+        tsb=training.get("tsb"), sleep_h=sleep.get("sleep_h"),
+        rhr_delta=sleep.get("rhr_delta"), subjective=subjective,
+        recent_dfa_alpha1=dfa_vals, last_decoupling_pct=last_dec,
+        last_decoupling_age_days=_age_days_from_iso(last_dec_date),
+        newest_dfa_age_days=_age_days_from_iso(newest_dfa_date),
+    )
+    r.setdefault("missing", [])
+    r["decoupling_date"] = last_dec_date
+    # v4.4.2 §B3: when ICU wellness path returns no CTL/ATL/TSB, fall back
+    # to local-archive EWMA so the frontpage gauges aren't dashes.
+    merged_load = _merge_training_load(training)
+    r = _readiness_with_data_status(r)
+    # v4.5.0: "local_wellness" when a computed score's sleep/HRV came from the
+    # local file store instead of ICU live, so the UI can show a hint. A
+    # score that could not be computed keeps "insufficient_data".
+    if local_wellness and r.get("score") is not None:
+        r["data_status"] = "local_wellness"
+    return r, sleep, training, merged_load
 
 
 def _local_sleep_metrics(days: int = 14) -> dict:
@@ -3840,36 +3887,8 @@ def _local_sleep_metrics(days: int = 14) -> dict:
 
 @app.get("/api/readiness")
 def api_readiness(subjective: float = Query(None)):
-    training = cached("training", get_today_metrics)
-    sleep = cached("sleep", get_sleep_metrics)
-    # v4.5.0: when ICU live wellness returns {}, fall back to local wellness
-    # store (populated by lazy sync) so HRV/Sleep/RHR component bars aren't
-    # blanks when ~/.domestique/wellness/ has data.
-    data_status_local_wellness = False
-    if not sleep:
-        sleep = _local_sleep_metrics(days=14)
-        if sleep:
-            data_status_local_wellness = True
-    # Auto-feed soreness/Hooper from morning log into subjective score.
-    # v4.6.6 IMPL-B: route through `_get_soreness_subjective()` so we read
-    # all 4 Hooper fields (sleep/fatigue/stress/soreness) once IMPL-C lands
-    # the expanded form. Wrapped because some test fixtures use mocked DBs
-    # that don't have the daily_log table.
-    if subjective is None:
-        try:
-            subjective = _get_soreness_subjective()
-        except Exception:  # noqa: BLE001
-            subjective = None
-    dfa_vals, last_dec, last_dec_date, newest_dfa_date = _recent_dfa_and_decoupling()
-    r = compute_readiness(
-        ln_rmssd_7d=sleep.get("ln_rmssd_7d"),
-        swc_lower=sleep.get("swc_lower"), swc_upper=sleep.get("swc_upper"),
-        tsb=training.get("tsb"), sleep_h=sleep.get("sleep_h"),
-        rhr_delta=sleep.get("rhr_delta"), subjective=subjective,
-        recent_dfa_alpha1=dfa_vals, last_decoupling_pct=last_dec,
-        last_decoupling_age_days=_age_days_from_iso(last_dec_date),
-        newest_dfa_age_days=_age_days_from_iso(newest_dfa_date),
-    )
+    r, sleep, _training, merged_load = _readiness_today(subjective)
+    last_dec_date = r.pop("decoupling_date", None)
     # FIX-CONTRACT C2: flatten DFA cap + decoupling advisory as top-level
     # booleans so U6's banner can gate on them without knowing the nested
     # readiness.dfa_cap.cap_applied path. Dict truthiness ≠ boolean so the
@@ -3881,21 +3900,6 @@ def api_readiness(subjective: float = Query(None)):
     reverted = _is_readiness_cap_reverted_today()
     dfa_cap_applied = bool(dfa_cap.get("cap_applied")) and not reverted
     decoupling_advisory = bool(dec_adv.get("advisory")) and not reverted
-    # v4.4.2 §B3: when ICU wellness path returns no CTL/ATL/TSB, fall back
-    # to local-archive EWMA so the frontpage gauges aren't dashes when
-    # 51 ICU + 12 FIT rides sit on disk.
-    merged_load = _merge_training_load(training)
-    has_local_load = merged_load.get("ctl") is not None or merged_load.get("atl") is not None
-    # v4.4.2 §B6: unify default response shape so /api/today-session and
-    # /api/readiness agree on score/data_status semantics.
-    r = _readiness_with_data_status(r, has_local_load=has_local_load)
-    # v4.5.0: surface "local_wellness" data_status when sleep/HRV came from the
-    # local file store (instead of ICU live) so the UI can show a hint.
-    # We override "ok" AND "insufficient_data" both — the wellness is real
-    # data, just from the local cache; INSUFFICIENT_DATA only signals "not
-    # enough components to compute readiness composite", not "no source".
-    if data_status_local_wellness:
-        r["data_status"] = "local_wellness"
     # v1.8.8 Bug 8 — unify the two readiness scales so the homepage card
     # and the scroll-down card stop disagreeing. `score_0_100` is the
     # canonical compute_readiness output (legacy field, unchanged).
@@ -6189,6 +6193,27 @@ async def api_bulk_segments(request: Request):
     return {"results": results, "ftp": ftp}
 
 
+# The picker's Protocol keyword for a session type (the families the library's
+# Protocol values name): what it offers when readiness is unknown.
+_PICKER_TYPES = {
+    "recovery": ["recovery", "endurance"], "z2": ["endurance"], "long_z2": ["endurance"],
+    "endurance": ["endurance"], "tempo": ["tempo"], "sweetspot": ["sweet spot"],
+    "threshold": ["threshold"], "overunder": ["over-under"], "vo2max": ["vo2"],
+    "sprint": ["sprint"], "anaerobic": ["anaerobic"],
+}
+
+
+def _today_planned_type() -> "str | None":
+    """Today's session type as the week view serves it, or None."""
+    try:
+        today = clock.today().isoformat()
+        wk = _stored_week_view(_read_stored_plan(), 0).as_weekly_plan()
+    except Exception:  # noqa: BLE001 -- the picker stands without a plan
+        return None
+    return next((x.get("session_type") for x in wk["sessions"]
+                 if x.get("day") == today and x.get("on_record")), None)
+
+
 @app.get("/api/picker")
 def api_picker(subjective: float = Query(7), duration: int = Query(75)):
     """Workout-of-the-day picker.
@@ -6208,10 +6233,9 @@ def api_picker(subjective: float = Query(7), duration: int = Query(75)):
     2. When the user is on a fresh install with no FIT/HRV data yet,
        ``compute_readiness`` returns ``score=None``. The old branch then
        returned an empty workouts list — not useful for a
-       workout-picker UI. We now fall back to a neutral 70/100 baseline
-       ("no HRV data yet") and proceed to surface z2/endurance
-       suggestions so the user sees a sensible default set rather than
-       a blank card on day one.
+       workout-picker UI. It then fell back to a neutral 70/100
+       baseline; since slim/9.3 (R1) readiness stays None, the card says
+       "readiness unknown", and today's planned family is offered.
     """
     try:
         training = cached("training", get_today_metrics)
@@ -6232,44 +6256,20 @@ def api_picker(subjective: float = Query(7), duration: int = Query(75)):
             rhr_delta=sleep.get("rhr_delta"), subjective=subjective,
         )
     except Exception:
-        _log.exception("picker readiness compute failed — falling back to baseline")
+        _log.exception("picker readiness compute failed — readiness unknown")
         r = {"score": None, "status": "INSUFFICIENT_DATA", "advice": ""}
 
     score = r.get("score")
     status = r.get("status", "?")
     advice = r.get("advice", "")
 
-    # Fix D.2: baseline when no HRV data yet. Don't return an empty card —
-    # surface a neutral z2/endurance starter set instead so the picker is
-    # usable on day one of a fresh install.
-    baseline_used = False
+    # Readiness unknown (no HRV data yet, an ICU outage): said, and today's
+    # planned family offered (contract slim/9.3, R1). Until 2026-10-12 this
+    # invented a 70/100 baseline and picked sweet spot / threshold from it.
     if score is None:
-        _log.info("picker: no HRV data yet, using 70/100 baseline")
-        score = 70
-        status = status or "BASELINE"
-        advice = advice or "No HRV data yet — using neutral baseline"
-        baseline_used = True
-
-    # Map readiness to session type + fallback types. Grill
-    # PICKER-DEAD-TYPE-KEYWORDS: session_type is substring-matched against
-    # the library's Protocol values — "z2"/"helgerud"/"rønnestad"/"seiler"
-    # match ZERO of the 17 Protocol strings, so the ≥80 pool was vo2-only
-    # and the 60-69 pool endurance-only. Every keyword below matches a real
-    # Protocol family (the Helgerud/Rønnestad-style sessions live inside
-    # VO2max/Over-Unders protocols anyway).
-    if score >= 80:
-        types = ["vo2", "over-under", "anaerobic"]
-    elif score >= 70:
-        types = ["sweet spot", "threshold", "endurance"]
-    elif score >= 60:
-        types = ["tempo", "endurance"]
-    elif score >= 40:
-        types = ["endurance", "recovery"]
-    else:
-        # REST-level readiness: still show 3 light suggestions rather
-        # than an empty card (Bug D.2).
-        types = ["recovery", "endurance"]
-
+        status = "UNKNOWN"
+        advice = "Readiness unknown: today's planned session family"
+        types = _PICKER_TYPES.get(_today_planned_type()) or ["recovery", "endurance"]
     # Search with multiple type keywords for better matches. Fix D.1:
     # pass tags=None explicitly — api_workouts' Query() default object
     # is truthy and crashes .split().
@@ -6371,7 +6371,6 @@ def api_picker(subjective: float = Query(7), duration: int = Query(75)):
     return {
         "type": types[0] if types else "z2",
         "readiness": score, "status": status, "advice": advice,
-        "baseline_used": baseline_used,
         "workouts": unique[:5],
     }
 
@@ -10222,29 +10221,11 @@ def _api_today_session_impl():
         description=planned_data.get("description", ""),
     )
 
-    # Get readiness and HRV data
-    sleep = cached("sleep", get_sleep_metrics)
-    training = cached("training", get_today_metrics)
-    dfa_vals, last_dec, _last_dec_date, _newest_dfa_date = _recent_dfa_and_decoupling()
-    r = compute_readiness(
-        ln_rmssd_7d=sleep.get("ln_rmssd_7d"),
-        swc_lower=sleep.get("swc_lower"), swc_upper=sleep.get("swc_upper"),
-        tsb=training.get("tsb"), sleep_h=sleep.get("sleep_h"),
-        rhr_delta=sleep.get("rhr_delta"),
-        subjective=_get_soreness_subjective(),  # auto-feed from morning leg check
-        recent_dfa_alpha1=dfa_vals, last_decoupling_pct=last_dec,
-        last_decoupling_age_days=_age_days_from_iso(_last_dec_date),
-        newest_dfa_age_days=_age_days_from_iso(_newest_dfa_date),
-    )
-
-    # v4.4.2 §B6: unify the score-None default with /api/readiness via the
-    # shared helper. Promotes None→50 only when local rides exist; sets
-    # data_status so the frontend can distinguish "ok" from "insufficient_data".
-    merged_load = _merge_training_load(training)
-    _has_local_load = merged_load.get("ctl") is not None or merged_load.get("atl") is not None
-    r = _readiness_with_data_status(r, has_local_load=_has_local_load)
-    if r.get("score") is None:
-        r["score"] = 50  # final-fallback neutral default if no local data either
+    # Readiness, the one computation /api/readiness serves too (R3). A score
+    # that cannot be computed stays None: the adjustment skips its score
+    # rules then (R1) and the card says so (R2).
+    r, sleep, training, _merged_load = _readiness_today()
+    r.pop("decoupling_date", None)
 
     hrv_streak = sleep.get("red_hrv_streak", 0)
 
@@ -10400,6 +10381,9 @@ def _api_today_session_impl():
         "reason": reason,
         "adjustment_reason": adjustment_reason,
         "readiness": r.get("score"),
+        # R2/R3: what the score is made of, the same fields /api/readiness
+        # carries in its `readiness`; missing names what was not there.
+        "readiness_detail": {k: r.get(k) for k in ("score", "status", "data_status", "missing")},
         "hrv_streak_below_swc": hrv_streak,
         "was_modified": reason != "",
         "hr_target": _session_hr_target(adjusted.session_type),

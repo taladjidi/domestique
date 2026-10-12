@@ -7085,7 +7085,8 @@ async function loadHome() {
       // the "Readiness today" composite card; the gauge keeps 0-100.
       const gaugeScore = (d.score_0_100 != null) ? d.score_0_100 : r.score;
       $('gauge').innerHTML = gaugeArc(gaugeScore);
-      $('gauge-status').textContent = r.status || '';
+      // slim/9.3 R2: a score that could not be computed is said, not drawn.
+      $('gauge-status').textContent = gaugeScore == null ? 'Readiness unknown' : (r.status || '');
 
       // v2.2.5 issue #3 R2 — this card is now the analytic (gauge + factor
       // bars + the same 0-100 number as the Today verdict). The training
@@ -7356,7 +7357,10 @@ async function loadReadinessComposite() {
         ${numTxt}<span style="font-size:9px;font-weight:400;color:var(--text3);margin-left:1px;">/100</span>
       </div>`;
 
-    const why = reasons.length ? reasons[0] : advice;
+    // slim/9.3 R2: no score is "readiness unknown", naming what is missing.
+    const _miss = (d.readiness && Array.isArray(d.readiness.missing)) ? d.readiness.missing : [];
+    const why = reasons.length ? reasons[0]
+              : (s100 == null ? `Readiness unknown${_miss.length ? ` (no ${_miss.join(', ')})` : ''}` : advice);
 
     // Single action, gated on severity. ids preserved for the handlers.
     let actionHtml = '';
@@ -8341,7 +8345,7 @@ async function runPicker() {
   let h = `<div class="card" style="margin-bottom:12px;border-color:var(--accent);">
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <div><h3 style="margin:0;">${(d.type||'').toUpperCase()}</h3>
-        <div style="font-size:20px;font-weight:700;">${d.status||''} &mdash; Readiness ${d.readiness||'?'}/100</div>
+        <div style="font-size:20px;font-weight:700;">${d.readiness != null ? `${d.status||''} &mdash; Readiness ${d.readiness}/100` : 'Readiness unknown'}</div>
         <div style="font-size:13px;color:var(--text2);margin-top:4px;">${d.advice||''}</div></div>
     </div></div>`;
   if (d.workouts && d.workouts.length) {
@@ -18287,7 +18291,7 @@ function openTodaySessionDetail() {
   else if (hr.ceiling_only && hr.high) html += `<div class="metric"><div class="mv" style="color:var(--red);">≤${hr.high}</div><div class="ml">HR Target (bpm)</div></div>`;
   else if (hr.low) html += `<div class="metric"><div class="mv" style="color:var(--red);">${hr.low}–${hr.high}</div><div class="ml">HR Target (bpm)</div></div>`;
   if (pw.low && !pw.suppressed && d.target_mode !== 'hr') html += `<div class="metric"><div class="mv" style="color:var(--accent);">${pw.low}–${pw.high}</div><div class="ml">Power Target (W)</div></div>`;
-  html += `<div class="metric"><div class="mv">${d.readiness ? Math.round(d.readiness) : '—'}</div><div class="ml">Readiness</div></div>`;
+  html += `<div class="metric"><div class="mv">${d.readiness != null ? Math.round(d.readiness) : 'unknown'}</div><div class="ml">Readiness</div></div>`;
   html += '</div>';
 
   if (d.was_modified) {

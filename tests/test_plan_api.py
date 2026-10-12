@@ -522,8 +522,8 @@ class TestPickerBugDRegression(unittest.TestCase):
     2. ``min_score=7`` floor: only 3 of 3000 library workouts score ≥7;
        picker collapsed to empty. Now uses min_score=3 as primary floor
        with widening fallback.
-    3. Baseline 70/100 when compute_readiness returns None (fresh
-       install, no HRV data).
+    3. Readiness unknown when compute_readiness returns None (fresh
+       install, no HRV data): no 70/100 baseline since slim/9.3.
     """
 
     def setUp(self):
@@ -533,30 +533,32 @@ class TestPickerBugDRegression(unittest.TestCase):
         r = self.client.get("/api/picker", params={"subjective": 7, "duration": 75})
         self.assertEqual(r.status_code, 200, r.text)
         data = r.json()
-        # Readiness is a number (may be real if HRV data exists, or 70
-        # baseline if not).
-        self.assertIsNotNone(data.get("readiness"),
-                             "picker readiness must not be None")
-        self.assertIsInstance(data.get("readiness"), (int, float))
+        # Readiness is a number when HRV data exists, else None (unknown,
+        # slim/9.3 R1: no 70 baseline).
+        self.assertIsInstance(data.get("readiness"), (int, float, type(None)))
         # At least 3 workouts (the task contract).
         self.assertGreaterEqual(len(data.get("workouts", [])), 3,
                                 f"picker returned <3 workouts: {data}")
 
-    def test_picker_baseline_when_readiness_none(self):
-        """Force compute_readiness to return None (no components) and
-        confirm the picker still returns 70/100 + workouts."""
+    def test_picker_readiness_unknown_when_none(self):
+        """Force compute_readiness to return None (no components): the picker
+        says readiness unknown (no invented 70/100, slim/9.3 R1) and still
+        offers workouts, today's planned family when there is one."""
         def _empty(*a, **kw):
             return {"score": None, "status": "INSUFFICIENT_DATA",
                     "advice": "Not enough components to compute readiness (need ≥3).",
                     "components": {}, "missing": ["hrv", "tsb", "subjective",
                                                    "sleep", "rhr"]}
-        with patch("app.compute_readiness", side_effect=_empty):
+        with patch("app.compute_readiness", side_effect=_empty), \
+             patch("app._today_planned_type", return_value="threshold"):
             r = self.client.get("/api/picker",
                                 params={"subjective": 7, "duration": 75})
         self.assertEqual(r.status_code, 200, r.text)
         data = r.json()
-        self.assertEqual(data.get("readiness"), 70)
-        self.assertTrue(data.get("baseline_used"))
+        self.assertIsNone(data.get("readiness"))
+        self.assertEqual(data.get("status"), "UNKNOWN")
+        self.assertNotIn("baseline_used", data)
+        self.assertEqual(data.get("type"), "threshold")
         self.assertGreaterEqual(len(data.get("workouts", [])), 3)
 
 

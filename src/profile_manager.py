@@ -552,6 +552,36 @@ class ProfileManager:
                 raise LookupError(f"Profile '{profile_id}' not found")
             self._save_registry()
 
+    def ensure_active_profile(self, name: str) -> str:
+        """The active profile's id; when none is active, activate one first.
+
+        The first-run wizard writes into the active profile (the intervals.icu
+        link, the final save), and it is also where / sends a rider after the
+        last profile was deleted (AC6a clears the pointer). With no profile
+        every link ended in profile_gone (#24) and every save in 409. No
+        profile at all: a new one, bootstrapped like the profile
+        migrate_to_profiles makes on a fresh install, so / keeps routing to
+        the wizard until it is saved.
+
+        Profiles on disk but none active: LookupError, nothing changes. Each
+        of them belongs to a rider; adopting one here hands it to the
+        first-run wizard, whose save overwrites its settings and whose link
+        to a different intervals.icu account purges its synced data. The
+        rider picks a profile on /profile-picker instead. May raise
+        db.SyncBusy from switch()."""
+        with self._switch_lock:
+            if self._active_id is not None:
+                return self._active_id
+            if self.list_profiles():
+                raise LookupError("profiles exist but none is active; choose one")
+            pid = self.create_profile(name)
+            for p in self._registry.get("profiles", []):
+                if p.get("id") == pid:
+                    p["bootstrapped"] = True
+            self._save_registry()
+            self.switch(pid)
+            return pid
+
     def clear_bootstrapped(self) -> None:
         """AC4: drop the ACTIVE profile's registry ``bootstrapped`` flag.
 
@@ -1041,7 +1071,9 @@ class ProfileManager:
             # No provenance offered: keep whatever is on record, and write
             # through the same path so the gate still applies.
             source = str(self._athlete.get("ftp_source") or "manual")
-        elif source not in _FACTS["ftp"].tiers:
+        if source not in _FACTS["ftp"].tiers:
+            # An unknown source, offered or on record (a hand-edited or older
+            # athlete.json), is the rider's: never a reason to refuse the write.
             source = "manual"
         return self._set_fact("ftp", v, source)
 

@@ -129,6 +129,19 @@ def test_the_sync_still_updates_what_intervals_icu_owns(fresh_db):
     assert row["is_race"] == 1
 
 
+def test_readings_intervals_icu_stops_sending_survive(fresh_db):
+    """#29: intervals.icu may stop passing Garmin wellness on through its API.
+    Then the 90-day sync returns days it sent HRV, resting HR and sleep for
+    with those fields empty, and the stored history must not be wiped."""
+    _sync_wellness([{"id": WELLNESS_DAY, "hrv": 62.0, "restingHR": 44,
+                     "sleepSecs": 27000, "ctl": 40.0}])
+    _sync_wellness([{"id": WELLNESS_DAY, "ctl": 40.5}])   # Garmin fields withheld
+    row = db.get_db().execute(
+        "SELECT hrv, rhr, sleep_secs, ctl FROM wellness WHERE date = ?",
+        (WELLNESS_DAY,)).fetchone()
+    assert tuple(row) == (62.0, 44, 27000, 40.5)
+
+
 def test_a_zero_reading_is_no_reading(fresh_db):
     """intervals.icu (or the device behind it) can send 0 for a reading it does
     not have. Nobody has an HRV, a resting HR or a night's sleep of zero, and

@@ -28,6 +28,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import app as app_module
+import clock
 import training_planner as tp
 
 
@@ -83,6 +84,10 @@ class MoveSessionLazyLoadBase(unittest.TestCase):
         self._tmp = Path(self._tmpdir.name)
         today = date.today()
         self._monday = today - timedelta(days=today.weekday())
+        # The move endpoint refuses a day that has passed; pin today to this
+        # week's Monday so every day of the fixture week is still ahead.
+        clock.freeze(self._monday)
+        self.addCleanup(clock.unfreeze)
         self._orig_plan_dir = tp.PLAN_DIR
         tp.PLAN_DIR = self._tmp
         self.client = TestClient(app_module.app)

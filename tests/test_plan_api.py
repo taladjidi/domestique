@@ -21,6 +21,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import app as app_module
+import clock
 import training_planner as tp
 
 
@@ -141,6 +142,13 @@ class TestDailyAdaptEndpointIsProjectionOnly(PlanApiTestBase):
 class TestMoveSessionSetsUserMovedFlag(PlanApiTestBase):
     """§6.2 — POST /api/plan/move-session sets user_moved=True."""
 
+    def setUp(self):
+        super().setUp()
+        # The move endpoint refuses a day that has passed; pin today to the
+        # fixture's Monday so every day of its week is still ahead.
+        clock.freeze(self._monday)
+        self.addCleanup(clock.unfreeze)
+
     def test_move_sets_user_moved_and_moved_from(self):
         thu = (self._monday + timedelta(days=3)).isoformat()  # VO2max
         mon = self._monday.isoformat()                        # rest
@@ -161,6 +169,37 @@ class TestMoveSessionSetsUserMovedFlag(PlanApiTestBase):
         thu_s = next(s for s in sessions if s["day"] == thu)
         self.assertEqual(thu_s["session_type"], "rest")
         self.assertTrue(thu_s["status"].startswith("moved_from:"))
+
+    def test_a_day_that_has_passed_refuses_a_session(self):
+        """Today Wednesday: Thursday's session dropped on Monday is refused and
+        the plan is unchanged; a missed Monday session moved forward is not."""
+        clock.freeze(self._monday + timedelta(days=2))
+        thu = (self._monday + timedelta(days=3)).isoformat()
+        mon = self._monday.isoformat()
+        before = self._read_plan()
+        r = self.client.post("/api/plan/move-session", json={"date": thu, "new_date": mon})
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertEqual(self._read_plan(), before)
+        tue = (self._monday + timedelta(days=1)).isoformat()   # z2, now past
+        fri = (self._monday + timedelta(days=4)).isoformat()   # rest
+        r = self.client.post("/api/plan/move-session", json={"date": tue, "new_date": fri})
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_a_moved_session_can_be_moved_back_to_the_day_it_left(self):
+        """A rider moved a workout by mistake and could not drag it back: the
+        day it left is a rest stub, and rest days took no drops. The endpoint
+        always allowed it; the calendars now offer the drop."""
+        thu = (self._monday + timedelta(days=3)).isoformat()  # VO2max
+        mon = self._monday.isoformat()                        # rest
+        r = self.client.post("/api/plan/move-session", json={"date": thu, "new_date": mon})
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.post("/api/plan/move-session", json={"date": mon, "new_date": thu})
+        self.assertEqual(r.status_code, 200, r.text)
+        sessions = self._read_plan()["weeks"][0]["sessions"]
+        thu_s = next(s for s in sessions if s["day"] == thu)
+        mon_s = next(s for s in sessions if s["day"] == mon)
+        self.assertEqual(thu_s["session_type"], "vo2max")
+        self.assertEqual(mon_s["session_type"], "rest")
 
     def test_reject_same_date(self):
         mon = self._monday.isoformat()
@@ -304,6 +343,13 @@ class TestMoveSessionVisibleAfterRefresh(PlanApiTestBase):
     snapped back after drop.
     """
 
+    def setUp(self):
+        super().setUp()
+        # The move endpoint refuses a day that has passed; pin today to the
+        # fixture's Monday so every day of its week is still ahead.
+        clock.freeze(self._monday)
+        self.addCleanup(clock.unfreeze)
+
     def test_move_session_visible_after_refresh(self):
         # Seed: move Tuesday (z2) → Thursday (was vo2max) so the dst slot has
         # a session both before and after the move.
@@ -388,6 +434,10 @@ class TestMoveSessionISOWeekBoundary(unittest.TestCase):
         # Use a Monday in the past so we're inside a single ISO week that
         # also spans the Fri-Thu boundary.
         # Pick a concrete reference anchor: Mon 2026-04-20.
+        # The move endpoint refuses a day that has passed: pin today to the
+        # first day of these fixture weeks.
+        clock.freeze(date(2026, 4, 17))
+        self.addCleanup(clock.unfreeze)
         self._w1_start = date(2026, 4, 17)  # Fri
         self._w1_end = date(2026, 4, 23)    # Thu
         self._w2_start = date(2026, 4, 24)  # Fri

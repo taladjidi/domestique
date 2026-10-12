@@ -86,3 +86,16 @@ class DailyAdaptKnowsTheForm(unittest.TestCase):
         self.assertEqual(info.get("tsb"), 10.0)
         self.assertFalse(info.get("tsb_deload_projected"),
                          "a rested rider had their hard days eased")
+
+    def test_form_that_cannot_be_read_is_no_form_not_an_error(self):
+        """_fitness_state raising (an unexpected error behind the ICU fetch)
+        must leave the projection standing with no de-load, as before the
+        form was passed, not turn it into action=error."""
+        with patch.object(app_module, "_fitness_state", side_effect=RuntimeError("boom")), \
+             patch.object(app_module, "_collect_week_activities", return_value=[]):
+            r = self.client.get("/api/plan/daily-adapt")
+        self.assertEqual(r.status_code, 200, r.text)
+        info = r.json()
+        self.assertNotEqual(info.get("action"), "error", info)
+        self.assertFalse(info.get("tsb_deload_projected"))
+

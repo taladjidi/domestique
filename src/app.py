@@ -1344,6 +1344,26 @@ def _setup_path_allowed(p: Path) -> bool:
     return False
 
 
+@app.post("/api/setup/ensure-profile")
+def setup_ensure_profile():
+    """The first-run wizard calls this before it links intervals.icu or saves:
+    both write into the active profile, and after the last profile was deleted
+    there is none (#24: every link ended in profile_gone). A POST, so the page
+    load itself never creates anything."""
+    from profile_manager import ProfileManager
+    from migrate_profiles import default_profile_name
+    try:
+        pid = ProfileManager.get().ensure_active_profile(default_profile_name())
+    except LookupError:
+        # Profiles exist, none active: never hand one of them to the wizard.
+        return JSONResponse({"error": "choose_profile", "redirect": "/profile-picker"},
+                            status_code=409)
+    except db.SyncBusy:
+        return JSONResponse({"error": "sync busy — try again in a moment"},
+                            status_code=503)
+    return {"ok": True, "id": pid}
+
+
 @app.post("/api/setup/save")
 def setup_save(body: dict):
     """Save all wizard settings — writes to active profile's athlete.json + .env.
@@ -7192,6 +7212,15 @@ def download_zwo(category: str, filename: str, outdoor: int = Query(0),
                                  cap_active=_cap_active_for_download(cap))
 
 
+def course_file_path(region: str, filename: str) -> "Path | None":
+    """The CRS file a course download serves, or None. Shared by the HTTP
+    download and the desktop save bridge (launcher.JsApi.save_crs)."""
+    path = _safe_path(COURSE_DIR, region, filename)
+    if not path or not path.exists():
+        path = _safe_path(COURSE_DIR, "virtual", region, filename)
+    return path if path and path.exists() else None
+
+
 @app.get("/api/course/{region}/{filename}/download")
 def download_course_by_id(region: str, filename: str):
     """Serve a CRS course file as a download attachment.
@@ -7199,10 +7228,8 @@ def download_course_by_id(region: str, filename: str):
     v4.0.0-alpha: IMPL-B's route-picker calls this URL pattern. The earlier
     /api/download/crs/<region>/<filename> route is kept for backward compat.
     """
-    path = _safe_path(COURSE_DIR, region, filename)
-    if not path or not path.exists():
-        path = _safe_path(COURSE_DIR, "virtual", region, filename)
-    if not path or not path.exists():
+    path = course_file_path(region, filename)
+    if path is None:
         return JSONResponse({"error": "not found"}, 404)
     return FileResponse(
         path,
@@ -13593,8 +13620,13 @@ def api_plan_daily_adapt():
         # form is below -30 -- could never fire on the only path that calls
         # it: the parameter defaulted to None and the branch was dead in
         # production while every card on the page showed the number.
-        _unchanged, info = tp.daily_adapt_plan(
-            current_week, actual, today, tsb=_fitness_state()["tsb"])
+        try:
+            tsb = _fitness_state()["tsb"]
+        except Exception:
+            # Form unknown is not a failed projection: no de-load, as before.
+            _log.debug("daily-adapt: fitness state unavailable", exc_info=True)
+            tsb = None
+        _unchanged, info = tp.daily_adapt_plan(current_week, actual, today, tsb=tsb)
         info["projection_only"] = True  # defensive: re-mark in case caller strips
         return info
 
@@ -14200,6 +14232,14 @@ async def api_plan_move_session(request: Request):
                 {"error": "move must stay within the current ISO week (Mon-Sun)"},
                 400,
             ))
+        # A day that has passed is a record of what was ridden, not a slot: a
+        # session dropped there would be "missed" the moment it lands, and the
+        # day it left becomes a rest stub. Moving a missed session FORWARD
+        # (a past source) stays allowed.
+        if dst_d < clock.today():
+            return _reply(JSONResponse(
+                {"error": "cannot move a session onto a day that has passed",
+                 "date": dst_iso}, 400))
 
         weeks_data = plan.get("weeks", [])
 
@@ -15819,9 +15859,20 @@ def _execution_for_match(s_json: dict, activity_id) -> "dict | None":
         mode = ProfileManager.get().target_mode or "power"
     except Exception:
         mode = "power"
+    # The planned file places the intensity band: a prescription sitting on a
+    # zone line (endurance at 75 % FTP) takes in the zone across it.
+    band_segments = None
+    zwo = (s_json.get("zwo_file") or "").strip()
+    if zwo:
+        try:
+            import structure_fidelity as _sf
+            band_segments = _sf.parse_zwo_file(active_workout_dir() / os.path.basename(zwo))
+        except Exception:
+            _log.debug("execution band segments unavailable for %s", zwo, exc_info=True)
     try:
         import execution_score
-        result = execution_score.score_ride(s_json, ride, mode)
+        result = execution_score.score_ride(s_json, ride, mode,
+                                            band_segments=band_segments)
     except Exception:
         _log.exception("execution score_ride failed")
         return None
@@ -20568,6 +20619,10 @@ def dashboard(request: Request):
         # legacy upgrades are marked bootstrapped=false by the migration — a
         # real install provably never redirects.
         if pm.active_id is None:
+            # Profiles on disk but none active (a stored null pointer): the
+            # rider chooses one. The first-run wizard is for no profile at all.
+            if pm.list_profiles():
+                return RedirectResponse(url="/profile-picker")
             return RedirectResponse(url="/setup")
         if (_active_profile_entry(pm).get("bootstrapped")
                 and not _setup_marker().exists()):

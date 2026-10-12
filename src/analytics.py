@@ -1027,11 +1027,18 @@ def _planned_zone_pcts(planned_session: dict) -> tuple[float, float, float] | No
 
 
 def _actual_zone_pcts(actual_ride: dict) -> tuple[float, float, float] | None:
-    """Return actual (z1z2_pct, z3z4_pct, z5plus_pct) from either a
-    `_summarize_ride_for_calendar` payload (z1z2_min / z3z4_min / z5plus_min)
-    or a raw ride with `time_in_zone`. Returns None when no zone data exists.
+    """Return actual (z1z2_pct, z3z4_pct, z5plus_pct), time in zone, from a
+    ride's ``time_in_zone`` (seconds). Returns None when no zone data exists.
+
+    The calendar passes its ride payload with the ride's ``time_in_zone``
+    attached: since slim/9.3 the payload's own zone minutes (zone1_min ..
+    zone3_min) are the hybrid count, not time in zone, and the comparison
+    with the planned file's ``zone_dist`` must stay time in zone against
+    time in zone. The z1z2_min / z3z4_min / z5plus_min branch below reads a
+    shape no payload carries any more; it is kept for callers that build
+    that dict themselves (tests/test_v182_match_compare.py).
     """
-    # Preferred: calendar-summary shape carries minute fields directly.
+    # A caller-built dict with Coggan-grouped minutes, if any.
     z12 = actual_ride.get("z1z2_min")
     z34 = actual_ride.get("z3z4_min")
     z5p = actual_ride.get("z5plus_min")

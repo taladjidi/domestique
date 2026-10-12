@@ -105,7 +105,7 @@ def _summary(rides: int) -> dict:
         "eftp_delta": {"start": None, "end": None, "pct": None},
         "vo2max_delta": {"start": None, "end": None, "pct": None},
         "ctl_gain": {"start": None, "end": None, "delta": None},
-        "intensity_dist": {"zone1_min": 0, "zone2_min": 0, "zone3_min": 0, "method": "hybrid"},
+        "intensity_dist": {"zone1_min": 0, "zone2_min": 0, "zone3_min": 0, "method": "time in zone"},
         "pol_index": {"mean": None, "class": "—"},
         "monotony_max": None, "strain_max": None, "compliance": [],
         "mean_max_curve": {"start": [], "end": []}, "hooper_trend": [],

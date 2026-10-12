@@ -2466,7 +2466,7 @@ window.addEventListener('unhandledrejection', function(e) {
       <div id="ps-empty" style="display:none;font-size:14px;color:var(--text2);line-height:1.6;margin-bottom:18px;"></div>
       <div id="ps-kpi-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px;"></div>
       <div id="ps-charts" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">
-        <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Intensity distribution <span style="font-weight:400;color:var(--text3);">(hybrid)</span></h4><canvas id="ps-chart-intensity" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Stöggl & Sperlich 2014 — POL 80/0/20 target</div></div>
+        <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Intensity distribution <span id="ps-intensity-method" style="font-weight:400;color:var(--text3);">(time in zone)</span></h4><canvas id="ps-chart-intensity" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Stöggl & Sperlich 2014 — POL 80/0/20 target</div></div>
         <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Polarization index <span style="font-weight:400;color:var(--text3);">(time in zone)</span></h4><canvas id="ps-chart-pol" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Treff et al. 2019 — PI > 2.0 polarized</div></div>
         <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Compliance per phase</h4><canvas id="ps-chart-compliance" height="160"></canvas></div>
         <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Mean-max curve · start vs end (4w)</h4><canvas id="ps-chart-meanmax" height="160"></canvas></div>
@@ -2610,6 +2610,7 @@ window.addEventListener('unhandledrejection', function(e) {
     }
     _psDestroyCharts();
     const idist = d.intensity_dist || {};
+    { const m = document.getElementById('ps-intensity-method'); if (m) m.textContent = `(${idist.method || 'time in zone'})`; }
     window._psCharts.intensity = new Chart(document.getElementById('ps-chart-intensity'), {type:'bar', data:{labels:[''], datasets:[{label:'zone 1', data:[idist.zone1_min||0], backgroundColor:'#22c55e', stack:'a'},{label:'zone 2', data:[idist.zone2_min||0], backgroundColor:'#f97316', stack:'a'},{label:'zone 3', data:[idist.zone3_min||0], backgroundColor:'#ef4444', stack:'a'}]}, options:{indexAxis:'y',scales:{x:{stacked:true,title:{display:true,text:'minutes'}},y:{stacked:true}},plugins:{legend:{position:'bottom'}}}});
     const pi = (d.pol_index||{}).mean;
     const piPct = pi == null ? 0 : Math.max(0, Math.min(100, (pi/4)*100));
@@ -8004,7 +8005,7 @@ async function loadLastWeekFeedback() {
     const tssDone = Number(d.tss_done_in_plan != null ? d.tss_done_in_plan
                                                       : d.tss_done || 0);
     const adherence = Number(d.tss_adherence_pct || 0);
-    // slim/9.3 I2: the planner's three zones, counted by the hybrid.
+    // slim/9.3 I2: the planner's three zones, each figure with its method.
     const exp = d.zone_minutes || {};
     const expP = d.zone_minutes_planned || {};
     const z1 = (exp.zone1 || 0), z1P = (expP.zone1 || 0);
@@ -8043,7 +8044,7 @@ async function loadLastWeekFeedback() {
           ${row('Duration (min)', d.duration_min_done || 0, d.duration_min_planned || 0)}
         </div>
         <div style="flex:1;min-width:180px;">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Minutes per zone (planned: ${esc(d.zone_method || 'hybrid')})</div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Minutes per zone (planned: ${esc(d.zone_method || 'time in zone')}; ridden: ${esc(d.zone_method_ridden || 'time in zone')})</div>
           ${row('zone 1 (endurance)', z1, z1P)}
           ${row('zone 2 (tempo to threshold)', z2, z2P, 'over')}
           ${row('zone 3 (VO2max and above)', z3, z3P, 'over')}
@@ -12641,7 +12642,7 @@ function readBcRaces() {
 // slim/9.3 I2: on the planner's three zones. The typical mixes are sessions'
 // minutes by their goal zone (the old five-band hints folded: easy -> zone 1,
 // tempo/SS + threshold -> zone 2, VO2 + sprint -> zone 3); the realized mix is
-// the generated plan counted by the hybrid.
+// the generated plan counted by time in zone.
 const TEMPLATE_TYPICAL_BANDS = {
   polarized_base: {zone1:80, zone2:8, zone3:12},
   ftp_builder:    {zone1:72, zone2:26, zone3:2},
@@ -12828,7 +12829,7 @@ async function generatePlan(opts) {
     try {
       const ro = $('plan-dist-readout');
       if (ro && d.plan_json && d.plan_json.realized_zones)
-        ro.textContent = _fmtBands(d.plan_json.realized_zones, `Realized mix (${d.plan_json.realized_zones.method || 'hybrid'}): `);
+        ro.textContent = _fmtBands(d.plan_json.realized_zones, `Realized mix (${d.plan_json.realized_zones.method || 'time in zone'}): `);
     } catch(_) {}
     // v1.4.0 — mandatory loadCalendar() after every plan mutation
     // (CALENDAR_REDESIGN §8.4). Single canonical refresh path keeps
@@ -13997,11 +13998,11 @@ function renderCalendar(data) {
     const tssPill = pTss > 0 || aTss > 0
       ? `<span class="cal-tss-pill ${tssCls}" title="TSS actual / planned">${aTss} / ${pOnRecord ? pTss : '—'}</span>`
       : '';
-    // slim/9.3 I2: the planner's three zones, counted by the hybrid.
-    const z12 = `<span class="cal-z-pill" title="Zone 1 minutes (endurance) actual/planned, planned by ${esc(w.zone_method || 'hybrid')}">zone 1: ${Math.round(w.actual_zone1_min || 0)}/${Math.round(w.planned_zone1_min || 0)} min</span>`;
-    const z34 = `<span class="cal-z-pill" title="Zone 2 minutes (tempo to threshold) actual/planned, planned by ${esc(w.zone_method || 'hybrid')}">zone 2: ${Math.round(w.actual_zone2_min || 0)}/${Math.round(w.planned_zone2_min || 0)} min</span>`;
+    // slim/9.3 I2: the planner's three zones, each figure with its method.
+    const z12 = `<span class="cal-z-pill" title="Zone 1 minutes (endurance) actual/planned, planned: ${esc(w.zone_method || 'time in zone')}; ridden: ${esc(w.zone_method_ridden || 'time in zone')}">zone 1: ${Math.round(w.actual_zone1_min || 0)}/${Math.round(w.planned_zone1_min || 0)} min</span>`;
+    const z34 = `<span class="cal-z-pill" title="Zone 2 minutes (tempo to threshold) actual/planned, planned: ${esc(w.zone_method || 'time in zone')}; ridden: ${esc(w.zone_method_ridden || 'time in zone')}">zone 2: ${Math.round(w.actual_zone2_min || 0)}/${Math.round(w.planned_zone2_min || 0)} min</span>`;
     const z5p = (w.planned_zone3_min != null || w.actual_zone3_min != null)
-      ? `<span class="cal-z-pill" title="Zone 3 minutes (VO2max and above) actual/planned, planned by ${esc(w.zone_method || 'hybrid')}">zone 3: ${Math.round(w.actual_zone3_min || 0)}/${Math.round(w.planned_zone3_min || 0)} min</span>`
+      ? `<span class="cal-z-pill" title="Zone 3 minutes (VO2max and above) actual/planned, planned: ${esc(w.zone_method || 'time in zone')}; ridden: ${esc(w.zone_method_ridden || 'time in zone')}">zone 3: ${Math.round(w.actual_zone3_min || 0)}/${Math.round(w.planned_zone3_min || 0)} min</span>`
       : '';
 
     const rowCls = `cal-row${w.is_current ? ' cal-current-week' : ''}${w.is_stepback ? ' cal-stepback' : ''}`;
@@ -15049,7 +15050,7 @@ function renderThisWeekFromCalendar(data) {
       const z34 = actual.zone2_min != null ? Math.round(actual.zone2_min) : null;
       const z5p = actual.zone3_min != null ? Math.round(actual.zone3_min) : null;
       if (z12 != null || z34 != null || z5p != null) {
-        tipParts.push(`zone 1 ${z12||0}m · zone 2 ${z34||0}m · zone 3 ${z5p||0}m (hybrid)`);
+        tipParts.push(`zone 1 ${z12||0}m · zone 2 ${z34||0}m · zone 3 ${z5p||0}m (${actual.zone_method || 'time in zone'})`);
       }
       if (actual.decoupling_pct != null) tipParts.push('Decoupling ' + Number(actual.decoupling_pct).toFixed(1) + '%');
       actualTitle = tipParts.join(' · ');
@@ -17543,7 +17544,7 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
     if (unclass > 0) {
       legendBits.push(`<span title="Activities without HR or TRIMP signal — not counted in zone breakdown."><span class="leg-dot" style="background:var(--text3);"></span>? ${unclass}m</span>`);
     }
-    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Work bouts count to the session's goal zone, warm-up, cool-down and recovery to zone 1. A session whose file cannot be read counts by its type.">planned minutes: ${esc(s.zone_method || 'hybrid')}</span>`);
+    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Power counts by time in zone, every second; a ride with heart rate only by the hybrid (its work to the matched session's goal zone); a session whose file cannot be read by its type.">planned: ${esc(s.zone_method || 'time in zone')}; ridden: ${esc(s.zone_method_ridden || 'time in zone')}</span>`);
 
     // Planned bar — dashed border outline + 70% opacity to read as a target.
     const plannedBar = totalPlan > 0
@@ -20442,7 +20443,7 @@ function renderOnTrackBar(data) {
   };
 
   // /api/calendar weeks expose planned_zoneN_min / actual_zoneN_min (and
-  // _to_date) for the planner's three zones, counted by the hybrid (slim/9.3
+  // _to_date) for the planner's three zones, each with its method (slim/9.3
   // I2), plus tss. Missing keys read as 0.
   const w = cur || {};
   const railZ12 = rail('zone 1', w.actual_zone1_min, w.planned_zone1_min, w.planned_zone1_min_to_date, '#3b82f6');
@@ -20522,7 +20523,7 @@ function renderOnTrackBar(data) {
     const opacity = isMuted ? 'opacity:0.55;' : '';
     return `<div class="intensity-actual-row">
       <div class="intensity-actual-label">${label}</div>
-      <div class="intensity-actual-bar" title="zone 1 ${Math.round(low)}m · zone 2 ${Math.round(mid)}m · zone 3 ${Math.round(high)}m (hybrid)" style="${opacity}">
+      <div class="intensity-actual-bar" title="zone 1 ${Math.round(low)}m · zone 2 ${Math.round(mid)}m · zone 3 ${Math.round(high)}m" style="${opacity}">
         ${pctLow  > 0 ? `<div class="intensity-actual-seg-low"  style="width:${pctLow}%;"></div>`  : ''}
         ${pctMid  > 0 ? `<div class="intensity-actual-seg-mid"  style="width:${pctMid}%;"></div>`  : ''}
         ${pctHigh > 0 ? `<div class="intensity-actual-seg-high" style="width:${pctHigh}%;"></div>` : ''}
@@ -20544,7 +20545,7 @@ function renderOnTrackBar(data) {
     if (Math.abs(dHigh) >= 3) parts.push(`${dHigh > 0 ? '+' : ''}${dHigh} min zone 3`);
     if (parts.length) deltaLineHtml = `<div class="intensity-delta" style="grid-column:1/-1;padding-left:68px;">${esc(parts.join(' · '))} vs planned</div>`;
   }
-  const actualBarHtml = `<div class="intensity-delta" style="grid-column:1/-1;">minutes per zone, planned: ${esc((cur && cur.zone_method) || 'hybrid')}</div>`
+  const actualBarHtml = `<div class="intensity-delta" style="grid-column:1/-1;">minutes per zone, planned: ${esc((cur && cur.zone_method) || 'time in zone')}; ridden: ${esc((cur && cur.zone_method_ridden) || 'time in zone')}</div>`
     + compRow('PLANNED', pLow, pMid, pHigh, pTotal, true)
     + compRow('ACTUAL', actLow, actMid, actHigh, actTotal, false)
     + deltaLineHtml;
@@ -20605,7 +20606,7 @@ function renderOnTrackBar(data) {
         <div style="font-size:10px;color:var(--text3);">${esc(nextPhaseLbl)}</div>
       </div>
     </div>
-    <div class="ontrack-rails" title="Minutes per zone counted by the hybrid method: work bouts to the session's goal zone, warm-up, cool-down and recovery to zone 1">
+    <div class="ontrack-rails" title="Minutes per zone: power by time in zone, every second; heart-rate-only rides by the hybrid; a session without a readable file by its type">
       ${railZ12}
       ${railZ34}
       ${railZ5}

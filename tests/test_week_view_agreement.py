@@ -213,11 +213,11 @@ class WeekViewAgreement(unittest.TestCase):
         """A6. /api/week-summary banded planned minutes by the session's label
         through its own table; /api/weekly-plan bands them by the served
         file's zone shares. The rollup and the home bars read one answer:
-        since slim/9.3 minutes per zone by the hybrid (I2)."""
+        since slim/9.3 minutes per zone by time in zone (I2, amendment 2)."""
         weekly = self._get("/api/weekly-plan")
         summary = self._get("/api/week-summary")
         self.assertEqual(summary["zone_minutes_planned"], weekly["zone_minutes_planned"])
-        self.assertEqual((summary["zone_method"], weekly["zone_method"]), ("hybrid", "hybrid"))
+        self.assertEqual((summary["zone_method"], weekly["zone_method"]), ("time in zone", "time in zone"))
         self.assertGreater(sum(weekly["zone_minutes_planned"].values()), 0)
 
     def test_the_fixture_is_the_owners_record(self):

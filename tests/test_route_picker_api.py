@@ -837,7 +837,8 @@ def test_week_summary_200_and_required_fields(client):
     # Zones are exactly the 3 expected keys, planned and actual, by one method
     assert set(data["zone_minutes"].keys()) == EXPOSURE_BANDS
     assert set(data["zone_minutes_planned"].keys()) == EXPOSURE_BANDS
-    assert data["zone_method"] == "hybrid"
+    assert data["zone_method"].startswith(("time in zone", "by type"))
+    assert "zone_method_ridden" in data
     # Dominant zone is one of the 3 zones OR "mixed"
     assert data["zone_dominant"] in (EXPOSURE_BANDS | {"mixed"})
     # Dates parse

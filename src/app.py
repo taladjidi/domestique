@@ -9320,8 +9320,8 @@ def api_week_summary(week_offset: int = Query(0)):
         (s.get("duration_min") or 0) for s in sessions
     )))
 
-    # Minutes per zone (sport-agnostic), on the planner's three zones by the
-    # hybrid count (contract slim/9.3, I2). Activities with neither HR nor
+    # Minutes per zone (sport-agnostic), on the planner's three zones
+    # (contract slim/9.3, I2 + amendment 2: _ride_count). Activities with neither HR nor
     # TRIMP signal go into a separate unclassified_minutes bucket so they
     # don't silently inflate zone 1 (QA-EDGE #2).
     zone_minutes = {"zone1": 0, "zone2": 0, "zone3": 0}
@@ -9334,45 +9334,44 @@ def api_week_summary(week_offset: int = Query(0)):
     # three-hour endurance ride wholly under the band of its average HR put
     # every minute of a Z2 week into mid/high and reported low_aerobic as zero.
     # _load_all_rides_safe is the shared 5-minute cache, so this is one parse.
-    _tiz_by_id: dict[str, dict] = {}
+    _ride_by_id: dict[str, dict] = {}
     try:
         for _r in _load_all_rides_safe() or []:
-            _tiz = _r.get("time_in_zone")
-            if not _tiz:
-                continue
             _rid = str(_r.get("ride_id") or "")
             if _rid:
                 # by both spellings: /api/activities ids are "icu_i..." from
                 # the ride store and bare from intervals.icu; matching only
                 # the bare one sent every stored ride to the HR fallback
-                _tiz_by_id[_rid] = _tiz
-                _tiz_by_id[_rid[4:] if _rid.startswith("icu_") else "icu_" + _rid] = _tiz
+                _ride_by_id[_rid] = _r
+                _ride_by_id[_rid[4:] if _rid.startswith("icu_") else "icu_" + _rid] = _r
     except Exception:  # noqa: BLE001 - never break the rollup over the archive
-        _tiz_by_id = {}
+        _ride_by_id = {}
 
-    # A ride is counted for the goal zone of the session its completion match
-    # says it is (zones.hybrid_ride_minutes), as the calendar and the headline
-    # count it; a ride no match claims is counted by time in zone.
+    # Each ride by _ride_count, as the calendar and the headline count it: an
+    # HR-only ride for the goal zone of the session its completion match says
+    # it is. An activity with no ride record, by its average HR or TRIMP.
     _goal_by_ride = _plan_goal_by_ride(_read_stored_plan())
+    ridden_methods: list = []
     for a in week_activities:
         band, signal = _classify_exposure_with_signal(a, lthr)
         dur = int(round(a.get("duration_min") or 0))
-        _tiz = _tiz_by_id.get(str(a.get("id") or ""))
-        split = None
-        if isinstance(_tiz, dict) and sum(_zones_mod.three_zone(_tiz).values()) > 0:
-            _goal = _goal_by_ride.get(_ride_key(str(a.get("id") or "")))
-            split = _wv.ride_zone_minutes(_tiz, _goal)
+        _rec = _ride_by_id.get(str(a.get("id") or ""))
+        res = (_ride_count(_rec, _goal_by_ride.get(_ride_key(_rec)), minutes=dur)
+               if _rec is not None else None)
+        split = res[0] if res else None
         if split:
             for _b, _m in split.items():
                 zone_minutes[_b] = zone_minutes.get(_b, 0) + _m
             # Label the day-list row with where the ride actually spent most of
             # its time, so the list and the bars cannot tell different stories.
             band = max(split, key=lambda k: split[k])
-            signal = "time_in_zone"
+            signal = _SIGNAL_OF_METHOD.get(res[1], res[1])
+            ridden_methods.append(res[1])
         elif signal == "inferred":
             unclassified_minutes += dur
         else:
             zone_minutes[band] = zone_minutes.get(band, 0) + dur
+            ridden_methods.append("average HR" if signal == "hr" else "TRIMP")
 
         d = (a.get("date") or "")[:10]
         row = {
@@ -9468,15 +9467,15 @@ def api_week_summary(week_offset: int = Query(0)):
                 "did_non_cycling": bool(day_acts),
             })
 
-    # Planned minutes per zone, from the week view: each served file by the
-    # hybrid count, the session's goal zone only when no file is served. The
+    # Planned minutes per zone, from the week view: each served file by time
+    # in zone, the session's goal zone only when no file is served. The
     # same numbers /api/weekly-plan serves (week-view contract A6).
     zone_minutes_planned = dict(plan.get("zone_minutes_planned") or {
         "zone1": 0, "zone2": 0, "zone3": 0,
     })
-    # How the planned minutes were counted (week_view.zone_method_label); the
-    # ridden ones are hybrid (rides with power) or by HR.
-    zone_method = plan.get("zone_method") or "hybrid"
+    # How the planned and the ridden minutes were counted
+    # (week_view.zone_method_label).
+    zone_method = plan.get("zone_method") or "time in zone"
 
     # v1.7.6 — overreach flag for the "last week feedback" UI. Triggers
     # when actual TSS exceeds plan by >30 %, OR when the minutes above zone 1
@@ -9525,6 +9524,7 @@ def api_week_summary(week_offset: int = Query(0)):
         "zone_minutes": zone_minutes,
         "zone_minutes_planned": zone_minutes_planned,
         "zone_method": zone_method,
+        "zone_method_ridden": _wv.zone_method_label(ridden_methods),
         "unclassified_minutes": unclassified_minutes,
         "zone_dominant": zone_dominant,
         "sports": sports_counter,
@@ -9875,32 +9875,59 @@ def _days_since_last_anaerobic(rides: list[dict], today: date,
         return None
 
 
-def _served_zone_minutes_of(zwo_file: str, slot_min, slot_type: str, goal):
+def _served_zone_minutes_of(zwo_file: str, slot_min, slot_type: str):
     """week_view's reader of a planned session's served workout: minutes per
-    zone (zones.hybrid_minutes) of the file fitted to its slot, or None."""
+    zone (zones.tiz_minutes) of the file fitted to its slot, or None."""
     if not zwo_file:
         return None
     try:
         path = active_workout_dir() / zwo_file
     except Exception:  # noqa: BLE001
         return None
-    return served_zone_minutes(path, slot_min, slot_type, goal)
+    return served_zone_minutes(path, slot_min, slot_type)
+
+
+# A ride's method, as /api/week-summary's day rows name their signal.
+_SIGNAL_OF_METHOD = {"time in zone": "time_in_zone", "hybrid (HR)": "hybrid_hr",
+                     "HR time in zone": "hr_time_in_zone", "average HR": "hr", "TRIMP": "trimp"}
+
+
+def _ride_count(ride: dict, goal, power_tiz: "dict | None" = None,
+                minutes: "float | None" = None):
+    """(minutes per zone, method) of a ride: the one count the week summary,
+    the calendar, the headline and the programme summary read (contract
+    slim/9.3, amendment 2). With power: time in zone. HR only: the hybrid for
+    ``goal``, the goal zone of the session its completion match says it is
+    (_plan_goal_by_ride), else HR time in zone. Neither: its whole moving
+    time in the zone of its average HR or TRIMP (_classify_exposure). None
+    when nothing says how hard it was."""
+    import week_view as _wv
+    res = _wv.ride_minutes(power_tiz if power_tiz is not None else ride.get("time_in_zone"),
+                           ride.get("hr_time_in_zone"), goal)
+    if res:
+        return res
+    mins = float(minutes if minutes is not None else ride_storage.ride_moving_s(ride) / 60.0)
+    zone, signal = _classify_exposure_with_signal(
+        {"avg_hr": ride.get("avg_hr"), "trimp": ride.get("trimp"), "duration_min": mins},
+        config.ATHLETE_LTHR or 175)
+    if signal == "inferred" or mins <= 0:
+        return None
+    out = {z: 0.0 for z in _wv.ZONES}
+    out[zone] = mins
+    return out, ("average HR" if signal == "hr" else "TRIMP")
 
 
 def _rides_zone_minutes(rides, goal_by_ride: dict, start: str, end: str) -> dict:
-    """Minutes per zone the rides in [start, end] spent, each by the hybrid
-    count for the goal zone of the session its completion match says it is
-    (_plan_goal_by_ride; unmatched: time in zone)."""
+    """Minutes per zone the rides in [start, end] spent (_ride_count; an HR-only
+    ride for the goal zone of the session its completion match says it is)."""
     import week_view as _wv
     out = {z: 0.0 for z in _wv.ZONES}
     for r in rides or []:
         d = _ride_started_local_iso_date(r) or ""
         if not d or d < start or d > end:
             continue
-        tiz = _ride_tiz_seconds(r)
-        if not tiz:
-            continue
-        for z, v in _wv.ride_zone_minutes(tiz, goal_by_ride.get(_ride_key(r))).items():
+        res = _ride_count(r, goal_by_ride.get(_ride_key(r)), power_tiz=_ride_tiz_seconds(r))
+        for z, v in (res[0] if res else {}).items():
             out[z] += v
     return out
 
@@ -9945,8 +9972,8 @@ def _plan_goal_by_ride(plan: "dict | None") -> dict:
 
 
 def _plan_zone_distribution(plan: dict) -> dict:
-    """% of a plan's minutes per zone, each session by the hybrid count of
-    its served file (week_view.hybrid_zone_minutes)."""
+    """% of a plan's minutes per zone, each session by time in zone of its
+    served file (week_view.planned_zone_minutes)."""
     import week_view as _wv
     try:
         lib = _wv.library_by_file(tp.load_workout_library())
@@ -11626,7 +11653,7 @@ async def api_plan_generate(request: Request):
 
             # v2.3.0 — realized distribution (honest, computed from the generated
             # sessions) for the UI's "% distribution" readout; since slim/9.3
-            # per zone by the hybrid count, as every other surface counts.
+            # per zone, as every other surface counts.
             plan_dict["realized_zones"] = _plan_zone_distribution(plan_dict)
 
             # Phase-split editor (v3.2.0, A1): stamp plan meta with what actually
@@ -14268,9 +14295,9 @@ def _ride_power_tiz(ride: dict, ftp: int | None) -> dict:
          supplied FTP by zones.py (per MASTER §3 — "If FIT lacks RR/zone-time,
          compute z1/.../z5+ from power-time array using FTP from profile").
       3. If both fail, all zeros.
-    The calendar counts it by the hybrid (week_view.ride_zone_minutes) like
-    every other surface; until slim/9.3 it binned it with thresholds of its
-    own and a planned session by a type heuristic (VO2max 55/10/35).
+    The calendar counts it by _ride_count like every other surface; until
+    slim/9.3 it binned it with thresholds of its own and a planned session by
+    a type heuristic (VO2max 55/10/35).
     """
     zp = (ride.get("zones") or {}).get("power") or {}
     tiz = {f"z{i}": float(zp.get(f"Z{i}") or 0) for i in range(1, 8)}
@@ -14289,20 +14316,13 @@ def _ride_power_tiz(ride: dict, ftp: int | None) -> dict:
     return tiz
 
 
-def _ride_zone_fields(tiz: dict, goal, ride: "dict | None" = None,
-                      duration_min: float = 0) -> dict:
-    """zone1_min / zone2_min / zone3_min of a calendar ride payload. A ride
-    with no power time in zone counts its minutes in the zone of its average
-    HR or TRIMP (_classify_exposure), as /api/week-summary counts it, so the
-    two surfaces agree on what was ridden."""
-    import week_view as _wv
-    out = {f"{z}_min": round(v, 1) for z, v in _wv.ride_zone_minutes(tiz, goal).items()}
-    if ride is not None and duration_min and not any(out.values()):
-        act = {"avg_hr": ride.get("avg_hr"), "trimp": ride.get("trimp"),
-               "duration_min": duration_min}
-        zone, signal = _classify_exposure_with_signal(act, config.ATHLETE_LTHR or 175)
-        if signal != "inferred":
-            out[f"{zone}_min"] = round(float(duration_min), 1)
+def _ride_zone_fields(res) -> dict:
+    """zone1_min / zone2_min / zone3_min and zone_method of a calendar ride
+    payload, from _ride_count's (minutes, method); zeros and None when
+    nothing says how hard the ride was."""
+    m, how = res if res else ({}, None)
+    out = {f"zone{i}_min": round(float(m.get(f"zone{i}") or 0), 1) for i in (1, 2, 3)}
+    out["zone_method"] = how
     return out
 
 
@@ -14704,10 +14724,11 @@ def _summarize_ride_for_calendar(
     callers, actual_secondary list) the kwarg defaults to None and no
     ``compare`` block is added.
 
-    slim/9.3: the zone minutes (zone1_min .. zone3_min) are the hybrid count
-    for ``goal_zone``, the goal of the session planned on the ride's day
-    (None: time in zone). ``compare`` keeps reading the ride's time in zone,
-    the shape the planned file's zone_dist is in.
+    slim/9.3: the zone minutes (zone1_min .. zone3_min) are _ride_count's:
+    time in zone with power; an HR-only ride by the hybrid for ``goal_zone``,
+    the goal of the session its completion match says it is. ``compare``
+    keeps reading the ride's time in zone, the shape the planned file's
+    zone_dist is in.
     """
     # v4.4.0 — ICU rides already carry the §3 fields at the top level.
     if (ride.get("source") == "icu"
@@ -14728,7 +14749,7 @@ def _summarize_ride_for_calendar(
             "duration_min": duration_min,
             "tss": ride.get("tss"),
             "avg_power_w": int(ride.get("avg_power_w") or 0),
-            **_ride_zone_fields(tiz, goal_zone, ride, duration_min),
+            **_ride_zone_fields(_ride_count(ride, goal_zone, minutes=duration_min)),
             "decoupling_pct": ride.get("decoupling_pct"),
             "started_at": ride.get("started_at") or "",
             "classification": _pol.get("classification") if isinstance(_pol, dict) else None,
@@ -14777,9 +14798,10 @@ def _summarize_ride_for_calendar(
         "duration_min": duration_min,
         "tss": tss,
         "avg_power_w": int(avg_p) if avg_p else 0,
-        **_ride_zone_fields(tiz, goal_zone,
-                            {"avg_hr": summary.get("avg_hr") or parsed.get("avg_hr")},
-                            duration_min),
+        **_ride_zone_fields(_ride_count(
+            {"avg_hr": summary.get("avg_hr") or parsed.get("avg_hr"),
+             "hr_time_in_zone": ride.get("hr_time_in_zone")},
+            goal_zone, power_tiz=tiz, minutes=duration_min)),
         "decoupling_pct": decoupling,
         "started_at": ride.get("started_at") or parsed.get("start_time") or "",
         "classification": _pol.get("classification") if isinstance(_pol, dict) else None,
@@ -15417,7 +15439,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
 
         planned_tss = 0.0
         actual_tss = 0.0
-        # Minutes per zone, planned and ridden, by the hybrid (slim/9.3, I2):
+        # Minutes per zone, planned and ridden (slim/9.3, I2 + amendment 2):
         # the same count the week view, the week summary and the headline use.
         planned_z = {z: 0.0 for z in _wv.ZONES}
         actual_z = {z: 0.0 for z in _wv.ZONES}
@@ -15427,6 +15449,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
         planned_tss_td = 0.0
         planned_z_td = {z: 0.0 for z in _wv.ZONES}
         week_methods: list = []
+        ridden_methods: list = []
         days_elapsed = 0
         on_record = False   # a stored session covers some day of this week
 
@@ -15489,6 +15512,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                 actual_tss += float(actual_payload["tss"] or 0)
                 for z in _wv.ZONES:
                     actual_z[z] += actual_payload[f"{z}_min"]
+                ridden_methods.append(actual_payload.get("zone_method"))
             for r in secondary:
                 # Secondary rides are extras (free rides on a planned day),
                 # never "the planned one" — pass None to keep them
@@ -15504,6 +15528,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                 actual_tss += float(_sec.get("tss") or 0)
                 for z in _wv.ZONES:
                     actual_z[z] += float(_sec.get(f"{z}_min") or 0)
+                ridden_methods.append(_sec.get("zone_method"))
 
             planned_payload = None
             if sess and not sess.get("_synthetic_history"):
@@ -15635,6 +15660,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
             **{f"planned_{z}_min": round(planned_z[z], 1) for z in _wv.ZONES},
             **{f"actual_{z}_min": round(actual_z[z], 1) for z in _wv.ZONES},
             "zone_method": _wv.zone_method_label(week_methods),
+            "zone_method_ridden": _wv.zone_method_label(ridden_methods),
             # v1.3.1 HIGH fix — to-date planned totals (sum of planned
             # for days where date <= today, capped at the full week).
             "planned_tss_to_date": round(planned_tss_td, 1),
@@ -19988,13 +20014,13 @@ def _build_programme_summary(plan: dict) -> dict:
     }
 
     # ── Intensity distribution ─────────────────────────────────────────────
-    # Minutes per zone of the rides in the window by the hybrid count, each
-    # ride for the goal zone of the session its completion match says it is
-    # (slim/9.3, I2). Until then this put threshold (Z4) with VO2max and above.
+    # Minutes per zone of the rides in the window (_ride_count, slim/9.3 I2 +
+    # amendment 2). Until then this put threshold (Z4) with VO2max and above.
     import week_view as _wv
     goal_by_ride = _plan_goal_by_ride(plan)
     idist = {z: 0.0 for z in _wv.ZONES}
     tiz_secs = {"z1": 0.0, "z2": 0.0, "z3": 0.0}
+    methods: list = []
     for r in in_window:
         flat = r.get("zones") if isinstance(r.get("zones"), dict) and "z1" in r.get("zones") else None
         tiz = r.get("time_in_zone") or flat or {}
@@ -20004,25 +20030,21 @@ def _build_programme_summary(plan: dict) -> dict:
             three = _zones_mod.three_zone(tiz)
         except (TypeError, ValueError):
             continue
-        if sum(three.values()) <= 0:
-            # No power time in zone: its minutes in the zone of its average HR
-            # or TRIMP, as the calendar and the week summary count it (SF3 of
-            # the evaluation of 2382cfd1: zone 1 read 1178 here, 1379 there).
-            mins = ride_storage.ride_moving_s(r) / 60.0
-            zone, signal = _classify_exposure_with_signal(
-                {"avg_hr": r.get("avg_hr"), "trimp": r.get("trimp"), "duration_min": mins},
-                config.ATHLETE_LTHR or 175)
-            # Cycling only, as the calendar: a walk is not training intensity
-            # on this card (the week summary is sport-agnostic by design).
-            if signal != "inferred" and mins > 0 and _is_cycling_sport(r.get("sport") or ""):
-                idist[zone] += mins
-            continue
         for k, v in three.items():
             tiz_secs[k] += v
-        for z, v in _wv.ride_zone_minutes(tiz, goal_by_ride.get(_ride_key(r))).items():
+        # A ride with no power counts by heart rate as the calendar and the
+        # week summary count it (SF3 of the evaluation of 2382cfd1), cycling
+        # only as on the calendar: a walk is not training intensity here.
+        if sum(three.values()) <= 0 and not _is_cycling_sport(r.get("sport") or ""):
+            continue
+        res = _ride_count(r, goal_by_ride.get(_ride_key(r)), power_tiz=tiz)
+        if not res:
+            continue
+        methods.append(res[1])
+        for z, v in res[0].items():
             idist[z] += v
     intensity_dist = {f"{z}_min": int(round(v)) for z, v in idist.items()}
-    intensity_dist["method"] = "hybrid"
+    intensity_dist["method"] = _wv.zone_method_label(methods)
 
     # ── Polarization index ─────────────────────────────────────────────────
     # Treff's index and its class read time in zone (the polarization card's

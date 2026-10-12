@@ -61,7 +61,7 @@ def test_custom_hit_sequence_is_proportional():
 
 def test_realized_zone_distribution_normalizes():
     """The generate readout: % of the plan's minutes per zone, each session by
-    the hybrid count (slim/9.3, I2); a session with no file counts its whole
+    time in zone (slim/9.3, I2 + amendment 2); a session with no file counts its whole
     duration to its goal zone, a rest day nothing."""
     plan = {"weeks": [{"sessions": [
         {"session_type": "z2", "duration_min": 100, "zwo_file": ""},
@@ -114,7 +114,7 @@ def test_generate_custom_persists_and_tracks_request(sandbox_plan_dir):
     assert pj["goal"]["custom_bands"]["tempo_ss"] == 70.0
     assert pj["goal"]["plan_mode"] == "template"
     assert pj["goal"]["template_id"] == "custom"
-    assert pj["realized_zones"]["method"].startswith(("hybrid", "by type"))
+    assert pj["realized_zones"]["method"].startswith(("time in zone", "by type"))
     assert set(pj["realized_zones"]) == {"zone1", "zone2", "zone3", "method"}
 
     # The HARD work actually tracks the request: sweetspot is the dominant HIT.

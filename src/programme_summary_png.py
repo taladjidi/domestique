@@ -92,9 +92,10 @@ def _draw_kpi_tile(draw, x, y, w, h, label, value, sub=None, color=ACCENT):
 
 def _draw_intensity_dist(draw, x, y, w, h, dist):
     """Stacked horizontal bar: zone 1 / zone 2 / zone 3 minutes (the planner's
-    three zones, counted by the hybrid; slim/9.3)."""
+    three zones; slim/9.3), with the method the summary counted them by."""
     _rounded_rect(draw, (x, y, x + w, y + h), 10, fill=CARD, outline=BORDER)
-    draw.text((x + 14, y + 8), "Intensity distribution (min, hybrid)", font=_font(11, bold=True), fill=TEXT2)
+    method = (dist or {}).get("method") or "time in zone"
+    draw.text((x + 14, y + 8), f"Intensity distribution (min, {method})", font=_font(11, bold=True), fill=TEXT2)
     if not dist:
         draw.text((x + w / 2, y + h / 2), "no data", font=_font(12), fill=TEXT3, anchor="mm")
         return

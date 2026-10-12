@@ -165,9 +165,9 @@ class ProgrammeSummaryEndpointTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         d = r.json()
         idist = d["intensity_dist"]
-        # The planner's three zones by the hybrid (slim/9.3, I2); no session
+        # The planner's three zones by time in zone (slim/9.3, amendment 2); no session
         # is planned on the rides' day, so plain time in zone.
-        self.assertEqual(idist["method"], "hybrid")
+        self.assertEqual(idist["method"], "time in zone")
         # zone 1 (Coggan Z1+Z2): 150+150 + 150+150 = 600 sec = 10 min
         self.assertEqual(idist["zone1_min"], 10)
         # zone 2 (Coggan Z3+Z4, threshold included): 90 sec ≈ 2 min
@@ -190,9 +190,9 @@ class ProgrammeSummaryEndpointTests(unittest.TestCase):
             d = self.client.get("/api/programme/summary", params={"plan_id": "test"}).json()
         self.assertEqual(d["intensity_dist"]["zone1_min"], 60)
 
-    def test_intensity_distribution_counts_a_vo2_days_work_to_zone_3(self) -> None:
-        """A ride the completion match says IS a VO2max session: its time at or
-        above 76% FTP counts to the session's goal zone, zone 3 (the hybrid)."""
+    def test_a_matched_vo2_ride_with_power_is_time_in_zone(self) -> None:
+        """A ride the completion match says IS a VO2max session, with power:
+        time in zone every second, no goal-zone credit (amendment 2)."""
         plan = _mk_synth_plan(date.today() - timedelta(days=20), weeks=2)
         sd_str = plan["weeks"][0]["start"]
         plan["weeks"][0]["sessions"] = [{
@@ -208,7 +208,8 @@ class ProgrammeSummaryEndpointTests(unittest.TestCase):
         with patch("ride_storage.load_all_rides", return_value=[ride]):
             d = self.client.get("/api/programme/summary", params={"plan_id": "test"}).json()
         self.assertEqual((d["intensity_dist"]["zone1_min"], d["intensity_dist"]["zone2_min"],
-                          d["intensity_dist"]["zone3_min"]), (40, 0, 20))
+                          d["intensity_dist"]["zone3_min"]), (40, 10, 10))
+        self.assertEqual(d["intensity_dist"]["method"], "time in zone")
 
     def test_compliance_per_phase(self) -> None:
         """One compliance entry per phase, with planned + actual TSS."""
@@ -263,7 +264,7 @@ class ProgrammeSummaryPNGTests(unittest.TestCase):
             "eftp_delta": {"start": 230, "end": 250, "pct": 8.7},
             "vo2max_delta": {"start": 52.0, "end": 56.0, "pct": 7.7},
             "ctl_gain": {"start": 36.0, "end": 64.0, "delta": 28.0},
-            "intensity_dist": {"zone1_min": 800, "zone2_min": 60, "zone3_min": 90, "method": "hybrid"},
+            "intensity_dist": {"zone1_min": 800, "zone2_min": 60, "zone3_min": 90, "method": "time in zone"},
             "pol_index": {"mean": 2.3, "class": "polarized"},
             "monotony_max": 1.8,
             "strain_max": 720.5,

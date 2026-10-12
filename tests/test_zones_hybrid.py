@@ -51,48 +51,31 @@ VO2 = _zwo('<Warmup Duration="600" PowerLow="0.5" PowerHigh="0.8"/>'
            '<Cooldown Duration="600" PowerLow="0.7" PowerHigh="0.4"/>')
 
 
-def test_hybrid_counts_work_bouts_to_the_goal_zone():
-    h = zones.hybrid_minutes(VO2, 3)
-    # work: 5 x 3 min at 100% + 2 x 1 min at 120% + 5 min at 95% -> zone 3
-    assert h["z3"] == pytest.approx(15 + 2 + 5)
-    assert h["z2"] == 0
-    # zone 1: warm-up 10 (part of it above 76%) + 5 x 3 active off + cool-down 10
-    assert h["z1"] == pytest.approx(10 + 15 + 10)
+def test_power_is_counted_by_time_in_zone_every_second():
+    """Contract amendment 2: a powered workout is counted second by second, no
+    goal-zone credit: an over-under's 90% unders are zone 2 even in a VO2max
+    session, a primer in the warm-up stays where its power is."""
+    b = _zwo('<Warmup Duration="600" PowerLow="0.5" PowerHigh="1.0"/>'
+             '<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.90"/>')
+    t = zones.tiz_minutes(b)
+    assert t["z1"] == pytest.approx(10 * 0.52, abs=0.05)      # 50-76 % of the ramp
+    assert t["z2"] == pytest.approx(10 * 0.48 + 3, abs=0.05)  # 76-100 % of it, the unders
+    assert t["z3"] == pytest.approx(3)
+    assert not hasattr(zones, "hybrid_minutes")
 
 
-def test_hybrid_does_not_count_passive_recovery():
-    t, h = zones.tiz_minutes(VO2), zones.hybrid_minutes(VO2, 3)
-    # time in zone counts every second; the 2 min at power 0 and the
-    # 2 x 1 min OffPower=0 legs are the only minutes the hybrid leaves out
-    assert sum(t.values()) - sum(h.values()) == pytest.approx(2 + 2)
+HR = {"z1": 600, "z2": 1200, "z3": 300, "z4": 300, "z5": 120, "z6": 60, "z7": 0}
 
 
-def test_hybrid_an_off_leg_at_or_above_76_percent_is_work():
-    # the unders of an over-under (0.90 FTP) are work bouts: goal zone, not
-    # recovery (contract amendment 2026-10-12)
-    b = _zwo('<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.90"/>')
-    assert zones.hybrid_minutes(b, 2) == pytest.approx({"z1": 0, "z2": 6, "z3": 0})
-    # at exactly 76% too; below it the leg is active recovery
-    b = _zwo('<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.76"/>')
-    assert zones.hybrid_minutes(b, 3) == pytest.approx({"z1": 0, "z2": 0, "z3": 6})
-    b = _zwo('<IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="1.10" OffPower="0.75"/>')
-    assert zones.hybrid_minutes(b, 3) == pytest.approx({"z1": 3, "z2": 0, "z3": 3})
+def test_hr_only_ride_matched_counts_its_work_to_the_goal():
+    # below the zone 1/2 seam (HR Z1-Z2) is zone 1, the rest to the goal zone
+    assert zones.hr_hybrid_minutes(HR, 3) == pytest.approx({"z1": 30, "z2": 0, "z3": 13})
+    assert zones.hr_hybrid_minutes(HR, 2) == pytest.approx({"z1": 30, "z2": 13, "z3": 0})
 
 
-def test_hybrid_ramp_is_split_at_76_percent():
-    # a work ramp from 66% to 86%: its lower half is zone 1, its upper the goal
-    b = _zwo('<Ramp Duration="600" PowerLow="0.66" PowerHigh="0.86"/>')
-    h = zones.hybrid_minutes(b, 2)
-    assert h["z1"] == pytest.approx(5, abs=0.05)
-    assert h["z2"] == pytest.approx(5, abs=0.05)
-
-
-@pytest.mark.parametrize("goal", [1, None])
-def test_easy_or_unknown_goal_is_time_in_zone(goal):
-    b = _zwo('<SteadyState Duration="3000" Power="0.65"/>'
-             '<SteadyState Duration="60" Power="1.3"/><SteadyState Duration="120" Power="0.9"/>')
-    assert zones.hybrid_minutes(b, goal) == zones.tiz_minutes(b)
-    assert zones.tiz_minutes(b) == pytest.approx({"z1": 50, "z2": 2, "z3": 1})
+def test_hr_only_ride_unmatched_is_hr_time_in_zone():
+    assert zones.hr_hybrid_minutes(HR, None) == pytest.approx({"z1": 30, "z2": 10, "z3": 3})
+    assert zones.hr_hybrid_minutes(None, None) == {"z1": 0, "z2": 0, "z3": 0}
 
 
 def test_tiz_minutes_is_scan_zwo(tmp_path):
@@ -108,15 +91,3 @@ def test_tiz_minutes_is_scan_zwo(tmp_path):
     assert zones.tiz_minutes(zones._workout_element(VO2)) == t
 
 
-TIZ = {"z1": 1200, "z2": 1800, "z3": 300, "z4": 600, "z5": 240, "z6": 60, "z7": 0, "ss": 999}
-
-
-def test_ride_matched_to_a_hard_session_counts_its_work_to_the_goal():
-    assert zones.hybrid_ride_minutes(TIZ, 3) == pytest.approx({"z1": 50, "z2": 0, "z3": 20})
-    assert zones.hybrid_ride_minutes(TIZ, 2) == pytest.approx({"z1": 50, "z2": 20, "z3": 0})
-
-
-@pytest.mark.parametrize("goal", [None, 1])
-def test_ride_unmatched_or_easy_is_time_in_zone(goal):
-    assert zones.hybrid_ride_minutes(TIZ, goal) == pytest.approx({"z1": 50, "z2": 15, "z3": 5})
-    assert zones.hybrid_ride_minutes(None, goal) == {"z1": 0, "z2": 0, "z3": 0}

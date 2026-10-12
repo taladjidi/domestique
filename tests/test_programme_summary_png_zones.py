@@ -21,7 +21,7 @@ def test_intensity_panel_names_zones_and_method():
     real = draw.text
     draw.text = lambda xy, text, *a, **k: (said.append(text), real(xy, text, *a, **k))
     png._draw_intensity_dist(draw, 0, 0, 400, 200,
-                             {"zone1_min": 800, "zone2_min": 100, "zone3_min": 100, "method": "hybrid"})
-    assert "Intensity distribution (min, hybrid)" in said
+                             {"zone1_min": 800, "zone2_min": 100, "zone3_min": 100, "method": "time in zone"})
+    assert "Intensity distribution (min, time in zone)" in said
     assert "zone 1 80%" in said and "zone 2 10%" in said and "zone 3 10%" in said
     assert "no data" not in said

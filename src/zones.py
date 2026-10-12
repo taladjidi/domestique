@@ -110,7 +110,7 @@ def three_zone_pct(coggan: dict) -> dict[str, float]:
     return {k: 100.0 * v / total for k, v in z.items()}
 
 
-# ── The session's goal zone, and the hybrid count (owner's D1/D2, 2026-10-12) ─
+# ── The session's goal zone, and the counts (owner's D1/D2, 2026-10-12) ─────
 #
 # ONE scale for every intensity number the app shows: the three zones above.
 # A session is placed on it by what it is for, content class first (the
@@ -162,77 +162,60 @@ def _workout_element(workout):
 
 
 def _blocks(workout_el):
-    """(%FTP, seconds, kind) for every slice of the file, read the way
+    """(%FTP, seconds) for every slice of the file, read the way
     zwo_parse.scan_zwo reads it (its defaults, its 1-s ramp slices), so the
-    time in zone here is the planner's to the second. kind is "easy" for a
-    Warmup or Cooldown, else "block" (an IntervalsT leg is a block like any
-    other: its power, not its element, says whether it is work)."""
+    time in zone here is the planner's to the second."""
     for seg in workout_el if workout_el is not None else ():
         tag = seg.tag
         if tag in ("Warmup", "Cooldown", "Ramp"):
             dur = int(float(seg.get("Duration", 0)))
             plo = float(seg.get("PowerLow", 0.5))
             phi = float(seg.get("PowerHigh", 0.7))
-            kind = "block" if tag == "Ramp" else "easy"
             n = max(20, dur)
             for i in range(n):
-                yield (plo + (phi - plo) * (i + 0.5) / n) * 100, dur / n, kind
+                yield (plo + (phi - plo) * (i + 0.5) / n) * 100, dur / n
         elif tag == "SteadyState":
-            yield float(seg.get("Power", 0.65)) * 100, int(float(seg.get("Duration", 0))), "block"
+            yield float(seg.get("Power", 0.65)) * 100, int(float(seg.get("Duration", 0)))
         elif tag == "IntervalsT":
             reps = int(seg.get("Repeat", 1))
             yield (float(seg.get("OnPower", 1.0)) * 100,
-                   reps * int(float(seg.get("OnDuration", 0))), "block")
+                   reps * int(float(seg.get("OnDuration", 0))))
             yield (float(seg.get("OffPower", 0.5)) * 100,
-                   reps * int(float(seg.get("OffDuration", 0))), "block")
+                   reps * int(float(seg.get("OffDuration", 0))))
         elif tag == "FreeRide":
-            yield 65.0, int(float(seg.get("Duration", 0))), "block"
+            yield 65.0, int(float(seg.get("Duration", 0)))
 
 
 def tiz_minutes(workout) -> dict[str, float]:
     """Minutes per zone of a planned workout by time in zone: each slice to
-    the zone its power sits in. The planner's own count (scan_zwo's zone
-    seconds, folded by THREE_ZONE_FROM_COGGAN)."""
+    the zone its power sits in, every second, no goal-zone credit (contract
+    slim/9.3, amendment 2: power has no lag to correct). The planner's own
+    count (scan_zwo's zone seconds, folded by THREE_ZONE_FROM_COGGAN)."""
     out = {"z1": 0.0, "z2": 0.0, "z3": 0.0}
-    for pct, sec, _kind in _blocks(_workout_element(workout)):
+    for pct, sec in _blocks(_workout_element(workout)):
         out["z1" if pct < _WORK_PCT else "z2" if pct < _Z3_PCT else "z3"] += sec / 60.0
     return out
 
 
-def hybrid_minutes(workout, goal: "int | None") -> dict[str, float]:
-    """Minutes per zone of a planned workout (the served bytes) by the hybrid
-    session-goal / time-in-zone method (Sylta, Tonnessen and Seiler 2014):
-    warm-up, cool-down and every block or leg below 76% FTP count to zone 1
-    (an IntervalsT off-leg below 76% is active recovery; power 0 is passive
-    and not counted); every block or leg at or above 76% FTP is a work bout
-    and counts to the session's goal zone, whatever its element (the unders
-    of an over-under at 90-95% are work: contract amendment 2026-10-12).
-    With goal zone 1 or None the file is counted by time in zone: an easy
-    ride's surges are not reclassified."""
-    if goal not in (2, 3):
-        return tiz_minutes(workout)
-    out = {"z1": 0.0, "z2": 0.0, "z3": 0.0}
-    work = f"z{goal}"
-    for pct, sec, kind in _blocks(_workout_element(workout)):
-        if pct <= 0:
-            continue                    # passive recovery is not counted
-        if kind == "block" and pct >= _WORK_PCT:
-            out[work] += sec / 60.0
-        else:
-            out["z1"] += sec / 60.0
-    return out
-
-
-def hybrid_ride_minutes(tiz: "dict | None", goal: "int | None") -> dict[str, float]:
-    """Minutes per zone of a ride from its Coggan time in zone (seconds,
-    z1..z7). Matched to a planned session with goal zone 2 or 3, its time
-    below 76% FTP is zone 1 and its time at or above counts to that goal
-    zone; unmatched (goal None), or matched to an easy session, plain time in
-    zone."""
-    z = three_zone(tiz or {})
-    if goal in (2, 3):
-        z = {"z1": z["z1"], "z2": 0.0, "z3": 0.0} | {f"z{goal}": z["z2"] + z["z3"]}
-    return {k: v / 60.0 for k, v in z.items()}
+def hr_hybrid_minutes(hr_tiz: "dict | None", goal: "int | None") -> dict[str, float]:
+    """Minutes per zone of a ride known by heart rate only (contract slim/9.3,
+    amendment 2): the hybrid session-goal / time-in-zone count (Sylta,
+    Tonnessen and Seiler 2014), which exists to correct HR's lag. ``hr_tiz``
+    is the ride's HR time in zone in seconds, z1..z7 on intervals.icu's
+    LTHR-anchored zones (Friel: Z1-Z2 below 90 % LTHR, Z3-Z4 to LTHR, Z5a-c
+    above). Matched by completion to a session with a goal zone, the time
+    below the zone 1/2 seam (HR Z1-Z2) is zone 1 and the rest counts to that
+    goal zone; unmatched (goal None), plain HR time in zone, folded at the
+    same seams as power (zone 3 above LT2)."""
+    h = {k: float((hr_tiz or {}).get(k) or 0) for k in ("z1", "z2", "z3", "z4", "z5", "z6", "z7")}
+    z1 = h["z1"] + h["z2"]
+    rest = sum(h.values()) - z1
+    if goal in (1, 2, 3):
+        out = {"z1": z1, "z2": 0.0, "z3": 0.0}
+        out[f"z{goal}"] += rest
+    else:
+        out = {"z1": z1, "z2": h["z3"] + h["z4"], "z3": h["z5"] + h["z6"] + h["z7"]}
+    return {k: v / 60.0 for k, v in out.items()}
 
 
 def estimated_hr_max(age: int) -> int:
@@ -393,5 +376,4 @@ def zone_distribution(
 
 __all__ = ["Zone", "power_zones", "hr_zones",
            "power_zone_at", "hr_zone_at", "zone_distribution",
-           "estimated_hr_max", "goal_zone", "tiz_minutes", "hybrid_minutes",
-           "hybrid_ride_minutes"]
+           "estimated_hr_max", "goal_zone", "tiz_minutes", "hr_hybrid_minutes"]

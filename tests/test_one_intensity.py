@@ -5,8 +5,9 @@ The owner's week of 2026-10-12, measured: week view low/mid+high/anaerobic
 three counts of one week. The week view banded each file's zone shares into
 four bands of its own, the calendar used its own thresholds and a type
 heuristic (a VO2max session without a file was 55/10/35), the week summary a
-third table. Now every one reads week_view's hybrid count (zones.
-hybrid_minutes over the served file; a ride by zones.hybrid_ride_minutes for
+third table. Now every one reads one count: planned files and rides with
+power by time in zone (zones.tiz_minutes, owner's amendment 2), a ride with
+heart rate only by the hybrid (zones.hr_hybrid_minutes) for
 the goal zone of the session planned on its day) and names the planner's three
 zones.
 """
@@ -84,30 +85,30 @@ class _Week(unittest.TestCase):
         return r.json()
 
 
-class TestTheWeekViewCountsByTheHybrid(_Week):
+class TestTheWeekViewCountsByTimeInZone(_Week):
 
-    def test_sessions_carry_their_goal_zone_and_hybrid_minutes(self):
+    def test_sessions_carry_their_goal_zone_and_time_in_zone(self):
         wk = self._get("/api/weekly-plan")
         by = {s["day"]: s for s in wk["sessions"]}
         tue = by[(MON + timedelta(1)).isoformat()]
         self.assertEqual(tue["goal_zone"], 3)
-        served = download_lib.served_zone_minutes(WORKOUTS / VO2, 76, "vo2max", 3)
+        served = download_lib.served_zone_minutes(WORKOUTS / VO2, 76, "vo2max")
         self.assertEqual(tue["zone_minutes"], {f"zone{i}": int(round(served[f"z{i}"])) for i in (1, 2, 3)})
-        self.assertEqual(tue["zone_minutes"]["zone2"], 0)     # VO2 work is zone 3
+        tiz = zones.tiz_minutes((WORKOUTS / VO2).read_bytes())
+        self.assertEqual(served, tiz)                 # every second, no goal-zone credit
         # a VO2max session with no file counts its duration to its goal zone
         wed = by[(MON + timedelta(2)).isoformat()]
         self.assertEqual(wed["zone_minutes"], {"zone1": 0, "zone2": 0, "zone3": 60})
         # the fileless VO2max day is a session-goal count and says so (SF4)
-        self.assertEqual(tue["zone_method"], "hybrid")
+        self.assertEqual(tue["zone_method"], "time in zone")
         self.assertEqual(wed["zone_method"], "by type")
-        self.assertEqual(wk["zone_method"], "hybrid, 1 by type")
+        self.assertEqual(wk["zone_method"], "time in zone, 1 by type")
         self.assertNotIn("exposure_minutes_planned", wk)
 
-    def test_the_hybrid_is_not_the_planners_time_in_zone(self):
-        # the served VO2 file's surges between bouts are zone 2 by time in
-        # zone; the hybrid credits the bouts to the goal zone
-        b = (WORKOUTS / VO2).read_bytes()
-        self.assertGreaterEqual(zones.hybrid_minutes(b, 3)["z3"], zones.tiz_minutes(b)["z3"])
+    def test_the_power_hybrid_is_gone(self):
+        # amendment 2: power has no lag to correct, no goal-zone credit
+        self.assertFalse(hasattr(zones, "hybrid_minutes"))
+        self.assertFalse(hasattr(zones, "hybrid_ride_minutes"))
 
 
 class TestEverySurfaceCountsTheSame(_Week):
@@ -120,7 +121,7 @@ class TestEverySurfaceCountsTheSame(_Week):
         self.assertEqual(ws["zone_minutes_planned"], wk["zone_minutes_planned"])
         for z in wv.ZONES:
             self.assertAlmostEqual(cw[f"planned_{z}_min"], wk["zone_minutes_planned"][z], delta=1.0)
-        self.assertEqual(cw["zone_method"], "hybrid, 1 by type")
+        self.assertEqual(cw["zone_method"], "time in zone, 1 by type")
         self.assertEqual(ws["zone_method"], wk["zone_method"])
         wed = next(dd for dd in cw["days"] if dd["date"] == (MON + timedelta(2)).isoformat())
         self.assertEqual(wed["planned"]["zone_method"], "by type")
@@ -131,14 +132,17 @@ class TestEverySurfaceCountsTheSame(_Week):
         ws = self._get("/api/week-summary")
         cal = self._get("/api/calendar")
         cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
-        # Tuesday's ride is the VO2max session by its completion match: 40 + 15 min below
-        # 76% FTP is zone 1, its 21 min at or above count to zone 3
-        want = {"zone1": 55, "zone2": 0, "zone3": 21}
+        # Tuesday's ride has power: time in zone, every second, matched or
+        # not: 40 + 15 min zone 1, 2 + 3 min zone 2, 10 + 6 min zone 3
+        want = {"zone1": 55, "zone2": 5, "zone3": 16}
         self.assertEqual(ws["zone_minutes"], want)
         for z in wv.ZONES:
             self.assertAlmostEqual(cw[f"actual_{z}_min"], want[z], delta=0.5)
         day = next(dd for dd in cw["days"] if dd["date"] == (MON + timedelta(1)).isoformat())
-        self.assertEqual(round(day["actual"]["zone3_min"]), 21)
+        self.assertEqual(round(day["actual"]["zone3_min"]), 16)
+        self.assertEqual(day["actual"]["zone_method"], "time in zone")
+        self.assertEqual((ws["zone_method_ridden"], cw["zone_method_ridden"]),
+                         ("time in zone", "time in zone"))
         self.assertNotIn("z5plus_min", day["actual"])
 
 
@@ -151,13 +155,13 @@ def test_the_dashboard_reads_no_retired_field():
 
 
 def test_every_distribution_figure_says_its_method():
-    for needle in ("Minutes per zone (planned: ${esc(d.zone_method || 'hybrid')})",
-                   "planned minutes: ${esc(s.zone_method || 'hybrid')}",
-                   "planned by ${esc(w.zone_method || 'hybrid')}",
-                   "Intensity distribution <span style=\"font-weight:400;color:var(--text3);\">(hybrid)</span>",
+    for needle in ("ridden: ${esc(d.zone_method_ridden || 'time in zone')}",
+                   "ridden: ${esc(s.zone_method_ridden || 'time in zone')}",
+                   "ridden: ${esc(w.zone_method_ridden || 'time in zone')}",
+                   "`(${idist.method || 'time in zone'})`",
                    "Polarization index <span style=\"font-weight:400;color:var(--text3);\">(time in zone)</span>",
                    "PI = ${piVal} · Treff 2019 · time in zone",
-                   "`Realized mix (${d.plan_json.realized_zones.method || 'hybrid'}): `"):
+                   "`Realized mix (${d.plan_json.realized_zones.method || 'time in zone'}): `"):
         assert needle in DASH, needle
 
 
@@ -167,7 +171,7 @@ class TestWeekSummaryFindsEachRidesTimeInZone(_Week):
     a ride's time in zone only for the bare spelling, and counted every other
     ride by its average HR while the card said "hybrid" (review of 82b17875)."""
 
-    def test_both_id_spellings_reach_the_hybrid(self):
+    def test_both_id_spellings_reach_the_ride_record(self):
         d = (MON + timedelta(1)).isoformat()
         for rid, aid in (("icu_i77", "icu_i77"), ("icu_i77", "i77")):
             ride = dict(self.ride, ride_id=rid)
@@ -177,7 +181,7 @@ class TestWeekSummaryFindsEachRidesTimeInZone(_Week):
             with patch.object(app_module, "_load_all_rides_safe", return_value=[ride]), \
                  patch.object(app_module, "api_activities", return_value=act):
                 ws = self._get("/api/week-summary")
-            self.assertEqual(ws["zone_minutes"], {"zone1": 55, "zone2": 0, "zone3": 21}, aid)
+            self.assertEqual(ws["zone_minutes"], {"zone1": 55, "zone2": 5, "zone3": 16}, aid)
             self.assertEqual(ws["activities_by_day"][d][0]["zone_signal"], "time_in_zone", aid)
 
 
@@ -203,24 +207,29 @@ class TestARideWithoutPowerZonesIsCountedTheSameEverywhere(_Week):
         self.assertAlmostEqual(cw["actual_zone1_min"], 60, delta=0.5)
 
 
-class TestARideTakesAGoalOnlyThroughItsMatch(_Week):
-    """Contract amendment 2026-10-12: a second ride on the VO2max day (a
-    commute) is not that session; it is counted by time in zone."""
+class TestAnHrOnlyRideTakesAGoalOnlyThroughItsMatch(_Week):
+    """Amendments 1 and 2: the hybrid is for rides with heart rate only, and a
+    ride takes a session's goal zone only through its completion match; a
+    second HR-only ride on the VO2max day (a commute) is HR time in zone."""
 
-    def test_a_commute_on_a_vo2_day_is_time_in_zone(self):
+    def test_hr_only_rides_matched_and_unmatched(self):
         d = (MON + timedelta(1)).isoformat()
+        hr = {"z1": 900, "z2": 600, "z3": 0, "z4": 240, "z5": 60, "z6": 0, "z7": 0}
+        vo2 = dict(self.ride, time_in_zone={}, hr_time_in_zone=dict(hr))   # matched (i77)
         commute = {"ride_id": "icu_99", "source": "icu", "sport": "Ride", "name": "commute",
                    "started_at": f"{d}T18:00:00", "date": d, "tss": 20, "moving_time_s": 1800,
-                   "duration_s": 1800, "time_in_zone": {"z1": 900, "z2": 600, "z4": 240, "z5": 60}}
+                   "duration_s": 1800, "time_in_zone": {}, "hr_time_in_zone": dict(hr)}
         act = [{"id": "77", "date": d, "sport": "Ride", "duration_min": 76, "tss": 80},
                {"id": "99", "date": d, "sport": "Ride", "duration_min": 30, "tss": 20}]
-        with patch.object(app_module, "_load_all_rides_safe", return_value=[self.ride, commute]), \
+        with patch.object(app_module, "_load_all_rides_safe", return_value=[vo2, commute]), \
              patch.object(app_module, "api_activities", return_value=act):
             ws = self._get("/api/week-summary")
             cal = self._get("/api/calendar")
-        # VO2 session 55/0/21 (hybrid, matched) + commute 25/4/1 (time in zone)
-        want = {"zone1": 80, "zone2": 4, "zone3": 22}
+        # the matched VO2 ride 25/0/5 (hybrid (HR)) + the commute 25/4/1 (HR
+        # time in zone)
+        want = {"zone1": 50, "zone2": 4, "zone3": 6}
         self.assertEqual(ws["zone_minutes"], want)
+        self.assertEqual(ws["zone_method_ridden"], "hybrid (HR), 1 HR time in zone")
         cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
         for z in wv.ZONES:
             self.assertAlmostEqual(cw[f"actual_{z}_min"], want[z], delta=0.6)

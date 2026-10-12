@@ -9,7 +9,7 @@ while the rollup invented a target for it (notes/review/architecture-audit-
 2026-09-14.md, notes/week-view-contract.md). This module is the contract's
 P1, P3 and P9 on the read side: one boundary, one planned load, one budget,
 one identity (the served file), one intensity count (the planner's three
-zones by the hybrid, slim/9.3), and "no plan on record" said as
+zones, slim/9.3), and "no plan on record" said as
 None, never as 0 or as a number nobody prescribed.
 
 The write side of the week (the builders, the passes, what a session's label
@@ -45,53 +45,55 @@ def goal_zone_of(session: dict, lib: dict, session_type: str) -> "int | None":
 
 def planned_zone_minutes(session: dict, lib: dict, session_type: str,
                          minutes_of: "Optional[Callable[..., Optional[dict]]]" = None):
-    """(minutes per zone, method) of a planned session. The method is
-    "hybrid" when the served workout was read (zones.hybrid_minutes over it;
-    ``minutes_of(zwo_file, slot_min, slot_type, goal)`` reads it), "by type"
-    when no file could be read and the whole duration counts to the goal zone
-    (zone 1 when unknown) -- a session-goal count, said as such (SF4 of the
-    evaluation of 2382cfd1) -- and None for a rest day."""
+    """(minutes per zone, method) of a planned session. The method is "time
+    in zone" when the served workout was read (every second of it, no
+    goal-zone credit: contract slim/9.3 amendment 2; ``minutes_of(zwo_file,
+    slot_min, slot_type)`` reads it), "by type" when no file could be read and
+    the whole duration counts to the goal zone (zone 1 when unknown), and None
+    for a rest day."""
     out = {z: 0.0 for z in ZONES}
     dur = float(session.get("duration_min") or 0)
     if session_type == "rest" or dur <= 0:
         return out, None
-    goal = goal_zone_of(session, lib, session_type)
     zf = session.get("zwo_file") or ""
     m = None
     if zf and minutes_of is not None:
         slot = session.get("slot_type") or session.get("session_type") or ""
-        m = minutes_of(zf, session.get("duration_min"), slot, goal)
+        m = minutes_of(zf, session.get("duration_min"), slot)
     if m:
-        return {f"zone{i}": float(m.get(f"z{i}") or 0) for i in (1, 2, 3)}, "hybrid"
-    out[f"zone{goal or 1}"] = dur
+        return {f"zone{i}": float(m.get(f"z{i}") or 0) for i in (1, 2, 3)}, "time in zone"
+    out[f"zone{goal_zone_of(session, lib, session_type) or 1}"] = dur
     return out, "by type"
 
 
-def hybrid_zone_minutes(session: dict, lib: dict, session_type: str,
-                        minutes_of: "Optional[Callable[..., Optional[dict]]]" = None) -> dict:
-    """Minutes per zone of a planned session (planned_zone_minutes)."""
-    return planned_zone_minutes(session, lib, session_type, minutes_of)[0]
-
-
 def zone_method_label(methods) -> str:
-    """The method a total of planned sessions was counted by: "hybrid",
-    "by type", or "hybrid, N by type" when some sessions had no readable
-    file."""
-    ms = [m for m in methods if m]
-    n = sum(1 for m in ms if m == "by type")
-    if not n:
-        return "hybrid"
-    if n == len(ms):
-        return "by type"
-    return f"hybrid, {n} by type"
+    """The method a total was counted by: the one method when there is one
+    ("time in zone", "by type", "hybrid (HR)" ...), else the most common
+    followed by the counts of the others ("time in zone, 1 by type")."""
+    from collections import Counter
+    c = Counter(m for m in methods if m)
+    if not c:
+        return "time in zone"
+    (top, _n), *others = c.most_common()
+    return ", ".join([top] + [f"{n} {m}" for m, n in others])
 
 
-def ride_zone_minutes(tiz: "dict | None", goal: "int | None") -> dict:
-    """Minutes per zone of a ride from its Coggan time in zone (seconds), by
-    the hybrid count for the goal zone of the session it was matched to
-    (None: unmatched, plain time in zone)."""
-    m = zones.hybrid_ride_minutes(tiz, goal)
-    return {f"zone{i}": m[f"z{i}"] for i in (1, 2, 3)}
+def ride_minutes(power_tiz: "dict | None", hr_tiz: "dict | None",
+                 goal: "int | None") -> "Optional[tuple]":
+    """(minutes per zone, method) of a ride (contract slim/9.3, amendment 2),
+    or None when it carries neither power nor HR time in zone. With power:
+    time in zone, every second ("time in zone"). HR only: the hybrid for the
+    goal zone of the session its completion match says it is ("hybrid
+    (HR)", zones.hr_hybrid_minutes), else HR time in zone ("HR time in
+    zone")."""
+    p = zones.three_zone(power_tiz or {})
+    if sum(p.values()) > 0:
+        return {f"zone{i}": p[f"z{i}"] / 60.0 for i in (1, 2, 3)}, "time in zone"
+    if sum(float(v or 0) for k, v in (hr_tiz or {}).items() if str(k).startswith("z")) > 0:
+        m = zones.hr_hybrid_minutes(hr_tiz, goal)
+        return ({f"zone{i}": m[f"z{i}"] for i in (1, 2, 3)},
+                "hybrid (HR)" if goal else "HR time in zone")
+    return None
 
 
 def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
@@ -103,8 +105,8 @@ def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
     sessions hold (the days after today, and today when it has not been
     ridden). Never below 0; zone 1 is never owed. An easy day's surges are
     not a debt: a missed endurance ride with two tempo pickups owes nothing
-    (the evaluation of 2382cfd1, SF2). ``sessions`` carry ``zone_minutes``
-    (hybrid), ``goal_zone`` and ``day``; ``today_holds`` is what today holds
+    (the evaluation of 2382cfd1, SF2). ``sessions`` carry ``zone_minutes``,
+    ``goal_zone`` and ``day``; ``today_holds`` is what today holds
     when the day was adjusted (the adjusted session, not the planned
     minutes)."""
     t = today.isoformat()
@@ -222,10 +224,10 @@ class WeekView:
     planned_tss: Optional[float]          # what the rider was given: sum of stored sessions
     sessions: list = field(default_factory=list)   # one per day, Monday first
     planned_minutes: int = 0
-    # Minutes per zone the week's sessions prescribe, by the hybrid count
-    # (zones.hybrid_minutes over the served files; contract slim/9.3, I2).
+    # Minutes per zone the week's sessions prescribe (planned_zone_minutes:
+    # time in zone of the served files; contract slim/9.3, I2 + amendment 2).
     zone_minutes_planned: dict = field(default_factory=dict)
-    zone_method: str = "hybrid"           # zone_method_label of the sessions
+    zone_method: str = "time in zone"     # zone_method_label of the sessions
     # Contract 9.6: a week planned under its budget by more than the
     # tolerance says so -- {"budget", "planned", "reason"}: "ridden" when the
     # rides so far and what is still planned reach the budget (then
@@ -285,7 +287,7 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
     budget the rider's rides already spent from one the plan left short.
     ``naming(zwo_file, stored_session)`` gives a session's display name and
     the minutes its workout lasts as served; ``minutes_of`` reads a served
-    workout's minutes per zone (hybrid_zone_minutes)."""
+    workout's minutes per zone (planned_zone_minutes)."""
     end = start + timedelta(days=6)
     s_iso, e_iso = start.isoformat(), end.isoformat()
     # A replaced plan's prescriptions (kept by Generate) are on record too.

@@ -289,23 +289,23 @@ def served_minutes(zwo_path, slot_min, session_type) -> "int | None":
     return _served_minutes(str(path), mtime, slot_min, session_type or "")
 
 
-def served_zone_minutes(zwo_path, slot_min, session_type, goal) -> "dict | None":
+def served_zone_minutes(zwo_path, slot_min, session_type) -> "dict | None":
     """Minutes per zone of a planned session's workout as served (fitted to
-    the slot, no capacity cap), counted by zones.hybrid_minutes for the
-    session's goal zone. None when the file cannot be read."""
+    the slot, no capacity cap), by time in zone (zones.tiz_minutes, contract
+    slim/9.3 amendment 2). None when the file cannot be read."""
     path = Path(zwo_path)
     try:
         mtime = path.stat().st_mtime_ns
     except OSError:
         return None
-    m = _served_zone_minutes(str(path), mtime, slot_min, session_type or "", goal)
+    m = _served_zone_minutes(str(path), mtime, slot_min, session_type or "")
     return dict(m) if m is not None else None
 
 
 @functools.lru_cache(maxsize=2048)
-def _served_zone_minutes(path: str, mtime: int, slot_min, session_type: str, goal):
+def _served_zone_minutes(path: str, mtime: int, slot_min, session_type: str):
     try:
-        return zones.hybrid_minutes(served_fit(path, slot_min, session_type).data, goal)
+        return zones.tiz_minutes(served_fit(path, slot_min, session_type).data)
     except (ET.ParseError, OSError, ValueError, TypeError):
         return None
 

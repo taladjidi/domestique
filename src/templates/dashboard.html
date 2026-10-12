@@ -14707,6 +14707,9 @@ async function calOpenDay(dateStr) {
     day: day.date,
     day_name: new Date(day.date + 'T12:00:00').toLocaleDateString('en-US',{weekday:'long'}),
     session_type: p.session_type || day.session_type || '',
+    // slim/9.2: the slot's own type, which the served workout is fitted by
+    // (session_type above is the file's content).
+    slot_type: p.slot_type || '',
     content_class: p.content_class || '',
     duration_min: p.duration_min || day.duration_min || 0,
     tss_estimate: p.tss || day.tss || 0,

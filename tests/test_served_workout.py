@@ -690,3 +690,56 @@ def test_the_calendar_and_today_payloads_name_the_slots_type(easy):
                 walk(v)
     walk(easy.client.get("/api/calendar").json())
     assert found == ["long_z2"], found
+
+
+def test_a_calendar_cell_opens_the_workout_served_by_the_slots_type():
+    """calOpenDay is the main way into the day modal (calendar grid, This
+    Week strip, today card); its session dropped slot_type (evaluator,
+    slim/9.2), so the modal asked by the file's content type."""
+    import json
+    m3, src = _node()
+    cell = {"session_type": "vo2max", "slot_type": "z2", "content_class": "",
+            "duration_min": 60, "tss": 45, "zwo_file": "anaerobic_2x3x15s-45s_140pct_45min.zwo",
+            "name": "Anaerobic (45min)", "display_name": "", "zwo_duration_min": 60}
+    m3._run_node(m3._MODAL_STUBS + m3._fns(
+        src, "_sessTypeLabel", "_adjPlannedNowHtml", "_effectiveTodaySession",
+        "_dayModalModel", "_todayDayModalModel", "_calTodayStr",
+        "_dayModalTitle", "_adjBannerHtml", "_adjOriginalBlockHtml",
+        "_slotTypeOf", "_servedWorkoutQuery", "dayModalTssStat", "openDayWorkout",
+        "calContentMatches", "calOpenDay", "_calShowMismatchBanner") + """
+const DAY = '2026-10-20';
+(async () => {
+  global.document = {getElementById: () => null};
+  global.window = {_targetMode: 'power', _calData: {weeks: [{days: [{date: DAY, card_state: 'planned', planned: %s}]}]}};
+  const asked = [];
+  global.fetch = async (url) => {
+    if (url === '/api/settings') return {ok: true, json: async () => ({ftp: 250, lthr: 170})};
+    if (String(url).startsWith('/api/workout/all/')) { asked.push(String(url));
+      return {ok: true, json: async () => ({segments: [{type: 'SteadyState', duration: 3600, power: 155}], ftp: 250, total_seconds: 3600})}; }
+    return {ok: false, json: async () => ({})};
+  };
+  await calOpenDay(DAY);
+  await new Promise(r => setTimeout(r, 50));
+  if (!asked.some(u => u.endsWith('?slot_min=60&session_type=z2'))) throw new Error('chart: ' + asked);
+  const zwo = (modalHtml || '').match(/downloadZwoFile\\('[^']*', 60, '([^']*)'\\)/);
+  const fit = (modalHtml || '').match(/downloadFIT\\('([^']*)', 60,/);
+  if (!zwo || zwo[1] !== 'z2') throw new Error('ZWO: ' + (zwo && zwo[1]));
+  if (!fit || fit[1] !== 'z2') throw new Error('FIT: ' + (fit && fit[1]));
+  console.log('OK');
+})().catch(e => { console.error(e && e.stack || e); process.exit(1); });
+""" % json.dumps(cell))
+
+
+def test_a_missed_session_suggestion_states_the_served_minutes(easy):
+    import datetime as _dt
+    import app
+    mon = _dt.date(2026, 10, 19)
+    days = [(mon + _dt.timedelta(days=i)).isoformat() for i in range(7)]
+    sessions = [_sess(days[0], zwo=E160, stype="z2", duration_min=177, status="missed")] + [
+        _sess(d, zwo="", stype="rest", duration_min=0) for d in days[1:]]
+    plan = {"goal": {"type": "ftp", "rest_days": []},
+            "weeks": [{"week_num": 1, "start": days[0], "end": days[-1], "phase": "base",
+                       "tss_target": 300, "is_stepback": False, "sessions": sessions}]}
+    out = app._compute_missed_suggestions(plan, mon + _dt.timedelta(days=2))
+    mine = [s for s in out if s["missed_date"] == days[0]]
+    assert mine and mine[0]["missed_zwo_duration_min"] == 177, out

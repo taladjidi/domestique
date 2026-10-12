@@ -166,6 +166,21 @@ def test_a_file_with_no_steady_easy_block_and_a_shorter_slot_is_unfitted():
     assert fit.status == "unfitted" and fit.data == INTERVALS_ONLY
 
 
+@pytest.mark.parametrize("dur", ["Duration='2400'", 'Duration = "2400"'])
+def test_an_edit_that_does_not_read_back_as_the_slot_is_unfitted(dur):
+    # The edit is made on the text: an attribute spelled another way is
+    # missed, and the file must be served as written, not under a name
+    # restated to the slot (evaluator, slim/9.1).
+    raw = (b"<workout_file><name>Easy (60min)</name><workout>"
+           b"<Warmup Duration=\"600\" PowerLow=\"0.4\" PowerHigh=\"0.6\" />"
+           b"<SteadyState " + dur.encode() + b" Power=\"0.62\" />"
+           b"<Cooldown Duration=\"600\" PowerLow=\"0.6\" PowerHigh=\"0.4\" />"
+           b"</workout></workout_file>")
+    assert _total_s(raw) == 3600
+    fit = dl.fit_zwo_to_slot(raw, 75, "z2")
+    assert fit.status == "unfitted" and fit.data == raw
+
+
 def test_an_unfitted_serve_is_logged_and_counted(tmp_path, caplog):
     p = tmp_path / "ladder.zwo"
     p.write_bytes(LADDER)

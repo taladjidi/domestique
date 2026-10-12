@@ -112,7 +112,8 @@ def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
     such block and a slot longer than the file gets one SteadyState block,
     before its Cooldown, at the power the file holds longest in Z2 (0.65 FTP
     when none). Shortening never takes the block below 10 min; a file that
-    cannot reach the slot that way is "unfitted" and served as it is. Only
+    cannot reach the slot that way, or whose edited text does not read back
+    as a workout of the slot's length, is "unfitted" and served as it is. Only
     the one block's Duration changes (or the one block is added), and the
     minutes the file's <name>/<description> state for its length (and, when
     the description has one part per block, for that block) are restated
@@ -225,7 +226,17 @@ def fit_zwo_to_slot(raw: bytes, slot_min, session_type: str) -> Fit:
     nm = re.search(r"<name>(.*?)</name>", text, re.S)
     if nm:
         text = text[:nm.start(1)] + _restate(nm.group(1), file_min, slot_m) + text[nm.end(1):]
-    return Fit(text.encode("utf-8"), "fitted", file_min)
+    out = text.encode("utf-8")
+    # The edit is on text, so read the result back: a "fitted" workout is one
+    # that parses and lasts the slot, or the file is served as written.
+    try:
+        ET.fromstring(out)
+        served = zwo_parse.scan_zwo(_NamedBytes(out))
+    except ET.ParseError:
+        served = None
+    if served is None or int(served["total_sec"]) != slot_s:
+        return Fit(raw, "unfitted", file_min)
+    return Fit(out, "fitted", file_min)
 
 
 def _main_easy_power(segs, z1_top: float, z2_top: float) -> str:

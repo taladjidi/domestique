@@ -55,7 +55,12 @@ class _Week(unittest.TestCase):
                        "sessions": [{"day": d(i), "day_name": "", "session_type": st,
                                      "duration_min": dur, "tss_estimate": 50 if dur else 0,
                                      "description": "", "zwo_file": zf, "zwo_name": "",
-                                     "status": "pending"} for i, st, dur, zf in sess]}]}))
+                                     "status": "done" if i == 1 else "pending",
+                                     # the completion match says the ride IS Tuesday's
+                                     # session (both id spellings the tests use)
+                                     "completion_matches": ([{"activity_id": "77"}, {"activity_id": "i77"}]
+                                                            if i == 1 else None)}
+                                    for i, st, dur, zf in sess]}]}))
         tiz = {"z1": 2400, "z2": 900, "z3": 120, "z4": 180, "z5": 600, "z6": 360, "z7": 0}
         self.ride = {"ride_id": "icu_77", "source": "icu", "sport": "Ride", "name": "VO2",
                      "started_at": f"{d(1)}T10:00:00", "date": d(1), "tss": 80,
@@ -120,7 +125,7 @@ class TestEverySurfaceCountsTheSame(_Week):
         ws = self._get("/api/week-summary")
         cal = self._get("/api/calendar")
         cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
-        # Tuesday's ride is matched to its VO2max session: 40 + 15 min below
+        # Tuesday's ride is the VO2max session by its completion match: 40 + 15 min below
         # 76% FTP is zone 1, its 21 min at or above count to zone 3
         want = {"zone1": 55, "zone2": 0, "zone3": 21}
         self.assertEqual(ws["zone_minutes"], want)
@@ -187,3 +192,26 @@ class TestARideWithoutPowerZonesIsCountedTheSameEverywhere(_Week):
         cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
         self.assertEqual(ws["zone_minutes"]["zone1"], 60)
         self.assertAlmostEqual(cw["actual_zone1_min"], 60, delta=0.5)
+
+
+class TestARideTakesAGoalOnlyThroughItsMatch(_Week):
+    """Contract amendment 2026-10-12: a second ride on the VO2max day (a
+    commute) is not that session; it is counted by time in zone."""
+
+    def test_a_commute_on_a_vo2_day_is_time_in_zone(self):
+        d = (MON + timedelta(1)).isoformat()
+        commute = {"ride_id": "icu_99", "source": "icu", "sport": "Ride", "name": "commute",
+                   "started_at": f"{d}T18:00:00", "date": d, "tss": 20, "moving_time_s": 1800,
+                   "duration_s": 1800, "time_in_zone": {"z1": 900, "z2": 600, "z4": 240, "z5": 60}}
+        act = [{"id": "77", "date": d, "sport": "Ride", "duration_min": 76, "tss": 80},
+               {"id": "99", "date": d, "sport": "Ride", "duration_min": 30, "tss": 20}]
+        with patch.object(app_module, "_load_all_rides_safe", return_value=[self.ride, commute]), \
+             patch.object(app_module, "api_activities", return_value=act):
+            ws = self._get("/api/week-summary")
+            cal = self._get("/api/calendar")
+        # VO2 session 55/0/21 (hybrid, matched) + commute 25/4/1 (time in zone)
+        want = {"zone1": 80, "zone2": 4, "zone3": 22}
+        self.assertEqual(ws["zone_minutes"], want)
+        cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
+        for z in wv.ZONES:
+            self.assertAlmostEqual(cw[f"actual_{z}_min"], want[z], delta=0.6)

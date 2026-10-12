@@ -176,14 +176,14 @@ class ProgrammeSummaryEndpointTests(unittest.TestCase):
         self.assertEqual(d["pol_index"]["method"], "time in zone")
 
     def test_intensity_distribution_counts_a_vo2_days_work_to_zone_3(self) -> None:
-        """A ride on a VO2max day: its time at or above 76% FTP counts to the
-        session's goal zone, zone 3 (the hybrid)."""
+        """A ride the completion match says IS a VO2max session: its time at or
+        above 76% FTP counts to the session's goal zone, zone 3 (the hybrid)."""
         plan = _mk_synth_plan(date.today() - timedelta(days=20), weeks=2)
         sd_str = plan["weeks"][0]["start"]
         plan["weeks"][0]["sessions"] = [{
             "day": sd_str, "day_name": "", "session_type": "vo2max", "duration_min": 60,
             "tss_estimate": 80, "description": "", "zwo_file": "", "zwo_name": "",
-            "status": "done"}]
+            "status": "done", "completion_matches": [{"activity_id": "r1"}]}]
         self._write_plan(plan)
         ride = {"id": "r1", "started_at": f"{sd_str}T08:00:00",
                 "finished_at": f"{sd_str}T09:00:00",

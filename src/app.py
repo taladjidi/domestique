@@ -9330,18 +9330,17 @@ def api_week_summary(week_offset: int = Query(0)):
     except Exception:  # noqa: BLE001 - never break the rollup over the archive
         _tiz_by_id = {}
 
-    # A ride is counted for the goal zone of the session planned on its day
-    # (zones.hybrid_ride_minutes), as the calendar and the headline count it.
-    _goal_by_day = {s.get("day"): s.get("goal_zone") for s in plan.get("sessions") or []
-                    if s.get("on_record") and s.get("session_type") != "rest"}
+    # A ride is counted for the goal zone of the session its completion match
+    # says it is (zones.hybrid_ride_minutes), as the calendar and the headline
+    # count it; a ride no match claims is counted by time in zone.
+    _goal_by_ride = _plan_goal_by_ride(_read_stored_plan())
     for a in week_activities:
         band, signal = _classify_exposure_with_signal(a, lthr)
         dur = int(round(a.get("duration_min") or 0))
         _tiz = _tiz_by_id.get(str(a.get("id") or ""))
         split = None
         if isinstance(_tiz, dict) and sum(_zones_mod.three_zone(_tiz).values()) > 0:
-            _goal = (_goal_by_day.get((a.get("date") or "")[:10])
-                     if _is_cycling_sport(a.get("sport") or "") else None)
+            _goal = _goal_by_ride.get(_ride_key(str(a.get("id") or "")))
             split = _wv.ride_zone_minutes(_tiz, _goal)
         if split:
             for _b, _m in split.items():
@@ -9865,13 +9864,11 @@ def _served_zone_minutes_of(zwo_file: str, slot_min, slot_type: str, goal):
     return served_zone_minutes(path, slot_min, slot_type, goal)
 
 
-def _rides_zone_minutes(rides, sessions, start: str, end: str) -> dict:
+def _rides_zone_minutes(rides, goal_by_ride: dict, start: str, end: str) -> dict:
     """Minutes per zone the rides in [start, end] spent, each by the hybrid
-    count for the goal zone of the session planned on its day (unmatched:
-    time in zone). ``sessions`` carry ``day`` and ``goal_zone``."""
+    count for the goal zone of the session its completion match says it is
+    (_plan_goal_by_ride; unmatched: time in zone)."""
     import week_view as _wv
-    goal_by_day = {s.get("day"): s.get("goal_zone") for s in sessions or []
-                   if s.get("session_type") not in (None, "rest")}
     out = {z: 0.0 for z in _wv.ZONES}
     for r in rides or []:
         d = _ride_started_local_iso_date(r) or ""
@@ -9880,14 +9877,30 @@ def _rides_zone_minutes(rides, sessions, start: str, end: str) -> dict:
         tiz = _ride_tiz_seconds(r)
         if not tiz:
             continue
-        for z, v in _wv.ride_zone_minutes(tiz, goal_by_day.get(d)).items():
+        for z, v in _wv.ride_zone_minutes(tiz, goal_by_ride.get(_ride_key(r))).items():
             out[z] += v
     return out
 
 
-def _plan_goal_by_day(plan: "dict | None") -> dict:
-    """{day: goal zone} of every stored session (current and replaced weeks),
-    the session a ride on that day is matched to."""
+# The completion statuses that say a ride IS its session (rematch_week):
+# "ambiguous" is a 2-of-3 guess, not a match.
+_MATCHED_STATUSES = ("done", "done_partial")
+
+
+def _ride_key(ride_or_id) -> str:
+    """A ride's id in one spelling: the ride store's "icu_i123", an
+    activity's "i123" or "icu_i123", a completion match's "i123"."""
+    rid = ride_or_id if isinstance(ride_or_id, str) else str(
+        (ride_or_id or {}).get("ride_id") or (ride_or_id or {}).get("id") or "")
+    return rid[4:] if rid.startswith("icu_") else rid
+
+
+def _plan_goal_by_ride(plan: "dict | None") -> dict:
+    """{ride key: goal zone} of every ride the app's completion match says IS
+    a stored session (status done or done_partial, its completion_matches),
+    current and replaced weeks (contract amendment 2026-10-12): a ride takes
+    a session's goal zone through the match, never by sharing its date, so a
+    commute on a VO2max day is unmatched and counted by time in zone."""
     import week_view as _wv
     try:
         lib = _wv.library_by_file(tp.load_workout_library())
@@ -9896,10 +9909,15 @@ def _plan_goal_by_day(plan: "dict | None") -> dict:
     out: dict = {}
     for w in ((plan or {}).get("replaced_weeks") or []) + ((plan or {}).get("weeks") or []):
         for sess in w.get("sessions") or []:
-            d = sess.get("day")
+            if sess.get("status") not in _MATCHED_STATUSES:
+                continue
             st = _wv.derived_type(sess, lib, tp._session_type_from_row)
-            if d and st != "rest":
-                out[d] = _wv.goal_zone_of(sess, lib, st)
+            if st == "rest":
+                continue
+            goal = _wv.goal_zone_of(sess, lib, st)
+            for m in sess.get("completion_matches") or []:
+                if isinstance(m, dict) and m.get("activity_id"):
+                    out[_ride_key(str(m["activity_id"]))] = goal
     return out
 
 
@@ -9951,7 +9969,7 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
         held = {z: 0.0 for z in _wv.ZONES}
         if goal and effective_duration:
             held[f"zone{goal}"] = float(effective_duration)
-    ridden = _rides_zone_minutes(rides, sessions, week.get("start") or "", today_iso)
+    ridden = _rides_zone_minutes(rides, _plan_goal_by_ride(plan), week.get("start") or "", today_iso)
     rode_today = any(_ride_started_local_iso_date(r) == today_iso for r in rides or [])
     return cpol.today_headline(
         session_type=effective_type, goal_zone=goal,
@@ -15209,6 +15227,8 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
     except Exception:
         classifications = {}
 
+    _goal_by_ride = _plan_goal_by_ride(plan)
+
     # ── Index rides by local-TZ date for O(N) merge ─────────────────────────
     rides_by_date: dict[str, list[dict]] = {}
     for r in rides:
@@ -15430,15 +15450,14 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
             _planned_for_compare = (
                 sess if (sess and not sess.get("_synthetic_history")) else None
             )
-            # The day's rides count for the goal zone of its planned session.
             _derived = (_wv.derived_type(sess, lib_by_file, tp._session_type_from_row)
                         if _planned_for_compare else "rest")
-            _goal = (_wv.goal_zone_of(sess, lib_by_file, _derived)
-                     if _planned_for_compare and _derived != "rest" else None)
+            # Each ride counts for the goal zone of the session its completion
+            # match says it is; a ride no match claims, by time in zone.
             if primary_ride is not None:
                 actual_payload = _summarize_ride_for_calendar(
                     primary_ride, ftp, planned_session=_planned_for_compare,
-                    goal_zone=_goal,
+                    goal_zone=_goal_by_ride.get(_ride_key(primary_ride)),
                 )
                 actual_tss += float(actual_payload["tss"] or 0)
                 for z in _wv.ZONES:
@@ -15447,7 +15466,8 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                 # Secondary rides are extras (free rides on a planned day),
                 # never "the planned one" — pass None to keep them
                 # un-compared.
-                _sec = _summarize_ride_for_calendar(r, ftp, goal_zone=_goal)
+                _sec = _summarize_ride_for_calendar(
+                    r, ftp, goal_zone=_goal_by_ride.get(_ride_key(r)))
                 secondary_list.append(_sec)
                 # v1.8.25 FIX — secondary rides STILL count toward the week's
                 # actual load. Pre-fix only the primary (longest) ride fed
@@ -19940,10 +19960,10 @@ def _build_programme_summary(plan: dict) -> dict:
 
     # ── Intensity distribution ─────────────────────────────────────────────
     # Minutes per zone of the rides in the window by the hybrid count, each
-    # ride for the goal zone of the session planned on its day (slim/9.3,
-    # I2). Until then this put threshold (Z4) with VO2max and above.
+    # ride for the goal zone of the session its completion match says it is
+    # (slim/9.3, I2). Until then this put threshold (Z4) with VO2max and above.
     import week_view as _wv
-    goal_by_day = _plan_goal_by_day(plan)
+    goal_by_ride = _plan_goal_by_ride(plan)
     idist = {z: 0.0 for z in _wv.ZONES}
     tiz_secs = {"z1": 0.0, "z2": 0.0, "z3": 0.0}
     for r in in_window:
@@ -19957,8 +19977,7 @@ def _build_programme_summary(plan: dict) -> dict:
             continue
         for k, v in three.items():
             tiz_secs[k] += v
-        d = _ride_started_local_iso_date(r) or str(r.get("date") or "")[:10]
-        for z, v in _wv.ride_zone_minutes(tiz, goal_by_day.get(d)).items():
+        for z, v in _wv.ride_zone_minutes(tiz, goal_by_ride.get(_ride_key(r))).items():
             idist[z] += v
     intensity_dist = {f"{z}_min": int(round(v)) for z, v in idist.items()}
     intensity_dist["method"] = "hybrid"

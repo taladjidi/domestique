@@ -67,6 +67,7 @@ class TestTheOwnersMonday(unittest.TestCase):
             (2, "z2", 60, ""),
             (3, "vo2max", 60, "vo2_short_2x10x30s_112pct_60min.zwo"),
         ]
+        self.plan_path = tmp / "current_plan.json"
         (tmp / "current_plan.json").write_text(json.dumps({
             "goal": {"type": "continuous", "focus": "both", "hours_per_week": 8.0},
             "phases": [],
@@ -112,9 +113,25 @@ class TestTheOwnersMonday(unittest.TestCase):
         _d, h = self._headline()
         self.assertEqual(h["family"], "zone_1")
         self.assertIn("Zone 3 still owed", h["reason"])
-        # a ridden Tuesday (its VO2 work counted to zone 3 by the hybrid) pays it
-        self.rides = [{"started_at": f"{(MON + timedelta(1)).isoformat()}T10:00:00", "tss": 70,
-                       "time_in_zone": {"z1": 2400, "z2": 900, "z4": 300, "z5": 600, "z6": 360}}]
+        # a ridden Tuesday, the session by its completion match (its VO2 work
+        # counted to zone 3 by the hybrid), pays it
+        self.rides = [{"ride_id": "icu_i5", "started_at": f"{(MON + timedelta(1)).isoformat()}T10:00:00",
+                       "tss": 70, "time_in_zone": {"z1": 2400, "z2": 900, "z4": 300, "z5": 600, "z6": 360}}]
+        plan = json.loads(self.plan_path.read_text())
+        tue = plan["weeks"][0]["sessions"][1]
+        tue.update(status="done", completion_matches=[{"activity_id": "i5"}])
+        self.plan_path.write_text(json.dumps(plan))
+        app_module.clear_cache()
+        _d, h = self._headline()
+        self.assertNotIn("owed", h["reason"])
+        # the same ride with no match is not the session: time in zone, owed
+        tue.update(status="pending", completion_matches=None)
+        self.plan_path.write_text(json.dumps(plan))
+        app_module.clear_cache()
+        _d, h = self._headline()
+        self.assertIn("Zone 3 still owed", h["reason"])
+        tue.update(status="done", completion_matches=[{"activity_id": "i5"}])
+        self.plan_path.write_text(json.dumps(plan))
         app_module.clear_cache()
         _d, h = self._headline()
         self.assertNotIn("owed", h["reason"])

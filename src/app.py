@@ -19978,6 +19978,19 @@ def _build_programme_summary(plan: dict) -> dict:
             three = _zones_mod.three_zone(tiz)
         except (TypeError, ValueError):
             continue
+        if sum(three.values()) <= 0:
+            # No power time in zone: its minutes in the zone of its average HR
+            # or TRIMP, as the calendar and the week summary count it (SF3 of
+            # the evaluation of 2382cfd1: zone 1 read 1178 here, 1379 there).
+            mins = ride_storage.ride_moving_s(r) / 60.0
+            zone, signal = _classify_exposure_with_signal(
+                {"avg_hr": r.get("avg_hr"), "trimp": r.get("trimp"), "duration_min": mins},
+                config.ATHLETE_LTHR or 175)
+            # Cycling only, as the calendar: a walk is not training intensity
+            # on this card (the week summary is sport-agnostic by design).
+            if signal != "inferred" and mins > 0 and _is_cycling_sport(r.get("sport") or ""):
+                idist[zone] += mins
+            continue
         for k, v in three.items():
             tiz_secs[k] += v
         for z, v in _wv.ride_zone_minutes(tiz, goal_by_ride.get(_ride_key(r))).items():

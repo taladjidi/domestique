@@ -175,6 +175,21 @@ class ProgrammeSummaryEndpointTests(unittest.TestCase):
         self.assertEqual(idist["zone3_min"], 0)
         self.assertEqual(d["pol_index"]["method"], "time in zone")
 
+    def test_a_ride_without_power_zones_counts_by_its_hr_zone(self) -> None:
+        """SF3 (evaluation of 2382cfd1): a ride with HR and no power time in
+        zone is counted by its HR zone, as the calendar and the week summary
+        count it; it was left out here."""
+        plan = _mk_synth_plan(date.today() - timedelta(days=20), weeks=2)
+        self._write_plan(plan)
+        sd_str = plan["weeks"][0]["start"]
+        mtb = {"id": "m1", "ride_id": "icu_m1", "source": "icu", "sport": "MountainBikeRide",
+               "started_at": f"{sd_str}T08:00:00", "moving_s": 3600, "duration_s": 4000,
+               "tss": 50, "avg_hr": 130}
+        with patch("ride_storage.load_all_rides", return_value=[mtb]), \
+             patch.object(self.app_module.config, "ATHLETE_LTHR", 170):
+            d = self.client.get("/api/programme/summary", params={"plan_id": "test"}).json()
+        self.assertEqual(d["intensity_dist"]["zone1_min"], 60)
+
     def test_intensity_distribution_counts_a_vo2_days_work_to_zone_3(self) -> None:
         """A ride the completion match says IS a VO2max session: its time at or
         above 76% FTP counts to the session's goal zone, zone 3 (the hybrid)."""

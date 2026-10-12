@@ -2466,8 +2466,8 @@ window.addEventListener('unhandledrejection', function(e) {
       <div id="ps-empty" style="display:none;font-size:14px;color:var(--text2);line-height:1.6;margin-bottom:18px;"></div>
       <div id="ps-kpi-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px;"></div>
       <div id="ps-charts" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">
-        <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Intensity distribution</h4><canvas id="ps-chart-intensity" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Stöggl & Sperlich 2014 — POL 80/0/20 target</div></div>
-        <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Polarization index</h4><canvas id="ps-chart-pol" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Treff et al. 2019 — PI > 2.0 polarized</div></div>
+        <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Intensity distribution <span style="font-weight:400;color:var(--text3);">(hybrid)</span></h4><canvas id="ps-chart-intensity" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Stöggl & Sperlich 2014 — POL 80/0/20 target</div></div>
+        <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Polarization index <span style="font-weight:400;color:var(--text3);">(time in zone)</span></h4><canvas id="ps-chart-pol" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Treff et al. 2019 — PI > 2.0 polarized</div></div>
         <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Compliance per phase</h4><canvas id="ps-chart-compliance" height="160"></canvas></div>
         <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Mean-max curve · start vs end (4w)</h4><canvas id="ps-chart-meanmax" height="160"></canvas></div>
         <div class="card" style="margin:0;"><h4 style="margin:0 0 8px 0;font-size:13px;">Hooper composite trend</h4><canvas id="ps-chart-hooper" height="160"></canvas><div style="font-size:10px;color:var(--text3);margin-top:4px;">Hooper & Mackinnon 1995</div></div>
@@ -2610,7 +2610,7 @@ window.addEventListener('unhandledrejection', function(e) {
     }
     _psDestroyCharts();
     const idist = d.intensity_dist || {};
-    window._psCharts.intensity = new Chart(document.getElementById('ps-chart-intensity'), {type:'bar', data:{labels:[''], datasets:[{label:'Z1+Z2', data:[idist.z1z2_min||0], backgroundColor:'#22c55e', stack:'a'},{label:'Z3', data:[idist.z3_min||0], backgroundColor:'#eab308', stack:'a'},{label:'Z4+', data:[idist.z4plus_min||0], backgroundColor:'#ef4444', stack:'a'}]}, options:{indexAxis:'y',scales:{x:{stacked:true,title:{display:true,text:'minutes'}},y:{stacked:true}},plugins:{legend:{position:'bottom'}}}});
+    window._psCharts.intensity = new Chart(document.getElementById('ps-chart-intensity'), {type:'bar', data:{labels:[''], datasets:[{label:'zone 1', data:[idist.zone1_min||0], backgroundColor:'#22c55e', stack:'a'},{label:'zone 2', data:[idist.zone2_min||0], backgroundColor:'#f97316', stack:'a'},{label:'zone 3', data:[idist.zone3_min||0], backgroundColor:'#ef4444', stack:'a'}]}, options:{indexAxis:'y',scales:{x:{stacked:true,title:{display:true,text:'minutes'}},y:{stacked:true}},plugins:{legend:{position:'bottom'}}}});
     const pi = (d.pol_index||{}).mean;
     const piPct = pi == null ? 0 : Math.max(0, Math.min(100, (pi/4)*100));
     window._psCharts.pol = new Chart(document.getElementById('ps-chart-pol'), {type:'doughnut', data:{labels:['PI', ''], datasets:[{data:[piPct, 100-piPct], backgroundColor:[pi != null && pi > 2.0 ? '#22c55e' : '#eab308', '#30363d'], borderWidth:0}]}, options:{cutout:'70%', plugins:{legend:{display:false}, tooltip:{callbacks:{label: () => `PI ${pi == null ? '—' : pi.toFixed(2)} (${(d.pol_index||{}).class || '—'})`}}}}});
@@ -8002,14 +8002,12 @@ async function loadLastWeekFeedback() {
     const tssDone = Number(d.tss_done_in_plan != null ? d.tss_done_in_plan
                                                       : d.tss_done || 0);
     const adherence = Number(d.tss_adherence_pct || 0);
-    const exp = d.exposure_minutes || {};
-    const expP = d.exposure_minutes_planned || {};
-    const high = (exp.high_aerobic || 0) + (exp.anaerobic || 0);
-    const highP = (expP.high_aerobic || 0) + (expP.anaerobic || 0);
-    const low = (exp.low_aerobic || 0);
-    const lowP = (expP.low_aerobic || 0);
-    const mid = (exp.mid_aerobic || 0);
-    const midP = (expP.mid_aerobic || 0);
+    // slim/9.3 I2: the planner's three zones, counted by the hybrid.
+    const exp = d.zone_minutes || {};
+    const expP = d.zone_minutes_planned || {};
+    const z1 = (exp.zone1 || 0), z1P = (expP.zone1 || 0);
+    const z2 = (exp.zone2 || 0), z2P = (expP.zone2 || 0);
+    const z3 = (exp.zone3 || 0), z3P = (expP.zone3 || 0);
     const overreach = !!d.overreach;
     const reasons = Array.isArray(d.overreach_reasons) ? d.overreach_reasons : [];
 
@@ -8043,10 +8041,10 @@ async function loadLastWeekFeedback() {
           ${row('Duration (min)', d.duration_min_done || 0, d.duration_min_planned || 0)}
         </div>
         <div style="flex:1;min-width:180px;">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Exposure (min)</div>
-          ${row('Z1+Z2 low aerobic', low, lowP)}
-          ${row('Z3 mid aerobic', mid, midP, 'over')}
-          ${row('Z4-Z5+ high', high, highP, 'over')}
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Minutes per zone (hybrid)</div>
+          ${row('zone 1 (endurance)', z1, z1P)}
+          ${row('zone 2 (tempo to threshold)', z2, z2P, 'over')}
+          ${row('zone 3 (VO2max and above)', z3, z3P, 'over')}
         </div>
       </div>
       ${calloutHtml}
@@ -12638,14 +12636,18 @@ function readBcRaces() {
 // ═══ v2.3.0: template intensity-mix % readout + custom split ════════════════
 // Typical % shown when a Template preset is picked (display only — the realized
 // mix is computed from the generated plan and replaces this after Generate).
+// slim/9.3 I2: on the planner's three zones. The typical mixes are sessions'
+// minutes by their goal zone (the old five-band hints folded: easy -> zone 1,
+// tempo/SS + threshold -> zone 2, VO2 + sprint -> zone 3); the realized mix is
+// the generated plan counted by the hybrid.
 const TEMPLATE_TYPICAL_BANDS = {
-  polarized_base: {easy:80, tempo_ss:3, threshold:5, vo2:10, sprint:2},
-  ftp_builder:    {easy:72, tempo_ss:18, threshold:8, vo2:2, sprint:0},
+  polarized_base: {zone1:80, zone2:8, zone3:12},
+  ftp_builder:    {zone1:72, zone2:26, zone3:2},
 };
-const _BAND_LABELS = {easy:'Easy', tempo_ss:'Tempo/SS', threshold:'Thr', vo2:'VO2', sprint:'Sprint'};
+const _BAND_LABELS = {zone1:'zone 1', zone2:'zone 2', zone3:'zone 3'};
 function _fmtBands(b, prefix) {
   if (!b) return '';
-  const order = ['easy','tempo_ss','threshold','vo2','sprint'];
+  const order = ['zone1','zone2','zone3'];
   return (prefix||'') + order.filter(k => b[k] != null).map(k => `${_BAND_LABELS[k]} ${Math.round(b[k])}%`).join(' · ');
 }
 function getCustomBands() {
@@ -12674,7 +12676,7 @@ function onTemplateChange() {
   if (ro) {
     if (!isTemplate) ro.textContent = '';
     else if (tmpl === 'custom') { ro.textContent = ''; onCustomBandsInput(); }
-    else ro.textContent = _fmtBands(TEMPLATE_TYPICAL_BANDS[tmpl], 'Typical mix: ');
+    else ro.textContent = _fmtBands(TEMPLATE_TYPICAL_BANDS[tmpl], 'Typical mix (sessions by goal zone): ');
   }
   if (typeof refreshPlanPreview === 'function') refreshPlanPreview();
 }
@@ -12823,8 +12825,8 @@ async function generatePlan(opts) {
     // v2.3.0: show the realized training-type distribution of the new plan.
     try {
       const ro = $('plan-dist-readout');
-      if (ro && d.plan_json && d.plan_json.realized_bands)
-        ro.textContent = _fmtBands(d.plan_json.realized_bands, 'Realized mix: ');
+      if (ro && d.plan_json && d.plan_json.realized_zones)
+        ro.textContent = _fmtBands(d.plan_json.realized_zones, 'Realized mix (hybrid): ');
     } catch(_) {}
     // v1.4.0 — mandatory loadCalendar() after every plan mutation
     // (CALENDAR_REDESIGN §8.4). Single canonical refresh path keeps
@@ -13993,10 +13995,11 @@ function renderCalendar(data) {
     const tssPill = pTss > 0 || aTss > 0
       ? `<span class="cal-tss-pill ${tssCls}" title="TSS actual / planned">${aTss} / ${pOnRecord ? pTss : '—'}</span>`
       : '';
-    const z12 = `<span class="cal-z-pill" title="Low aerobic minutes (Z1+Z2) actual/planned">Z1+Z2: ${Math.round(w.actual_z1z2_min || 0)}/${Math.round(w.planned_z1z2_min || 0)} min</span>`;
-    const z34 = `<span class="cal-z-pill" title="Mid/High aerobic minutes (Z3+Z4) actual/planned">Z3+Z4: ${Math.round(w.actual_z3z4_min || 0)}/${Math.round(w.planned_z3z4_min || 0)} min</span>`;
-    const z5p = (w.planned_z5plus_min != null || w.actual_z5plus_min != null)
-      ? `<span class="cal-z-pill" title="Anaerobic minutes (Z5+) actual/planned">Z5+: ${Math.round(w.actual_z5plus_min || 0)}/${Math.round(w.planned_z5plus_min || 0)} min</span>`
+    // slim/9.3 I2: the planner's three zones, counted by the hybrid.
+    const z12 = `<span class="cal-z-pill" title="Zone 1 minutes (endurance) actual/planned, hybrid count">zone 1: ${Math.round(w.actual_zone1_min || 0)}/${Math.round(w.planned_zone1_min || 0)} min</span>`;
+    const z34 = `<span class="cal-z-pill" title="Zone 2 minutes (tempo to threshold) actual/planned, hybrid count">zone 2: ${Math.round(w.actual_zone2_min || 0)}/${Math.round(w.planned_zone2_min || 0)} min</span>`;
+    const z5p = (w.planned_zone3_min != null || w.actual_zone3_min != null)
+      ? `<span class="cal-z-pill" title="Zone 3 minutes (VO2max and above) actual/planned, hybrid count">zone 3: ${Math.round(w.actual_zone3_min || 0)}/${Math.round(w.planned_zone3_min || 0)} min</span>`
       : '';
 
     const rowCls = `cal-row${w.is_current ? ' cal-current-week' : ''}${w.is_stepback ? ' cal-stepback' : ''}`;
@@ -15040,11 +15043,11 @@ function renderThisWeekFromCalendar(data) {
       const tipParts = [];
       if (actual.source) tipParts.push((actual.source + '').toUpperCase());
       if (actual.avg_power_w) tipParts.push('Avg ' + Math.round(actual.avg_power_w) + 'W');
-      const z12 = actual.z1z2_min != null ? Math.round(actual.z1z2_min) : null;
-      const z34 = actual.z3z4_min != null ? Math.round(actual.z3z4_min) : null;
-      const z5p = actual.z5plus_min != null ? Math.round(actual.z5plus_min) : null;
+      const z12 = actual.zone1_min != null ? Math.round(actual.zone1_min) : null;
+      const z34 = actual.zone2_min != null ? Math.round(actual.zone2_min) : null;
+      const z5p = actual.zone3_min != null ? Math.round(actual.zone3_min) : null;
       if (z12 != null || z34 != null || z5p != null) {
-        tipParts.push(`Z1+Z2 ${z12||0}m · Z3+Z4 ${z34||0}m · Z5+ ${z5p||0}m`);
+        tipParts.push(`zone 1 ${z12||0}m · zone 2 ${z34||0}m · zone 3 ${z5p||0}m (hybrid)`);
       }
       if (actual.decoupling_pct != null) tipParts.push('Decoupling ' + Number(actual.decoupling_pct).toFixed(1) + '%');
       actualTitle = tipParts.join(' · ');
@@ -17270,14 +17273,14 @@ async function loadWeeklyCalendar() {
     const week = await weekRes.json();
     const todayStr = new Date().toLocaleDateString('en-CA');
 
-    // Exposure palette — green (low) → red (anaerobic), mixed = purple.
-    // Aligned with the Library category heat-ramp so users learn one palette.
+    // Zone palette — green (zone 1) → red (zone 3), mixed = purple: the
+    // planner's three zones (slim/9.3 I2). Aligned with the Library category
+    // heat-ramp so users learn one palette.
     const EXPOSURE_META = {
-      low_aerobic:  { label: 'LOW AEROBIC',  color: '#22c55e' },  // green
-      mid_aerobic:  { label: 'MID AEROBIC',  color: '#eab308' },  // yellow
-      high_aerobic: { label: 'HIGH AEROBIC', color: '#f97316' },  // orange
-      anaerobic:    { label: 'ANAEROBIC',    color: '#ef4444' },  // red
-      mixed:        { label: 'MIXED',        color: '#8b5cf6' },  // purple
+      zone1: { label: 'ZONE 1', color: '#22c55e' },  // green
+      zone2: { label: 'ZONE 2', color: '#f97316' },  // orange
+      zone3: { label: 'ZONE 3', color: '#ef4444' },  // red
+      mixed: { label: 'MIXED',  color: '#8b5cf6' },  // purple
     };
 
     // The This Week strip has one painter, renderThisWeekFromCalendar, over
@@ -17492,10 +17495,10 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
   // Two stacked bars: top = planned (muted, dashed border = "the target"),
   // bottom = actual (full opacity = "what you did"). Shared band order +
   // legend so the eye reads them as the same axis.
-  const expMin = s.exposure_minutes || { low_aerobic: 0, mid_aerobic: 0, high_aerobic: 0, anaerobic: 0 };
-  const expPlan = s.exposure_minutes_planned || { low_aerobic: 0, mid_aerobic: 0, high_aerobic: 0, anaerobic: 0 };
-  const BAND_ORDER = ['low_aerobic', 'mid_aerobic', 'high_aerobic', 'anaerobic'];
-  const BAND_SHORT = { low_aerobic: 'LOW', mid_aerobic: 'MID', high_aerobic: 'HIGH', anaerobic: 'AN' };
+  const expMin = s.zone_minutes || { zone1: 0, zone2: 0, zone3: 0 };
+  const expPlan = s.zone_minutes_planned || { zone1: 0, zone2: 0, zone3: 0 };
+  const BAND_ORDER = ['zone1', 'zone2', 'zone3'];
+  const BAND_SHORT = { zone1: 'zone 1', zone2: 'zone 2', zone3: 'zone 3' };
   const totalExpo = BAND_ORDER.reduce((a, b) => a + (Number(expMin[b]) || 0), 0);
   const totalPlan = BAND_ORDER.reduce((a, b) => a + (Number(expPlan[b]) || 0), 0);
   const unclass = Number(s.unclassified_minutes || 0);
@@ -17509,7 +17512,7 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
       const p = m / total * 100;
       const meta = EXPOSURE_META[band] || { color: 'var(--text3)', label: band };
       const inside = p >= 10 ? `${BAND_SHORT[band]} ${Math.round(p)}%` : '';
-      const extraBg = band === 'anaerobic'
+      const extraBg = band === 'zone3'
         ? `background-image:repeating-linear-gradient(45deg,rgba(255,255,255,0.15) 0 2px,transparent 2px 6px);`
         : '';
       const planAttr = isPlanned ? 'opacity:0.7;' : '';
@@ -17536,8 +17539,9 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
       legendBits.push(`<span><span class="leg-dot" style="background:${meta.color};"></span>${BAND_SHORT[band]} ${Math.round(mP)}m planned / ${Math.round(mA)}m actual</span>`);
     }
     if (unclass > 0) {
-      legendBits.push(`<span title="Activities without HR or TRIMP signal — not counted in band breakdown."><span class="leg-dot" style="background:var(--text3);"></span>? ${unclass}m</span>`);
+      legendBits.push(`<span title="Activities without HR or TRIMP signal — not counted in zone breakdown."><span class="leg-dot" style="background:var(--text3);"></span>? ${unclass}m</span>`);
     }
+    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Work bouts count to the session's goal zone, warm-up, cool-down and recovery to zone 1.">counted by the hybrid method</span>`);
 
     // Planned bar — dashed border outline + 70% opacity to read as a target.
     const plannedBar = totalPlan > 0
@@ -20435,16 +20439,13 @@ function renderOnTrackBar(data) {
     </div>`;
   };
 
-  // The server may surface either (a) legacy z1z2_min/z3z4_min keys
-  // or (b) a target object — try both and fall back to PHASE_TARGETS-style
-  // numbers from summary if available.
-  // /api/calendar weeks now expose planned_z1z2_min / actual_z1z2_min
-  // / planned_z3z4_min / actual_z3z4_min and analogous z5plus + tss.
-  // Z5+ keys may not exist on older payloads; treat missing as 0.
+  // /api/calendar weeks expose planned_zoneN_min / actual_zoneN_min (and
+  // _to_date) for the planner's three zones, counted by the hybrid (slim/9.3
+  // I2), plus tss. Missing keys read as 0.
   const w = cur || {};
-  const railZ12 = rail('Z1+Z2', w.actual_z1z2_min,   w.planned_z1z2_min,   w.planned_z1z2_min_to_date,   '#3b82f6');
-  const railZ34 = rail('Z3+Z4', w.actual_z3z4_min,   w.planned_z3z4_min,   w.planned_z3z4_min_to_date,   '#f97316');
-  const railZ5  = rail('Z5+',   w.actual_z5plus_min, w.planned_z5plus_min, w.planned_z5plus_min_to_date, '#ef4444');
+  const railZ12 = rail('zone 1', w.actual_zone1_min, w.planned_zone1_min, w.planned_zone1_min_to_date, '#3b82f6');
+  const railZ34 = rail('zone 2', w.actual_zone2_min, w.planned_zone2_min, w.planned_zone2_min_to_date, '#f97316');
+  const railZ5  = rail('zone 3', w.actual_zone3_min, w.planned_zone3_min, w.planned_zone3_min_to_date, '#ef4444');
   const railTSS = rail('TSS',   w.actual_tss,        w.planned_tss,        w.planned_tss_to_date,        '#a855f7');
 
   // Bottom action line: session counts. Pull from cur.days when present.
@@ -20496,13 +20497,13 @@ function renderOnTrackBar(data) {
   // directly. Pre-v4.6.5 only ACTUAL was rendered as a stacked bar; PLANNED
   // was implicit via the per-zone rails above — different look, hard to
   // compare.
-  const actLow  = Number((cur && cur.actual_z1z2_min) || 0);
-  const actMid  = Number((cur && cur.actual_z3z4_min) || 0);
-  const actHigh = Number((cur && cur.actual_z5plus_min) || 0);
+  const actLow  = Number((cur && cur.actual_zone1_min) || 0);
+  const actMid  = Number((cur && cur.actual_zone2_min) || 0);
+  const actHigh = Number((cur && cur.actual_zone3_min) || 0);
   const actTotal = actLow + actMid + actHigh;
-  const pLow  = Number((cur && cur.planned_z1z2_min) || 0);
-  const pMid  = Number((cur && cur.planned_z3z4_min) || 0);
-  const pHigh = Number((cur && cur.planned_z5plus_min) || 0);
+  const pLow  = Number((cur && cur.planned_zone1_min) || 0);
+  const pMid  = Number((cur && cur.planned_zone2_min) || 0);
+  const pHigh = Number((cur && cur.planned_zone3_min) || 0);
   const pTotal = pLow + pMid + pHigh;
 
   const compRow = (label, low, mid, high, total, isMuted) => {
@@ -20519,7 +20520,7 @@ function renderOnTrackBar(data) {
     const opacity = isMuted ? 'opacity:0.55;' : '';
     return `<div class="intensity-actual-row">
       <div class="intensity-actual-label">${label}</div>
-      <div class="intensity-actual-bar" title="Z1+Z2 ${Math.round(low)}m · Z3+Z4 ${Math.round(mid)}m · Z5+ ${Math.round(high)}m" style="${opacity}">
+      <div class="intensity-actual-bar" title="zone 1 ${Math.round(low)}m · zone 2 ${Math.round(mid)}m · zone 3 ${Math.round(high)}m (hybrid)" style="${opacity}">
         ${pctLow  > 0 ? `<div class="intensity-actual-seg-low"  style="width:${pctLow}%;"></div>`  : ''}
         ${pctMid  > 0 ? `<div class="intensity-actual-seg-mid"  style="width:${pctMid}%;"></div>`  : ''}
         ${pctHigh > 0 ? `<div class="intensity-actual-seg-high" style="width:${pctHigh}%;"></div>` : ''}
@@ -20536,12 +20537,13 @@ function renderOnTrackBar(data) {
     const dMid  = Math.round(actMid - pMid);
     const dHigh = Math.round(actHigh - pHigh);
     const parts = [];
-    if (Math.abs(dLow)  >= 5) parts.push(`${dLow > 0 ? '+' : ''}${dLow} min Z1+Z2`);
-    if (Math.abs(dMid)  >= 5) parts.push(`${dMid > 0 ? '+' : ''}${dMid} min Z3+Z4`);
-    if (Math.abs(dHigh) >= 3) parts.push(`${dHigh > 0 ? '+' : ''}${dHigh} min Z5+`);
+    if (Math.abs(dLow)  >= 5) parts.push(`${dLow > 0 ? '+' : ''}${dLow} min zone 1`);
+    if (Math.abs(dMid)  >= 5) parts.push(`${dMid > 0 ? '+' : ''}${dMid} min zone 2`);
+    if (Math.abs(dHigh) >= 3) parts.push(`${dHigh > 0 ? '+' : ''}${dHigh} min zone 3`);
     if (parts.length) deltaLineHtml = `<div class="intensity-delta" style="grid-column:1/-1;padding-left:68px;">${esc(parts.join(' · '))} vs planned</div>`;
   }
-  const actualBarHtml = compRow('PLANNED', pLow, pMid, pHigh, pTotal, true)
+  const actualBarHtml = `<div class="intensity-delta" style="grid-column:1/-1;">minutes per zone, hybrid method</div>`
+    + compRow('PLANNED', pLow, pMid, pHigh, pTotal, true)
     + compRow('ACTUAL', actLow, actMid, actHigh, actTotal, false)
     + deltaLineHtml;
 
@@ -20593,7 +20595,7 @@ function renderOnTrackBar(data) {
       <div class="ot-stat">
         <div class="ot-stat-label">POLARIZED</div>
         <div class="ot-stat-val" style="color:${polColor};">${pa.z1_pct}/${pa.z2_pct}/${pa.z3_pct}</div>
-        <div style="font-size:10px;color:var(--text3);">target ${pt.z1_pct}/${pt.z2_pct}/${pt.z3_pct}</div>
+        <div style="font-size:10px;color:var(--text3);">target ${pt.z1_pct}/${pt.z2_pct}/${pt.z3_pct} · time in zone</div>
       </div>
       <div class="ot-stat">
         <div class="ot-stat-label">PHASE</div>
@@ -20601,7 +20603,7 @@ function renderOnTrackBar(data) {
         <div style="font-size:10px;color:var(--text3);">${esc(nextPhaseLbl)}</div>
       </div>
     </div>
-    <div class="ontrack-rails">
+    <div class="ontrack-rails" title="Minutes per zone counted by the hybrid method: work bouts to the session's goal zone, warm-up, cool-down and recovery to zone 1">
       ${railZ12}
       ${railZ34}
       ${railZ5}
@@ -20882,7 +20884,7 @@ function renderActivityModal(p) {
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div style="font-size:18px;">🎯</div>
         <div style="font-size:16px;font-weight:900;letter-spacing:0.05em;color:${kc};text-transform:uppercase;">${esc(klass)}</div>
-        <div style="font-size:11px;color:var(--text2);">PI = ${piVal} · Treff 2019</div>
+        <div style="font-size:11px;color:var(--text2);">PI = ${piVal} · Treff 2019 · time in zone</div>
         ${conf != null ? `<div style="font-size:10px;color:var(--text3);">· confidence ${conf}%</div>` : ''}
         <span title="${esc(tipText)}" style="margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(148,163,184,0.18);color:var(--text2);font-size:11px;font-weight:700;cursor:help;" aria-label="Research citations">i</span>
       </div>

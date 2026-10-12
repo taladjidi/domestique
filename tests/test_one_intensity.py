@@ -1,0 +1,147 @@
+"""Every surface counts intensity the same (contract slim/9.3, I1-I2).
+
+The owner's week of 2026-10-12, measured: week view low/mid+high/anaerobic
+518/1/38 min, calendar Z1Z2/Z3Z4/Z5+ 496/14/48, headline "Z3-Z5 owed 39":
+three counts of one week. The week view banded each file's zone shares into
+four bands of its own, the calendar used its own thresholds and a type
+heuristic (a VO2max session without a file was 55/10/35), the week summary a
+third table. Now every one reads week_view's hybrid count (zones.
+hybrid_minutes over the served file; a ride by zones.hybrid_ride_minutes for
+the goal zone of the session planned on its day) and names the planner's three
+zones.
+"""
+from __future__ import annotations
+
+import json
+import re
+import tempfile
+import unittest
+from datetime import date, timedelta
+from pathlib import Path
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+import app as app_module
+import clock
+import download_lib
+import week_view as wv
+import zones
+
+MON = date(2026, 10, 12)
+VO2 = "vo2_short_4x10x30s-30s_120pct_76min.zwo"
+Z2 = "z2_steady_54pct_61min.zwo"
+WORKOUTS = Path(__file__).resolve().parent.parent / "src" / "workouts"
+DASH = (Path(__file__).resolve().parent.parent / "src" / "templates" / "dashboard.html").read_text()
+
+
+class _Week(unittest.TestCase):
+    """Mon recovery (file), Tue VO2max (file), Wed VO2max with no file, Thu
+    rest; a ride on Tuesday. Today is Wednesday."""
+
+    def setUp(self):
+        app_module.clear_cache()
+        self.addCleanup(app_module.clear_cache)
+        clock.freeze(MON + timedelta(days=2))
+        self.addCleanup(clock.unfreeze)
+        tmp = Path(tempfile.mkdtemp(prefix="one_intensity_"))
+        d = lambda i: (MON + timedelta(days=i)).isoformat()  # noqa: E731
+        sess = [(0, "recovery", 61, Z2), (1, "vo2max", 76, VO2), (2, "vo2max", 60, ""),
+                (3, "rest", 0, "")]
+        (tmp / "current_plan.json").write_text(json.dumps({
+            "goal": {"type": "general", "hours_per_week": 8.0}, "phases": [],
+            "weeks": [{"week_num": 1, "start": d(0), "end": d(6), "phase": "build",
+                       "tss_target": 400, "is_stepback": False,
+                       "sessions": [{"day": d(i), "day_name": "", "session_type": st,
+                                     "duration_min": dur, "tss_estimate": 50 if dur else 0,
+                                     "description": "", "zwo_file": zf, "zwo_name": "",
+                                     "status": "pending"} for i, st, dur, zf in sess]}]}))
+        tiz = {"z1": 2400, "z2": 900, "z3": 120, "z4": 180, "z5": 600, "z6": 360, "z7": 0}
+        self.ride = {"ride_id": "icu_77", "source": "icu", "sport": "Ride", "name": "VO2",
+                     "started_at": f"{d(1)}T10:00:00", "date": d(1), "tss": 80,
+                     "moving_time_s": 4560, "duration_s": 4560, "time_in_zone": tiz}
+        act = [{"id": "77", "date": d(1), "sport": "Ride", "duration_min": 76, "tss": 80,
+                "avg_hr": 150}]
+        for p in (patch.object(app_module, "_plan_dir", return_value=tmp),
+                  patch.object(app_module, "_load_all_rides_safe", return_value=[self.ride]),
+                  patch.object(app_module, "_load_full_ride", side_effect=lambda r: r),
+                  patch.object(app_module, "api_activities", return_value=act),
+                  patch("ride_storage.list_rides", return_value=[]),
+                  patch.object(app_module, "get_today_metrics", return_value={}),
+                  patch.object(app_module, "get_sleep_metrics", return_value={})):
+            p.start()
+            self.addCleanup(p.stop)
+        self.client = TestClient(app_module.app)
+
+    def _get(self, url):
+        r = self.client.get(url)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+
+class TestTheWeekViewCountsByTheHybrid(_Week):
+
+    def test_sessions_carry_their_goal_zone_and_hybrid_minutes(self):
+        wk = self._get("/api/weekly-plan")
+        by = {s["day"]: s for s in wk["sessions"]}
+        tue = by[(MON + timedelta(1)).isoformat()]
+        self.assertEqual(tue["goal_zone"], 3)
+        served = download_lib.served_zone_minutes(WORKOUTS / VO2, 76, "vo2max", 3)
+        self.assertEqual(tue["zone_minutes"], {f"zone{i}": int(round(served[f"z{i}"])) for i in (1, 2, 3)})
+        self.assertEqual(tue["zone_minutes"]["zone2"], 0)     # VO2 work is zone 3
+        # a VO2max session with no file counts its duration to its goal zone
+        wed = by[(MON + timedelta(2)).isoformat()]
+        self.assertEqual(wed["zone_minutes"], {"zone1": 0, "zone2": 0, "zone3": 60})
+        self.assertEqual(wk["zone_method"], "hybrid")
+        self.assertNotIn("exposure_minutes_planned", wk)
+
+    def test_the_hybrid_is_not_the_planners_time_in_zone(self):
+        # the served VO2 file's surges between bouts are zone 2 by time in
+        # zone; the hybrid credits the bouts to the goal zone
+        b = (WORKOUTS / VO2).read_bytes()
+        self.assertGreaterEqual(zones.hybrid_minutes(b, 3)["z3"], zones.tiz_minutes(b)["z3"])
+
+
+class TestEverySurfaceCountsTheSame(_Week):
+
+    def test_planned_minutes_per_zone_agree(self):
+        wk = self._get("/api/weekly-plan")
+        ws = self._get("/api/week-summary")
+        cal = self._get("/api/calendar")
+        cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
+        self.assertEqual(ws["zone_minutes_planned"], wk["zone_minutes_planned"])
+        for z in wv.ZONES:
+            self.assertAlmostEqual(cw[f"planned_{z}_min"], wk["zone_minutes_planned"][z], delta=1.0)
+        self.assertEqual(cw["zone_method"], "hybrid")
+        # the VO2max day without a file: 60 min of zone 3, not 55/10/35
+        self.assertGreaterEqual(cw["planned_zone3_min"], 60)
+
+    def test_ridden_minutes_per_zone_agree_and_follow_the_days_session(self):
+        ws = self._get("/api/week-summary")
+        cal = self._get("/api/calendar")
+        cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
+        # Tuesday's ride is matched to its VO2max session: 40 + 15 min below
+        # 76% FTP is zone 1, its 21 min at or above count to zone 3
+        want = {"zone1": 55, "zone2": 0, "zone3": 21}
+        self.assertEqual(ws["zone_minutes"], want)
+        for z in wv.ZONES:
+            self.assertAlmostEqual(cw[f"actual_{z}_min"], want[z], delta=0.5)
+        day = next(dd for dd in cw["days"] if dd["date"] == (MON + timedelta(1)).isoformat())
+        self.assertEqual(round(day["actual"]["zone3_min"]), 21)
+        self.assertNotIn("z5plus_min", day["actual"])
+
+
+def test_the_dashboard_reads_no_retired_field():
+    """Field renames need every reader updated: no dashboard read of the
+    Coggan-grouped or four-band names is left."""
+    retired = re.compile(r"exposure_minutes|z1z2_min|z3z4_min|z5plus_min|z4plus_min|"
+                         r"realized_bands|\b(low|mid|high)_aerobic\b")
+    assert retired.findall(DASH) == []
+
+
+def test_every_distribution_figure_says_its_method():
+    for needle in ("Minutes per zone (hybrid)", "counted by the hybrid method",
+                   "Intensity distribution <span style=\"font-weight:400;color:var(--text3);\">(hybrid)</span>",
+                   "Polarization index <span style=\"font-weight:400;color:var(--text3);\">(time in zone)</span>",
+                   "PI = ${piVal} · Treff 2019 · time in zone", "Realized mix (hybrid): "):
+        assert needle in DASH, needle

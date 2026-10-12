@@ -212,11 +212,13 @@ class WeekViewAgreement(unittest.TestCase):
     def test_planned_band_minutes_are_one_answer(self):
         """A6. /api/week-summary banded planned minutes by the session's label
         through its own table; /api/weekly-plan bands them by the served
-        file's zone shares. The rollup and the home bars read one answer."""
+        file's zone shares. The rollup and the home bars read one answer:
+        since slim/9.3 minutes per zone by the hybrid (I2)."""
         weekly = self._get("/api/weekly-plan")
         summary = self._get("/api/week-summary")
-        self.assertEqual(summary["exposure_minutes_planned"], weekly["exposure_minutes_planned"])
-        self.assertGreater(sum(weekly["exposure_minutes_planned"].values()), 0)
+        self.assertEqual(summary["zone_minutes_planned"], weekly["zone_minutes_planned"])
+        self.assertEqual((summary["zone_method"], weekly["zone_method"]), ("hybrid", "hybrid"))
+        self.assertGreater(sum(weekly["zone_minutes_planned"].values()), 0)
 
     def test_the_fixture_is_the_owners_record(self):
         """A control that must pass today: the stored record really carries

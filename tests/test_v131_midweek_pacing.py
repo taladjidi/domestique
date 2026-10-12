@@ -82,16 +82,11 @@ def _mk_plan(monday: date) -> dict:
 
 
 def _z12_min_of_session(s: dict) -> float:
-    """Mirror _planned_zone_split_minutes for the Z1+Z2 channel."""
-    dur = float(s.get("duration_min") or 0)
-    if dur <= 0:
-        return 0.0
-    zd = s.get("zone_dist") or {}
-    pct = float(zd.get("z1") or 0) + float(zd.get("z2") or 0)
-    total = sum(float(zd.get(k) or 0) for k in ("z1","z2","z3","z4","z5","z6"))
-    if total <= 0:
-        return 0.0
-    return round(dur * pct / 100.0, 1)
+    """Zone 1 minutes of a session as the calendar counts them since slim/9.3
+    (week_view.hybrid_zone_minutes): every session here is a z2 slot whose
+    file is not in the library, so its whole duration counts to its goal
+    zone, zone 1 (the zone_dist shares are no longer read)."""
+    return round(float(s.get("duration_min") or 0), 1)
 
 
 def _full_week_z12(plan: dict) -> float:
@@ -156,15 +151,15 @@ class MidWeekPacingTests(unittest.TestCase):
         payload, plan = self._run(wednesday)
         cur = next(w for w in payload["weeks"] if w["is_current"])
 
-        expected_z12_td = _to_date_z12(plan, wednesday)         # 60+45+90 = 195
+        expected_z12_td = _to_date_z12(plan, wednesday)         # 60+75+90 = 225
         expected_tss_td = _to_date_tss(plan, wednesday)         # 50+75+70 = 195
-        full_z12 = _full_week_z12(plan)                         # 475
+        full_z12 = _full_week_z12(plan)                         # 495
 
         # The to-date plan rolls up only Mon..Wed.
-        self.assertAlmostEqual(cur["planned_z1z2_min_to_date"], expected_z12_td, places=1)
+        self.assertAlmostEqual(cur["planned_zone1_min_to_date"], expected_z12_td, places=1)
         self.assertAlmostEqual(cur["planned_tss_to_date"], expected_tss_td, places=1)
         # Full-week plan unchanged.
-        self.assertAlmostEqual(cur["planned_z1z2_min"], full_z12, places=1)
+        self.assertAlmostEqual(cur["planned_zone1_min"], full_z12, places=1)
         # Annotation: 3 of 7 days elapsed.
         self.assertEqual(cur["days_elapsed"], 3)
         self.assertEqual(cur["days_total"], 7)
@@ -177,11 +172,11 @@ class MidWeekPacingTests(unittest.TestCase):
         # We don't drive a ride here — just assert the field exists and
         # would be the denominator the front-end uses.
         self.assertGreater(
-            cur["planned_z1z2_min_to_date"], 0,
+            cur["planned_zone1_min_to_date"], 0,
             "to_date_target must be > 0 mid-week"
         )
         self.assertLess(
-            cur["planned_z1z2_min_to_date"], cur["planned_z1z2_min"],
+            cur["planned_zone1_min_to_date"], cur["planned_zone1_min"],
             "Wed to_date_target must be smaller than full-week target"
         )
 
@@ -194,7 +189,7 @@ class MidWeekPacingTests(unittest.TestCase):
         # On the last day, the to-date target == full-week target so the
         # math collapses back to the v1.3.0 behavior.
         self.assertAlmostEqual(
-            cur["planned_z1z2_min_to_date"], cur["planned_z1z2_min"], places=1
+            cur["planned_zone1_min_to_date"], cur["planned_zone1_min"], places=1
         )
         self.assertAlmostEqual(
             cur["planned_tss_to_date"], cur["planned_tss"], places=1
@@ -208,12 +203,12 @@ class MidWeekPacingTests(unittest.TestCase):
         cur = next(w for w in payload["weeks"] if w["is_current"])
 
         # Monday's planned-only: z12=60, tss=50.
-        self.assertAlmostEqual(cur["planned_z1z2_min_to_date"], 60.0, places=1)
+        self.assertAlmostEqual(cur["planned_zone1_min_to_date"], 60.0, places=1)
         self.assertAlmostEqual(cur["planned_tss_to_date"], 50.0, places=1)
         self.assertEqual(cur["days_elapsed"], 1)
         # And the full-week target is bigger.
         self.assertGreater(
-            cur["planned_z1z2_min"], cur["planned_z1z2_min_to_date"]
+            cur["planned_zone1_min"], cur["planned_zone1_min_to_date"]
         )
 
 

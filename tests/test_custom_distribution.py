@@ -59,16 +59,17 @@ def test_custom_hit_sequence_is_proportional():
     assert c["sprint"] == 0
 
 
-def test_realized_band_distribution_normalizes():
+def test_realized_zone_distribution_normalizes():
+    """The generate readout: % of the plan's minutes per zone, each session by
+    the hybrid count (slim/9.3, I2); a session with no file counts its whole
+    duration to its goal zone, a rest day nothing."""
     plan = {"weeks": [{"sessions": [
-        {"session_type": "z2", "duration_min": 100},
-        {"session_type": "vo2max", "duration_min": 50},
-        {"session_type": "rest", "duration_min": 0},
-        {"session_type": "ftp_test", "duration_min": 30},  # excluded
+        {"session_type": "z2", "duration_min": 100, "zwo_file": ""},
+        {"session_type": "vo2max", "duration_min": 50, "zwo_file": ""},
+        {"session_type": "rest", "duration_min": 0, "zwo_file": ""},
     ]}]}
-    d = tp.realized_band_distribution(plan)
-    assert d["easy"] == 67 and d["vo2"] == 33
-    assert sum(d.values()) in (99, 100, 101)  # rounding
+    d = app._plan_zone_distribution(plan)
+    assert (d["zone1"], d["zone2"], d["zone3"], d["method"]) == (67, 0, 33, "hybrid")
 
 
 def test_parse_custom_bands_validates():
@@ -112,7 +113,8 @@ def test_generate_custom_persists_and_tracks_request(sandbox_plan_dir):
     assert pj["goal"]["custom_bands"]["tempo_ss"] == 70.0
     assert pj["goal"]["plan_mode"] == "template"
     assert pj["goal"]["template_id"] == "custom"
-    assert "realized_bands" in pj
+    assert pj["realized_zones"]["method"] == "hybrid"
+    assert set(pj["realized_zones"]) == {"zone1", "zone2", "zone3", "method"}
 
     # The HARD work actually tracks the request: sweetspot is the dominant HIT.
     hits = Counter()

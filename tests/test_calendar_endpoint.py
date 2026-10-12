@@ -190,7 +190,7 @@ class TestCalendarEndpoint(CalendarBase):
         self.assertIsNotNone(match, "ride day must surface in history")
         self.assertIsNotNone(match["actual"])
         self.assertEqual(match["actual"]["tss"], 50)
-        self.assertGreater(match["actual"]["z1z2_min"], 0)
+        self.assertGreater(match["actual"]["zone1_min"], 0)
 
     def test_plan_plus_matching_ride_completion_pct(self):
         # Tuesday this week is z2 60min 45TSS. Plant a matching ride.
@@ -242,9 +242,11 @@ class TestCalendarEndpoint(CalendarBase):
         data = r.json()
         cur = next(w for w in data["weeks"] if w.get("is_current"))
         d = next(d for d in cur["days"] if d["date"] == ride_d)
-        self.assertAlmostEqual(d["actual"]["z1z2_min"], 10.0, delta=0.1)
-        self.assertAlmostEqual(d["actual"]["z3z4_min"], 20.0, delta=0.1)
-        self.assertAlmostEqual(d["actual"]["z5plus_min"], 30.0, delta=0.1)
+        # the planner's three zones (slim/9.3); the fixture plans no hard
+        # session on the ride's day, so plain time in zone
+        self.assertAlmostEqual(d["actual"]["zone1_min"], 10.0, delta=0.1)
+        self.assertAlmostEqual(d["actual"]["zone2_min"], 20.0, delta=0.1)
+        self.assertAlmostEqual(d["actual"]["zone3_min"], 30.0, delta=0.1)
 
     def test_is_stepback_propagated(self):
         r = self.client.get("/api/calendar")

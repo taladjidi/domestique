@@ -363,43 +363,42 @@ class TestPlanRegenPreservesUserMoved(unittest.TestCase):
 
 
 class TestSessionTypeToBandLockedValues(unittest.TestCase):
-    """One session type → exposure band table, week_view.TYPE_BAND (week-view
-    contract A6). Until 2026-09-14 app.py, training_planner.py and the
-    dashboard each kept a copy, and they disagreed on ftp_test and
-    neuromuscular."""
+    """One session type → intensity table. Until 2026-09-14 app.py,
+    training_planner.py and the dashboard each kept a copy of the exposure
+    band table; from slim/9.3 (contract I1) the one scale is the planner's
+    three zones and zones.goal_zone the one map, and week_view's band table
+    is gone."""
 
-    def test_expected_bands(self):
-        import week_view
+    def test_expected_zones(self):
+        import zones
         expected = {
-            "recovery": "low_aerobic",
-            "z2": "low_aerobic",
-            "long_z2": "low_aerobic",
-            "tempo": "mid_aerobic",
-            "sweetspot": "high_aerobic",
-            "threshold": "high_aerobic",
-            "vo2max": "anaerobic",
-            "overunder": "anaerobic",
+            "recovery": 1, "z2": 1, "long_z2": 1,
+            "tempo": 2, "sweetspot": 2, "threshold": 2, "overunder": 2,
+            "vo2max": 3, "sprint": 3, "ftp_test": 3,
         }
         for k, v in expected.items():
-            self.assertEqual(week_view.TYPE_BAND[k], v)
+            self.assertEqual(zones.goal_zone(None, k), v, k)
 
     def test_no_second_table(self):
-        """A copy maps a session type straight to an exposure band name; only
-        week_view.py may."""
+        """No display or advice module maps a session type to the old band
+        names or to a zone number; only zones.py may (and completion
+        matching's frozen copy, slim/9.3 I3)."""
         import re
         from pathlib import Path
         src = Path(__file__).resolve().parent.parent / "src"
-        entry = re.compile(r"""["']?(z2|long_z2|tempo|threshold)["']?\s*:\s*["'](low|mid|high)_aerobic["']""")
-        files = [src / "app.py", src / "training_planner.py", src / "templates" / "dashboard.html"]
+        band = re.compile(r"""["']?(z2|long_z2|tempo|threshold|vo2max)["']?\s*:\s*["']((low|mid|high)_aerobic|anaerobic)["']""")
+        zone = re.compile(r"""["']?(z2|long_z2|tempo|sweetspot|threshold|vo2max)["']?\s*:\s*[123]\b""")
+        files = [src / "app.py", src / "training_planner.py", src / "week_view.py",
+                 src / "continuous_policy.py", src / "templates" / "dashboard.html"]
         for f in files:
             text = f.read_text(encoding="utf-8")
             if f.name == "training_planner.py":
-                # completion matching's own frozen copy (slim/9.3, I3) is the
-                # one sanctioned second table; it serves no display
                 a = text.index("_REMATCH_TYPE_BAND = {")
                 text = text[:a] + text[text.index("}", a) + 1:]
-            self.assertEqual(entry.findall(text), [], f.name)
-        self.assertTrue(entry.findall((src / "week_view.py").read_text(encoding="utf-8")))
+            self.assertEqual(band.findall(text), [], f.name)
+            if f.name != "training_planner.py":   # its _SLOT_RANK is a ladder, phase B
+                self.assertEqual(zone.findall(text), [], f.name)
+        self.assertTrue(zone.findall((src / "zones.py").read_text(encoding="utf-8")))
 
 
 if __name__ == "__main__":

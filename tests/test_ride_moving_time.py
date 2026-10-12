@@ -42,7 +42,7 @@ def test_the_calendar_card_shows_moving_time_and_agrees_with_itself():
     card = app._summarize_ride_for_calendar(ICU_RIDE, ftp=247)
     assert card["duration_min"] == round(5515 / 60, 1), (
         f"calendar says {card['duration_min']} min; intervals.icu says 1h31")
-    zones = card["z1z2_min"] + card["z3z4_min"] + card["z5plus_min"]
+    zones = card["zone1_min"] + card["zone2_min"] + card["zone3_min"]
     assert abs(card["duration_min"] - zones) <= 1.0, (
         f"the card's duration ({card['duration_min']}) and its own zone minutes "
         f"({zones:.1f}) must describe the same ride")

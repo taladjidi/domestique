@@ -8948,7 +8948,7 @@ def _stored_week_view(plan: "dict | None", week_offset: int = 0, rides=None):
         plan, start, lib_by_file, tp._session_type_from_row,
         naming=lambda zf, s=None: _session_naming_lookup(
             zf, classifications, lib_by_file, session=s),
-        offset=week_offset, rides=rides)
+        offset=week_offset, rides=rides, minutes_of=_served_zone_minutes_of)
 
 
 @app.get("/api/weekly-plan")
@@ -9076,11 +9076,16 @@ def _guarded_check_and_auto_apply_eftp(wellness_series):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _classify_exposure(activity: dict, lthr: float) -> str:
-    """Classify an activity's aerobic band from HR/LTHR or TRIMP-per-minute.
+    """The zone ("zone1" | "zone2" | "zone3") of an activity with no power
+    time in zone, from its average HR or TRIMP per minute.
 
-    Preferred signal: average HR relative to LTHR.
+    Preferred signal: average HR relative to LTHR, on the three zones folded
+    from the Friel HR zones (zones._HR_FRACS: HR Z1-Z2 below 90% LTHR is
+    zone 1, Z3-Z4 to 102% zone 2, Z5 zone 3). Until slim/9.3 it had a
+    four-band table of its own (75/88/96% LTHR), and a ride's measured time
+    in zone went through a second one (_exposure_split_from_tiz).
     Fallback: TRIMP per minute (rough intensity proxy).
-    If neither is available, defaults to 'low_aerobic' (safest bucket — assumes
+    If neither is available, defaults to zone 1 (safest bucket — assumes
     the activity was gentle rather than silently dropping it from exposure).
     """
     avg_hr = activity.get("avg_hr")
@@ -9096,13 +9101,11 @@ def _classify_exposure(activity: dict, lthr: float) -> str:
 
     if avg_hr_val is not None and lthr_val > 0:
         ratio = avg_hr_val / lthr_val
-        if ratio < 0.75:
-            return "low_aerobic"
-        if ratio < 0.88:
-            return "mid_aerobic"
-        if ratio < 0.96:
-            return "high_aerobic"
-        return "anaerobic"
+        if ratio < _zones_mod._HR_FRACS[2][0]:
+            return "zone1"
+        if ratio < _zones_mod._HR_FRACS[4][0]:
+            return "zone2"
+        return "zone3"
 
     # Fallback: TRIMP-per-minute
     trimp = activity.get("trimp")
@@ -9114,13 +9117,15 @@ def _classify_exposure(activity: dict, lthr: float) -> str:
 
     if trimp_val is not None and dur_min and dur_min > 0:
         tpm = trimp_val / dur_min
-        if tpm < 0.6:
-            return "low_aerobic"
         if tpm < 1.2:
-            return "mid_aerobic"
+            return "zone1"
         if tpm < 2.0:
-            return "high_aerobic"
-        return "anaerobic"
+            return "zone2"
+        return "zone3"
+
+    # No usable signal — park in zone 1 (gotcha: see report).
+    return "zone1"
+
 
     # No usable signal — park in low_aerobic bucket (gotcha: see report).
     return "low_aerobic"
@@ -9144,55 +9149,14 @@ def _matches_planned(activities: list, session_type: str) -> bool:
     return any((a.get("sport") or "") in _CYCLING_SPORTS for a in activities)
 
 
-def _exposure_split_from_tiz(tiz: dict | None) -> dict[str, float] | None:
-    """Split one ride's minutes across the exposure bands using its MEASURED
-    time-in-zone, rather than filing the whole ride under one average.
-
-    Coggan power zones land on the four bands exactly as week_view.TYPE_BAND
-    maps session types, which is what makes the planned and actual bars
-    comparable at all:
-
-        Z1 + Z2   -> low_aerobic    (recovery, endurance)   <- z2 / long_z2
-        Z3        -> mid_aerobic    (tempo)                 <- tempo
-        Z4        -> high_aerobic   (sweet spot, threshold) <- sweetspot / threshold
-        Z5 .. Z7  -> anaerobic      (VO2max and above)      <- vo2max / overunder
-
-    ``ss`` is deliberately not summed: sweet spot overlaps Z3/Z4 and counting
-    it would inflate the total beyond the ride's own duration.
-
-    Returns None when the ride carries no zone data, so the caller falls back
-    to the whole-ride average rather than silently reporting zero minutes.
-    """
-    if not isinstance(tiz, dict):
-        return None
-
-    def _s(*keys: str) -> float:
-        total = 0.0
-        for k in keys:
-            try:
-                total += float(tiz.get(k) or 0)
-            except (TypeError, ValueError):
-                continue
-        return total
-
-    if _s("z1", "z2", "z3", "z4", "z5", "z6", "z7") <= 0:
-        return None
-    return {
-        "low_aerobic": _s("z1", "z2") / 60.0,
-        "mid_aerobic": _s("z3") / 60.0,
-        "high_aerobic": _s("z4") / 60.0,
-        "anaerobic": _s("z5", "z6", "z7") / 60.0,
-    }
-
-
 def _classify_exposure_with_signal(activity: dict, lthr: float) -> tuple[str, str]:
     """Like _classify_exposure but also returns the signal source.
 
     Returns (band, signal) where signal is one of:
       - "hr"      : classified from avg_hr / lthr
       - "trimp"   : classified from TRIMP-per-minute fallback
-      - "inferred": neither signal available, defaulted to low_aerobic
-                    (caller should exclude from exposure_minutes totals
+      - "inferred": neither signal available, defaulted to zone1
+                    (caller should exclude from zone_minutes totals
                     to avoid polluting the band math)
     """
     avg_hr = activity.get("avg_hr")
@@ -9219,7 +9183,7 @@ def _classify_exposure_with_signal(activity: dict, lthr: float) -> tuple[str, st
         band = _classify_exposure(activity, lthr)
         return (band, "trimp")
 
-    return ("low_aerobic", "inferred")
+    return ("zone1", "inferred")
 
 
 @app.get("/api/week-summary")
@@ -9316,18 +9280,17 @@ def api_week_summary(week_offset: int = Query(0)):
         (s.get("duration_min") or 0) for s in sessions
     )))
 
-    # Exposure distribution (sport-agnostic). Activities with neither HR nor
+    # Minutes per zone (sport-agnostic), on the planner's three zones by the
+    # hybrid count (contract slim/9.3, I2). Activities with neither HR nor
     # TRIMP signal go into a separate unclassified_minutes bucket so they
-    # don't silently inflate low_aerobic (QA-EDGE #2).
-    exposure_minutes = {
-        "low_aerobic": 0, "mid_aerobic": 0, "high_aerobic": 0, "anaerobic": 0,
-    }
+    # don't silently inflate zone 1 (QA-EDGE #2).
+    zone_minutes = {"zone1": 0, "zone2": 0, "zone3": 0}
     unclassified_minutes = 0
     activities_by_day: dict[str, list[dict]] = {}
     sports_counter: dict[str, int] = {}
 
     # Measured time-in-zone beats a whole-ride average, and Domestique already
-    # records it per ride (the calendar renders it as Z1Z2/Z3Z4/Z5+). Filing a
+    # records it per ride (the calendar renders it by zone). Filing a
     # three-hour endurance ride wholly under the band of its average HR put
     # every minute of a Z2 week into mid/high and reported low_aerobic as zero.
     # _load_all_rides_safe is the shared 5-minute cache, so this is one parse.
@@ -9345,13 +9308,22 @@ def api_week_summary(week_offset: int = Query(0)):
     except Exception:  # noqa: BLE001 - never break the rollup over the archive
         _tiz_by_id = {}
 
+    # A ride is counted for the goal zone of the session planned on its day
+    # (zones.hybrid_ride_minutes), as the calendar and the headline count it.
+    _goal_by_day = {s.get("day"): s.get("goal_zone") for s in plan.get("sessions") or []
+                    if s.get("on_record") and s.get("session_type") != "rest"}
     for a in week_activities:
         band, signal = _classify_exposure_with_signal(a, lthr)
         dur = int(round(a.get("duration_min") or 0))
-        split = _exposure_split_from_tiz(_tiz_by_id.get(str(a.get("id") or "")))
+        _tiz = _tiz_by_id.get(str(a.get("id") or ""))
+        split = None
+        if isinstance(_tiz, dict) and sum(_zones_mod.three_zone(_tiz).values()) > 0:
+            _goal = (_goal_by_day.get((a.get("date") or "")[:10])
+                     if _is_cycling_sport(a.get("sport") or "") else None)
+            split = _wv.ride_zone_minutes(_tiz, _goal)
         if split:
             for _b, _m in split.items():
-                exposure_minutes[_b] = exposure_minutes.get(_b, 0) + _m
+                zone_minutes[_b] = zone_minutes.get(_b, 0) + _m
             # Label the day-list row with where the ride actually spent most of
             # its time, so the list and the bars cannot tell different stories.
             band = max(split, key=lambda k: split[k])
@@ -9359,7 +9331,7 @@ def api_week_summary(week_offset: int = Query(0)):
         elif signal == "inferred":
             unclassified_minutes += dur
         else:
-            exposure_minutes[band] = exposure_minutes.get(band, 0) + dur
+            zone_minutes[band] = zone_minutes.get(band, 0) + dur
 
         d = (a.get("date") or "")[:10]
         row = {
@@ -9368,20 +9340,20 @@ def api_week_summary(week_offset: int = Query(0)):
             "duration_min": dur,
             "avg_hr": a.get("avg_hr"),
             "name": a.get("name") or "",
-            "exposure": band,
-            "exposure_signal": signal,
+            "zone": band,
+            "zone_signal": signal,
         }
         activities_by_day.setdefault(d, []).append(row)
         sport_key = a.get("sport") or "Other"
         sports_counter[sport_key] = sports_counter.get(sport_key, 0) + 1
 
-    exposure_minutes = {k: int(round(v)) for k, v in exposure_minutes.items()}
-    total_exposure = sum(exposure_minutes.values())
-    exposure_dominant = "mixed"
+    zone_minutes = {k: int(round(v)) for k, v in zone_minutes.items()}
+    total_exposure = sum(zone_minutes.values())
+    zone_dominant = "mixed"
     if total_exposure > 0:
-        for band, mins in exposure_minutes.items():
+        for band, mins in zone_minutes.items():
             if mins / total_exposure >= 0.60:
-                exposure_dominant = band
+                zone_dominant = band
                 break
 
     # Planned-day accounting — ISO week is always 7 days regardless of plan
@@ -9455,22 +9427,21 @@ def api_week_summary(week_offset: int = Query(0)):
                 "did_non_cycling": bool(day_acts),
             })
 
-    # Planned exposure-minutes, from the week view: each served file's zone
-    # shares, the session's type only when no file is served. The same
-    # numbers /api/weekly-plan serves (week-view contract A6).
-    exposure_minutes_planned = dict(plan.get("exposure_minutes_planned") or {
-        "low_aerobic": 0, "mid_aerobic": 0, "high_aerobic": 0, "anaerobic": 0,
+    # Planned minutes per zone, from the week view: each served file by the
+    # hybrid count, the session's goal zone only when no file is served. The
+    # same numbers /api/weekly-plan serves (week-view contract A6).
+    zone_minutes_planned = dict(plan.get("zone_minutes_planned") or {
+        "zone1": 0, "zone2": 0, "zone3": 0,
     })
 
     # v1.7.6 — overreach flag for the "last week feedback" UI. Triggers
-    # when actual TSS exceeds plan by >30 %, OR when high-zone minutes
-    # (high_aerobic + anaerobic) exceed planned by >50 %. Either signals
+    # when actual TSS exceeds plan by >30 %, OR when the minutes above zone 1
+    # (zone 2 + zone 3) exceed planned by >50 %. Either signals
     # that the user ran harder than the plan asked for, which is the
     # context behind the readiness composite's tier-down recommendation.
-    high_zone_done = (exposure_minutes.get("high_aerobic", 0)
-                      + exposure_minutes.get("anaerobic", 0))
-    high_zone_planned = (exposure_minutes_planned.get("high_aerobic", 0)
-                         + exposure_minutes_planned.get("anaerobic", 0))
+    high_zone_done = zone_minutes.get("zone2", 0) + zone_minutes.get("zone3", 0)
+    high_zone_planned = (zone_minutes_planned.get("zone2", 0)
+                         + zone_minutes_planned.get("zone3", 0))
     overreach_flag = False
     overreach_reasons: list[str] = []
     if tss_target is not None and tss_target > 0:
@@ -9485,12 +9456,12 @@ def api_week_summary(week_offset: int = Query(0)):
     elif high_zone_planned == 0 and high_zone_done >= 30:
         overreach_flag = True
         overreach_reasons.append(
-            f"{high_zone_done} min above Z2 with 0 min planned"
+            f"{high_zone_done} min above zone 1 with 0 min planned"
         )
     elif high_zone_planned > 0 and high_zone_done > high_zone_planned * 1.5:
         overreach_flag = True
         overreach_reasons.append(
-            f"high-intensity {high_zone_done} vs planned {high_zone_planned} min "
+            f"zone 2-3 {high_zone_done} vs planned {high_zone_planned} min "
             f"({round(high_zone_done / high_zone_planned * 100)}%)"
         )
 
@@ -9507,10 +9478,11 @@ def api_week_summary(week_offset: int = Query(0)):
         "tss_adherence_pct": tss_adherence_pct,
         "duration_min_done": duration_min_done,
         "duration_min_planned": duration_min_planned,
-        "exposure_minutes": exposure_minutes,
-        "exposure_minutes_planned": exposure_minutes_planned,
+        "zone_minutes": zone_minutes,
+        "zone_minutes_planned": zone_minutes_planned,
+        "zone_method": "hybrid",
         "unclassified_minutes": unclassified_minutes,
-        "exposure_dominant": exposure_dominant,
+        "zone_dominant": zone_dominant,
         "sports": sports_counter,
         "missed_sessions": missed_sessions,
         "planned_days_total": planned_days_total,
@@ -9891,6 +9863,44 @@ def _rides_zone_minutes(rides, sessions, start: str, end: str) -> dict:
     return out
 
 
+def _plan_goal_by_day(plan: "dict | None") -> dict:
+    """{day: goal zone} of every stored session (current and replaced weeks),
+    the session a ride on that day is matched to."""
+    import week_view as _wv
+    try:
+        lib = _wv.library_by_file(tp.load_workout_library())
+    except Exception:  # noqa: BLE001
+        lib = {}
+    out: dict = {}
+    for w in ((plan or {}).get("replaced_weeks") or []) + ((plan or {}).get("weeks") or []):
+        for sess in w.get("sessions") or []:
+            d = sess.get("day")
+            st = _wv.derived_type(sess, lib, tp._session_type_from_row)
+            if d and st != "rest":
+                out[d] = _wv.goal_zone_of(sess, lib, st)
+    return out
+
+
+def _plan_zone_distribution(plan: dict) -> dict:
+    """% of a plan's minutes per zone, each session by the hybrid count of
+    its served file (week_view.hybrid_zone_minutes)."""
+    import week_view as _wv
+    try:
+        lib = _wv.library_by_file(tp.load_workout_library())
+    except Exception:  # noqa: BLE001
+        lib = {}
+    tot = {z: 0.0 for z in _wv.ZONES}
+    for w in plan.get("weeks") or []:
+        for sess in w.get("sessions") or []:
+            st = _wv.derived_type(sess, lib, tp._session_type_from_row)
+            for z, v in _wv.hybrid_zone_minutes(sess, lib, st, _served_zone_minutes_of).items():
+                tot[z] += v
+    total = sum(tot.values()) or 1.0
+    out: dict = {z: round(100 * v / total) for z, v in tot.items()}
+    out["method"] = "hybrid"
+    return out
+
+
 def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
                                  rides: list[dict], week: dict, effective_type: str,
                                  planned_type: str, adjustment_reason: str = "",
@@ -9906,16 +9916,7 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
     cur = next((w for w in plan.get("weeks", [])
                 if (w.get("start") or "") <= today_iso <= (w.get("end") or "")),
                None)
-    try:
-        lib = _wv.library_by_file(tp.load_workout_library())
-    except Exception:  # noqa: BLE001
-        lib = {}
-    sessions = []
-    for s in week.get("sessions") or []:
-        st = s.get("session_type") or "rest"
-        sessions.append(dict(s, goal_zone=_wv.goal_zone_of(s, lib, st),
-                             zone_minutes=_wv.hybrid_zone_minutes(
-                                 s, lib, st, _served_zone_minutes_of)))
+    sessions = week.get("sessions") or []
     mine = next((s for s in sessions if s.get("day") == today_iso), {})
     if effective_type == planned_type:
         goal = mine.get("goal_zone")
@@ -11549,9 +11550,10 @@ async def api_plan_generate(request: Request):
                 if _replaced:
                     plan_dict["replaced_weeks"] = _replaced
 
-            # v2.3.0 — realized training-type distribution (honest, computed from the
-            # generated sessions) for the UI's "% distribution" readout.
-            plan_dict["realized_bands"] = tp.realized_band_distribution(plan_dict)
+            # v2.3.0 — realized distribution (honest, computed from the generated
+            # sessions) for the UI's "% distribution" readout; since slim/9.3
+            # per zone by the hybrid count, as every other surface counts.
+            plan_dict["realized_zones"] = _plan_zone_distribution(plan_dict)
 
             # Phase-split editor (v3.2.0, A1): stamp plan meta with what actually
             # happened to the requested split — "applied" | "fallback:<reason>".
@@ -14183,109 +14185,40 @@ async def api_plan_move_session(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Z-zone bucket boundaries (% FTP) for the calendar's
-# z1z2 / z3z4 / z5+ split. Matches Coggan zones from zones.py:
-#   Z1+Z2 = 0..75% FTP   (active recovery + endurance)
-#   Z3+Z4 = 76..105% FTP (tempo + sweetspot + threshold)
-#   Z5+   = 106%+ FTP    (vo2max, anaerobic, neuromuscular)
-_CAL_LOW_PCT  = 0.755   # max for "z1z2" bucket
-_CAL_MID_PCT  = 1.055   # max for "z3z4" bucket; above = z5+
-
-
-def _ride_zone_split_minutes(ride: dict, ftp: int | None) -> tuple[float, float, float]:
-    """Return (z1z2_min, z3z4_min, z5plus_min) for a ride.
+def _ride_power_tiz(ride: dict, ftp: int | None) -> dict:
+    """A ride's Coggan time in zone (seconds, z1..z7) for the calendar.
 
     Strategy (in order of preference):
-      1. ``ride["zones"]["power"]`` (ICU/FIT-imported with zone-time present) —
-         maps Coggan Z1..Z2 → z1z2, Z3..Z4 → z3z4, Z5..Z7 → z5plus directly.
-      2. Fall back to ``ride["samples"]["power"]`` against the supplied FTP
-         (per MASTER §3 — "If FIT lacks RR/zone-time, compute z1/.../z5+ from
-         power-time array using FTP from profile").
-      3. If both fail, return (0, 0, 0).
+      1. ``ride["zones"]["power"]`` (ICU/FIT-imported with zone-time present).
+      2. Fall back to ``ride["samples"]["power"]`` (1 Hz) binned against the
+         supplied FTP by zones.py (per MASTER §3 — "If FIT lacks RR/zone-time,
+         compute z1/.../z5+ from power-time array using FTP from profile").
+      3. If both fail, all zeros.
+    The calendar counts it by the hybrid (week_view.ride_zone_minutes) like
+    every other surface; until slim/9.3 it binned it with thresholds of its
+    own and a planned session by a type heuristic (VO2max 55/10/35).
     """
-    zones_block = (ride.get("zones") or {}).get("power") or {}
-    if zones_block:
-        z1 = float(zones_block.get("Z1") or 0)
-        z2 = float(zones_block.get("Z2") or 0)
-        z3 = float(zones_block.get("Z3") or 0)
-        z4 = float(zones_block.get("Z4") or 0)
-        z5 = float(zones_block.get("Z5") or 0)
-        z6 = float(zones_block.get("Z6") or 0)
-        z7 = float(zones_block.get("Z7") or 0)
-        if (z1 + z2 + z3 + z4 + z5 + z6 + z7) > 0:
-            return (
-                round((z1 + z2) / 60.0, 1),
-                round((z3 + z4) / 60.0, 1),
-                round((z5 + z6 + z7) / 60.0, 1),
-            )
-
-    # Fallback: power-time integration.
+    zp = (ride.get("zones") or {}).get("power") or {}
+    tiz = {f"z{i}": float(zp.get(f"Z{i}") or 0) for i in range(1, 8)}
+    if sum(tiz.values()) > 0:
+        return tiz
     samples = (ride.get("samples") or {}).get("power") or []
     if samples and ftp and ftp > 0:
-        low = mid = hi = 0
-        low_thresh = _CAL_LOW_PCT * ftp
-        mid_thresh = _CAL_MID_PCT * ftp
+        zl = _zones_mod.power_zones(int(ftp))
         for p in samples:
             try:
-                pw = float(p)
+                pw = int(float(p))
             except (TypeError, ValueError):
                 continue
-            if pw <= 0:
-                continue
-            if pw <= low_thresh:
-                low += 1
-            elif pw <= mid_thresh:
-                mid += 1
-            else:
-                hi += 1
-        return (
-            round(low / 60.0, 1),
-            round(mid / 60.0, 1),
-            round(hi / 60.0, 1),
-        )
-    return (0.0, 0.0, 0.0)
+            if pw > 0:
+                tiz[f"z{_zones_mod._zone_for_value(pw, zl)}"] += 1
+    return tiz
 
 
-def _planned_zone_split_minutes(session: dict) -> tuple[float, float, float]:
-    """Return (planned_z1z2_min, planned_z3z4_min, planned_z5plus_min) for a
-    planned session. Reads zone_dist when present (set by /api/plan from the
-    library), else falls back to a heuristic from session_type + duration.
-    """
-    dur = float(session.get("duration_min") or 0)
-    if dur <= 0:
-        return (0.0, 0.0, 0.0)
-
-    zd = session.get("zone_dist")
-    if zd and isinstance(zd, dict):
-        # zone_dist values are percentages (0-100). Map: Z1+Z2 → low, Z3+Z4
-        # → mid, Z5+Z6 → hi.
-        low_pct = float(zd.get("z1") or 0) + float(zd.get("z2") or 0)
-        mid_pct = float(zd.get("z3") or 0) + float(zd.get("z4") or 0)
-        hi_pct  = float(zd.get("z5") or 0) + float(zd.get("z6") or 0)
-        total = low_pct + mid_pct + hi_pct
-        if total > 0:
-            return (
-                round(dur * low_pct / 100.0, 1),
-                round(dur * mid_pct / 100.0, 1),
-                round(dur * hi_pct / 100.0, 1),
-            )
-
-    # Heuristic fallback by session_type. Conservative assignments:
-    stype = (session.get("session_type") or "").lower()
-    if stype in ("rest",):
-        return (0.0, 0.0, 0.0)
-    if stype in ("recovery", "z2", "long_z2", "endurance"):
-        return (round(dur, 1), 0.0, 0.0)
-    if stype in ("tempo", "sweetspot"):
-        return (round(dur * 0.55, 1), round(dur * 0.45, 1), 0.0)
-    if stype in ("threshold", "overunder"):
-        return (round(dur * 0.45, 1), round(dur * 0.55, 1), 0.0)
-    if stype in ("vo2max", "sprint", "anaerobic"):
-        # Warmup + recovery in z1z2; intervals in z5+; some z3z4 transition.
-        return (round(dur * 0.55, 1), round(dur * 0.10, 1), round(dur * 0.35, 1))
-    if stype == "ftp_test":
-        return (round(dur * 0.40, 1), round(dur * 0.45, 1), round(dur * 0.15, 1))
-    # Unknown: lump in z3z4 so it's at least visible.
-    return (0.0, round(dur, 1), 0.0)
+def _ride_zone_fields(tiz: dict, goal) -> dict:
+    """zone1_min / zone2_min / zone3_min of a calendar ride payload."""
+    import week_view as _wv
+    return {f"{z}_min": round(v, 1) for z, v in _wv.ride_zone_minutes(tiz, goal).items()}
 
 
 # ── v1.4.0 — locked session field contract ────────────────────────────────
@@ -14671,6 +14604,7 @@ def _actual_blocks_from_laps(ride: dict, ftp: "int | None") -> list:
 
 def _summarize_ride_for_calendar(
     ride: dict, ftp: int | None, planned_session: dict | None = None,
+    goal_zone: "int | None" = None,
 ) -> dict:
     """Project a ride dict (FIT, JSON, or ICU-normalized) into the canonical
     actual-payload shape per MASTER §3. Used by both /api/calendar's primary
@@ -14684,6 +14618,11 @@ def _summarize_ride_for_calendar(
     ``analytics.compare_plan_to_actual``. Back-compat: when omitted (legacy
     callers, actual_secondary list) the kwarg defaults to None and no
     ``compare`` block is added.
+
+    slim/9.3: the zone minutes (zone1_min .. zone3_min) are the hybrid count
+    for ``goal_zone``, the goal of the session planned on the ride's day
+    (None: time in zone). ``compare`` keeps reading the ride's time in zone,
+    the shape the planned file's zone_dist is in.
     """
     # v4.4.0 — ICU rides already carry the §3 fields at the top level.
     if (ride.get("source") == "icu"
@@ -14694,9 +14633,6 @@ def _summarize_ride_for_calendar(
         duration_sec = ride_storage.ride_moving_s(ride)
         duration_min = round(float(duration_sec) / 60.0, 1) if duration_sec else 0.0
         tiz = ride.get("time_in_zone") or {}
-        z12_sec = (tiz.get("z1") or 0) + (tiz.get("z2") or 0)
-        z34_sec = (tiz.get("z3") or 0) + (tiz.get("z4") or 0)
-        z5p_sec = sum(tiz.get(f"z{i}") or 0 for i in (5, 6, 7))
         # v1.8.0 §F2 — pass through polarization classification + confidence
         # so the calendar can color activity cards by load profile.
         _pol = ride.get("polarization") or {}
@@ -14707,9 +14643,7 @@ def _summarize_ride_for_calendar(
             "duration_min": duration_min,
             "tss": ride.get("tss"),
             "avg_power_w": int(ride.get("avg_power_w") or 0),
-            "z1z2_min": round(z12_sec / 60.0, 1),
-            "z3z4_min": round(z34_sec / 60.0, 1),
-            "z5plus_min": round(z5p_sec / 60.0, 1),
+            **_ride_zone_fields(tiz, goal_zone),
             "decoupling_pct": ride.get("decoupling_pct"),
             "started_at": ride.get("started_at") or "",
             "classification": _pol.get("classification") if isinstance(_pol, dict) else None,
@@ -14722,7 +14656,8 @@ def _summarize_ride_for_calendar(
         }
         if planned_session is not None:
             from analytics import compare_plan_to_actual
-            payload["compare"] = compare_plan_to_actual(planned_session, payload)
+            payload["compare"] = compare_plan_to_actual(
+                planned_session, dict(payload, time_in_zone=tiz))
         return payload
 
     summary = ride.get("summary") or {}
@@ -14738,7 +14673,7 @@ def _summarize_ride_for_calendar(
     avg_p = summary.get("avg_power") or parsed.get("avg_power") or 0
     decoupling = summary.get("decoupling_pct")
 
-    z1z2, z3z4, z5plus = _ride_zone_split_minutes(ride, ftp)
+    tiz = _ride_power_tiz(ride, ftp)
 
     name = (
         (ride.get("metadata") or {}).get("name")
@@ -14757,9 +14692,7 @@ def _summarize_ride_for_calendar(
         "duration_min": duration_min,
         "tss": tss,
         "avg_power_w": int(avg_p) if avg_p else 0,
-        "z1z2_min": z1z2,
-        "z3z4_min": z3z4,
-        "z5plus_min": z5plus,
+        **_ride_zone_fields(tiz, goal_zone),
         "decoupling_pct": decoupling,
         "started_at": ride.get("started_at") or parsed.get("start_time") or "",
         "classification": _pol.get("classification") if isinstance(_pol, dict) else None,
@@ -14778,7 +14711,8 @@ def _summarize_ride_for_calendar(
     }
     if planned_session is not None:
         from analytics import compare_plan_to_actual
-        payload["compare"] = compare_plan_to_actual(planned_session, payload)
+        payload["compare"] = compare_plan_to_actual(
+            planned_session, dict(payload, time_in_zone=tiz))
     return payload
 
 
@@ -15394,13 +15328,15 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
 
         planned_tss = 0.0
         actual_tss = 0.0
-        planned_z12 = planned_z34 = planned_z5p = 0.0
-        actual_z12 = actual_z34 = actual_z5p = 0.0
+        # Minutes per zone, planned and ridden, by the hybrid (slim/9.3, I2):
+        # the same count the week view, the week summary and the headline use.
+        planned_z = {z: 0.0 for z in _wv.ZONES}
+        actual_z = {z: 0.0 for z in _wv.ZONES}
         # v1.3.1 HIGH fix — time-aware mid-week pacing. Sum planned-to-date
         # (only for days where date <= today) so the headline % isn't graded
         # against the FULL week on Wednesday.
         planned_tss_td = 0.0
-        planned_z12_td = planned_z34_td = planned_z5p_td = 0.0
+        planned_z_td = {z: 0.0 for z in _wv.ZONES}
         days_elapsed = 0
         on_record = False   # a stored session covers some day of this week
 
@@ -15451,19 +15387,24 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
             _planned_for_compare = (
                 sess if (sess and not sess.get("_synthetic_history")) else None
             )
+            # The day's rides count for the goal zone of its planned session.
+            _derived = (_wv.derived_type(sess, lib_by_file, tp._session_type_from_row)
+                        if _planned_for_compare else "rest")
+            _goal = (_wv.goal_zone_of(sess, lib_by_file, _derived)
+                     if _planned_for_compare and _derived != "rest" else None)
             if primary_ride is not None:
                 actual_payload = _summarize_ride_for_calendar(
                     primary_ride, ftp, planned_session=_planned_for_compare,
+                    goal_zone=_goal,
                 )
                 actual_tss += float(actual_payload["tss"] or 0)
-                actual_z12  += actual_payload["z1z2_min"]
-                actual_z34  += actual_payload["z3z4_min"]
-                actual_z5p  += actual_payload["z5plus_min"]
+                for z in _wv.ZONES:
+                    actual_z[z] += actual_payload[f"{z}_min"]
             for r in secondary:
                 # Secondary rides are extras (free rides on a planned day),
                 # never "the planned one" — pass None to keep them
                 # un-compared.
-                _sec = _summarize_ride_for_calendar(r, ftp)
+                _sec = _summarize_ride_for_calendar(r, ftp, goal_zone=_goal)
                 secondary_list.append(_sec)
                 # v1.8.25 FIX — secondary rides STILL count toward the week's
                 # actual load. Pre-fix only the primary (longest) ride fed
@@ -15471,9 +15412,8 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                 # commute + trainer) under-counted the week → the on-track bar
                 # and completion% read falsely "behind".
                 actual_tss += float(_sec.get("tss") or 0)
-                actual_z12 += float(_sec.get("z1z2_min") or 0)
-                actual_z34 += float(_sec.get("z3z4_min") or 0)
-                actual_z5p += float(_sec.get("z5plus_min") or 0)
+                for z in _wv.ZONES:
+                    actual_z[z] += float(_sec.get(f"{z}_min") or 0)
 
             planned_payload = None
             if sess and not sess.get("_synthetic_history"):
@@ -15487,8 +15427,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                 planned_payload = {
                     # The served file's identity, the one the Today card and
                     # the This Week list read (src/week_view.py).
-                    "session_type": _wv.derived_type(
-                        sess, lib_by_file, tp._session_type_from_row),
+                    "session_type": _derived,
                     # The stored slot's type: what the served workout is
                     # fitted by (download_lib.served_zwo_bytes), as in the
                     # week view.
@@ -15524,17 +15463,16 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                                   if isinstance(sess.get("execution"), dict)
                                   else None),
                 }
-                pz12, pz34, pz5p = _planned_zone_split_minutes(sess)
-                planned_z12 += pz12
-                planned_z34 += pz34
-                planned_z5p += pz5p
+                _pz = _wv.hybrid_zone_minutes(sess, lib_by_file, _derived,
+                                              _served_zone_minutes_of)
+                for z in _wv.ZONES:
+                    planned_z[z] += _pz[z]
                 planned_tss += float(planned_payload["tss"] or 0)
                 # v1.3.1 HIGH fix — accumulate to-date totals for the
                 # mid-week pacing math.
                 if day_iso <= today_iso:
-                    planned_z12_td += pz12
-                    planned_z34_td += pz34
-                    planned_z5p_td += pz5p
+                    for z in _wv.ZONES:
+                        planned_z_td[z] += _pz[z]
                     planned_tss_td += float(planned_payload["tss"] or 0)
 
             # card_state is emitted on the day-row (not on planned alone) so
@@ -15602,18 +15540,13 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
             # record" (week-view contract P4), as /api/week-summary says it.
             "planned_tss": round(planned_tss, 1) if on_record else None,
             "actual_tss": round(actual_tss, 1),
-            "planned_z1z2_min": round(planned_z12, 1),
-            "actual_z1z2_min": round(actual_z12, 1),
-            "planned_z3z4_min": round(planned_z34, 1),
-            "actual_z3z4_min": round(actual_z34, 1),
-            "planned_z5plus_min": round(planned_z5p, 1),
-            "actual_z5plus_min": round(actual_z5p, 1),
+            **{f"planned_{z}_min": round(planned_z[z], 1) for z in _wv.ZONES},
+            **{f"actual_{z}_min": round(actual_z[z], 1) for z in _wv.ZONES},
+            "zone_method": "hybrid",
             # v1.3.1 HIGH fix — to-date planned totals (sum of planned
             # for days where date <= today, capped at the full week).
             "planned_tss_to_date": round(planned_tss_td, 1),
-            "planned_z1z2_min_to_date": round(planned_z12_td, 1),
-            "planned_z3z4_min_to_date": round(planned_z34_td, 1),
-            "planned_z5plus_min_to_date": round(planned_z5p_td, 1),
+            **{f"planned_{z}_min_to_date": round(planned_z_td[z], 1) for z in _wv.ZONES},
             "days_elapsed": days_elapsed,
             "days_total": 7,
             "completion_pct": completion_pct,
@@ -19963,26 +19896,33 @@ def _build_programme_summary(plan: dict) -> dict:
     }
 
     # ── Intensity distribution ─────────────────────────────────────────────
-    z1z2_secs = 0
-    z3_secs = 0
-    z4plus_secs = 0
+    # Minutes per zone of the rides in the window by the hybrid count, each
+    # ride for the goal zone of the session planned on its day (slim/9.3,
+    # I2). Until then this put threshold (Z4) with VO2max and above.
+    import week_view as _wv
+    goal_by_day = _plan_goal_by_day(plan)
+    idist = {z: 0.0 for z in _wv.ZONES}
+    tiz_secs = {"z1": 0.0, "z2": 0.0, "z3": 0.0}
     for r in in_window:
-        tiz = r.get("zones") or {}
-        if isinstance(tiz, dict):
-            try:
-                z1z2_secs += int(tiz.get("z1") or 0) + int(tiz.get("z2") or 0)
-                z3_secs += int(tiz.get("z3") or 0)
-                z4plus_secs += (int(tiz.get("z4") or 0) + int(tiz.get("z5") or 0)
-                                + int(tiz.get("z6") or 0) + int(tiz.get("z7") or 0))
-            except (TypeError, ValueError):
-                pass
-    intensity_dist = {
-        "z1z2_min": int(round(z1z2_secs / 60.0)),
-        "z3_min": int(round(z3_secs / 60.0)),
-        "z4plus_min": int(round(z4plus_secs / 60.0)),
-    }
+        flat = r.get("zones") if isinstance(r.get("zones"), dict) and "z1" in r.get("zones") else None
+        tiz = r.get("time_in_zone") or flat or {}
+        if not isinstance(tiz, dict):
+            continue
+        try:
+            three = _zones_mod.three_zone(tiz)
+        except (TypeError, ValueError):
+            continue
+        for k, v in three.items():
+            tiz_secs[k] += v
+        d = _ride_started_local_iso_date(r) or str(r.get("date") or "")[:10]
+        for z, v in _wv.ride_zone_minutes(tiz, goal_by_day.get(d)).items():
+            idist[z] += v
+    intensity_dist = {f"{z}_min": int(round(v)) for z, v in idist.items()}
+    intensity_dist["method"] = "hybrid"
 
     # ── Polarization index ─────────────────────────────────────────────────
+    # Treff's index and its class read time in zone (the polarization card's
+    # own method, I3), on the three zones.
     from analytics import compute_polarization_block, classify_distribution
     pol_indices = []
     for r in in_window:
@@ -19991,17 +19931,16 @@ def _build_programme_summary(plan: dict) -> dict:
             pol_indices.append(block["polarization_index"])
     if pol_indices:
         pol_mean = round(sum(pol_indices) / len(pol_indices), 2)
-        total_s = z1z2_secs + z3_secs + z4plus_secs
+        total_s = sum(tiz_secs.values())
         if total_s > 0:
-            z1z2_pct = 100.0 * z1z2_secs / total_s
-            z3_pct = 100.0 * z3_secs / total_s
-            z4_pct = 100.0 * z4plus_secs / total_s
-            klass = classify_distribution(z1z2_pct, z3_pct, z4_pct, pol_mean)
+            klass = classify_distribution(100.0 * tiz_secs["z1"] / total_s,
+                                          100.0 * tiz_secs["z2"] / total_s,
+                                          100.0 * tiz_secs["z3"] / total_s, pol_mean)
         else:
             klass = "—"
-        pol_block = {"mean": pol_mean, "class": klass}
+        pol_block = {"mean": pol_mean, "class": klass, "method": "time in zone"}
     else:
-        pol_block = {"mean": None, "class": "—"}
+        pol_block = {"mean": None, "class": "—", "method": "time in zone"}
 
     # ── Monotony / strain trend per week ───────────────────────────────────
     import statistics as _stat

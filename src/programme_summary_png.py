@@ -91,34 +91,35 @@ def _draw_kpi_tile(draw, x, y, w, h, label, value, sub=None, color=ACCENT):
 
 
 def _draw_intensity_dist(draw, x, y, w, h, dist):
-    """Stacked horizontal bar: Z1+Z2 / Z3 / Z4+ minutes."""
+    """Stacked horizontal bar: zone 1 / zone 2 / zone 3 minutes (the planner's
+    three zones, counted by the hybrid; slim/9.3)."""
     _rounded_rect(draw, (x, y, x + w, y + h), 10, fill=CARD, outline=BORDER)
-    draw.text((x + 14, y + 8), "Intensity distribution (min)", font=_font(11, bold=True), fill=TEXT2)
+    draw.text((x + 14, y + 8), "Intensity distribution (min, hybrid)", font=_font(11, bold=True), fill=TEXT2)
     if not dist:
         draw.text((x + w / 2, y + h / 2), "no data", font=_font(12), fill=TEXT3, anchor="mm")
         return
-    z1z2 = max(0, int(dist.get("z1z2_min", 0)))
-    z3 = max(0, int(dist.get("z3_min", 0)))
-    z4 = max(0, int(dist.get("z4plus_min", 0)))
-    total = z1z2 + z3 + z4
+    z1 = max(0, int(dist.get("zone1_min", 0)))
+    z2 = max(0, int(dist.get("zone2_min", 0)))
+    z3 = max(0, int(dist.get("zone3_min", 0)))
+    total = z1 + z2 + z3
     if total <= 0:
         draw.text((x + w / 2, y + h / 2), "no data", font=_font(12), fill=TEXT3, anchor="mm")
         return
     bx, by, bw, bh = x + 18, y + 50, w - 36, 30
     cur_x = bx
-    seg = [(z1z2, GREEN, "Z1+Z2"), (z3, YELLOW, "Z3"), (z4, RED, "Z4+")]
+    seg = [(z1, GREEN, "zone 1"), (z2, YELLOW, "zone 2"), (z3, RED, "zone 3")]
     for val, col, _lab in seg:
         sw = int(round(bw * val / total))
         if sw > 0:
             draw.rectangle((cur_x, by, cur_x + sw, by + bh), fill=col)
             cur_x += sw
     legend_y = by + bh + 16
-    pct_z1z2 = round(100 * z1z2 / total)
+    pct_z1 = round(100 * z1 / total)
+    pct_z2 = round(100 * z2 / total)
     pct_z3 = round(100 * z3 / total)
-    pct_z4 = round(100 * z4 / total)
-    draw.text((x + 18, legend_y), f"Z1+Z2 {pct_z1z2}%", font=_font(11, bold=True), fill=GREEN)
-    draw.text((x + w / 2 - 30, legend_y), f"Z3 {pct_z3}%", font=_font(11, bold=True), fill=YELLOW)
-    draw.text((x + w - 18, legend_y), f"Z4+ {pct_z4}%", font=_font(11, bold=True), fill=RED, anchor="ra")
+    draw.text((x + 18, legend_y), f"zone 1 {pct_z1}%", font=_font(11, bold=True), fill=GREEN)
+    draw.text((x + w / 2 - 30, legend_y), f"zone 2 {pct_z2}%", font=_font(11, bold=True), fill=YELLOW)
+    draw.text((x + w - 18, legend_y), f"zone 3 {pct_z3}%", font=_font(11, bold=True), fill=RED, anchor="ra")
     draw.text((x + 18, y + h - 22), f"Total {total}min · target 80/0/20 (Stöggl 2014)",
               font=_font(9), fill=TEXT3)
 
@@ -126,7 +127,7 @@ def _draw_intensity_dist(draw, x, y, w, h, dist):
 def _draw_pol_ring(draw, x, y, w, h, pol):
     """Polarization-index ring with classification label."""
     _rounded_rect(draw, (x, y, x + w, y + h), 10, fill=CARD, outline=BORDER)
-    draw.text((x + 14, y + 8), "Polarization index (Treff 2019)", font=_font(11, bold=True), fill=TEXT2)
+    draw.text((x + 14, y + 8), "Polarization index (Treff 2019, time in zone)", font=_font(11, bold=True), fill=TEXT2)
     if not pol or pol.get("mean") is None:
         draw.text((x + w / 2, y + h / 2), "no data", font=_font(12), fill=TEXT3, anchor="mm")
         return

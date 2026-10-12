@@ -71,7 +71,7 @@ def test_secondary_ride_counts_toward_weekly_actual():
     # actual_tss must include BOTH rides (50 + 30 = 80), not just the primary 50.
     assert abs(cur["actual_tss"] - 80.0) < 0.5, f"actual_tss={cur['actual_tss']} (expected ~80, both rides)"
     # zone minutes likewise sum both: Z1+Z2 = (600+3000)/60 + 1800/60 = 60 + 30 = 90
-    assert abs(cur["actual_z1z2_min"] - 90.0) < 0.6, f"z1z2={cur['actual_z1z2_min']} (expected ~90)"
+    assert abs(cur["actual_zone1_min"] - 90.0) < 0.6, f"zone1={cur['actual_zone1_min']} (expected ~90)"
     # the secondary ride is also surfaced on the day cell
     day = next((d for d in cur["days"] if d["date"] == today), None)
     assert day and day.get("actual") is not None

@@ -817,14 +817,15 @@ WEEK_SUMMARY_REQUIRED_FIELDS = {
     "week_start", "week_end", "today",
     "planned_tss", "tss_done", "tss_adherence_pct",
     "duration_min_done", "duration_min_planned",
-    "exposure_minutes", "exposure_dominant",
+    "zone_minutes", "zone_minutes_planned", "zone_dominant", "zone_method",
     "sports", "missed_sessions",
     "planned_days_total", "planned_days_with_session",
     "planned_days_done", "planned_days_missed",
     "activities_by_day",
 }
 
-EXPOSURE_BANDS = {"low_aerobic", "mid_aerobic", "high_aerobic", "anaerobic"}
+# The planner's three zones (slim/9.3, I2).
+EXPOSURE_BANDS = {"zone1", "zone2", "zone3"}
 
 
 def test_week_summary_200_and_required_fields(client):
@@ -833,10 +834,12 @@ def test_week_summary_200_and_required_fields(client):
     data = resp.json()
     missing = WEEK_SUMMARY_REQUIRED_FIELDS - set(data.keys())
     assert not missing, f"Missing top-level fields: {missing}"
-    # Exposure bands are exactly the 4 expected keys
-    assert set(data["exposure_minutes"].keys()) == EXPOSURE_BANDS
-    # Dominant band is one of the 4 bands OR "mixed"
-    assert data["exposure_dominant"] in (EXPOSURE_BANDS | {"mixed"})
+    # Zones are exactly the 3 expected keys, planned and actual, by one method
+    assert set(data["zone_minutes"].keys()) == EXPOSURE_BANDS
+    assert set(data["zone_minutes_planned"].keys()) == EXPOSURE_BANDS
+    assert data["zone_method"] == "hybrid"
+    # Dominant zone is one of the 3 zones OR "mixed"
+    assert data["zone_dominant"] in (EXPOSURE_BANDS | {"mixed"})
     # Dates parse
     import datetime as _dt
     _dt.date.fromisoformat(data["week_start"])
@@ -847,7 +850,7 @@ def test_week_summary_200_and_required_fields(client):
 def test_week_summary_exposure_sums_to_total_duration(client):
     resp = client.get("/api/week-summary")
     data = resp.json()
-    total_exposure = sum(data["exposure_minutes"].values())
+    total_exposure = sum(data["zone_minutes"].values())
     # Rounding: each activity gets rounded to int minutes then bucketed, so
     # the sum can diverge from duration_min_done by at most (# activities)
     # minutes. But since duration_min_done itself is round(sum) and exposure
@@ -874,46 +877,42 @@ def test_week_summary_planned_day_accounting_invariant(client):
 
 
 def test_classify_exposure_hr_based_bands():
-    """With both avg_hr and lthr, the HR ratio picks the band."""
+    """With both avg_hr and lthr, the HR ratio picks the zone: the three
+    zones folded from the Friel HR zones (slim/9.3), zone 1 below 90% LTHR,
+    zone 2 to 102%, zone 3 above."""
     from app import _classify_exposure
 
     lthr = 175
-    # 0.70 ratio → low_aerobic
-    assert _classify_exposure({"avg_hr": 120}, lthr) == "low_aerobic"
-    # 0.80 ratio → mid_aerobic (>=0.75, <0.88)
-    assert _classify_exposure({"avg_hr": 140}, lthr) == "mid_aerobic"
-    # 0.91 ratio → high_aerobic (>=0.88, <0.96)
-    assert _classify_exposure({"avg_hr": 160}, lthr) == "high_aerobic"
-    # 1.00 ratio → anaerobic
-    assert _classify_exposure({"avg_hr": 175}, lthr) == "anaerobic"
+    assert _classify_exposure({"avg_hr": 120}, lthr) == "zone1"     # 0.69
+    assert _classify_exposure({"avg_hr": 150}, lthr) == "zone1"     # 0.86
+    assert _classify_exposure({"avg_hr": 160}, lthr) == "zone2"     # 0.91
+    assert _classify_exposure({"avg_hr": 175}, lthr) == "zone2"     # 1.00
+    assert _classify_exposure({"avg_hr": 182}, lthr) == "zone3"     # 1.04
     # Exact boundary checks
-    assert _classify_exposure({"avg_hr": round(0.749 * lthr)}, lthr) == "low_aerobic"
-    assert _classify_exposure({"avg_hr": round(0.88 * lthr) + 1}, lthr) == "high_aerobic"
+    assert _classify_exposure({"avg_hr": 0.899 * lthr}, lthr) == "zone1"
+    assert _classify_exposure({"avg_hr": 0.90 * lthr}, lthr) == "zone2"
+    assert _classify_exposure({"avg_hr": 1.03 * lthr}, lthr) == "zone3"
 
 
 def test_classify_exposure_trimp_fallback():
     """No HR → fall back to TRIMP per minute."""
     from app import _classify_exposure
 
-    # TRIMP/min = 0.5 → low_aerobic
-    assert _classify_exposure({"trimp": 30, "duration_min": 60}, 175) == "low_aerobic"
-    # TRIMP/min = 1.0 → mid_aerobic
-    assert _classify_exposure({"trimp": 60, "duration_min": 60}, 175) == "mid_aerobic"
-    # TRIMP/min = 1.5 → high_aerobic
-    assert _classify_exposure({"trimp": 90, "duration_min": 60}, 175) == "high_aerobic"
-    # TRIMP/min = 2.5 → anaerobic
-    assert _classify_exposure({"trimp": 150, "duration_min": 60}, 175) == "anaerobic"
+    assert _classify_exposure({"trimp": 30, "duration_min": 60}, 175) == "zone1"   # 0.5/min
+    assert _classify_exposure({"trimp": 60, "duration_min": 60}, 175) == "zone1"   # 1.0/min
+    assert _classify_exposure({"trimp": 90, "duration_min": 60}, 175) == "zone2"   # 1.5/min
+    assert _classify_exposure({"trimp": 150, "duration_min": 60}, 175) == "zone3"  # 2.5/min
     # avg_hr=None shouldn't crash, should fall back
     assert _classify_exposure(
         {"avg_hr": None, "trimp": 30, "duration_min": 60}, 175
-    ) == "low_aerobic"
+    ) == "zone1"
 
 
 def test_classify_exposure_no_signal_defaults_low():
-    """Neither avg_hr nor trimp → bucket into low_aerobic (gotcha)."""
+    """Neither avg_hr nor trimp → bucket into zone 1 (gotcha)."""
     from app import _classify_exposure
-    assert _classify_exposure({"avg_hr": None, "trimp": None, "duration_min": 45}, 175) == "low_aerobic"
-    assert _classify_exposure({}, 175) == "low_aerobic"
+    assert _classify_exposure({"avg_hr": None, "trimp": None, "duration_min": 45}, 175) == "zone1"
+    assert _classify_exposure({}, 175) == "zone1"
 
 
 def test_week_summary_empty_week(monkeypatch, client):
@@ -927,7 +926,7 @@ def test_week_summary_empty_week(monkeypatch, client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["tss_done"] == 0
-    assert all(v == 0 for v in data["exposure_minutes"].values())
+    assert all(v == 0 for v in data["zone_minutes"].values())
     assert data["duration_min_done"] == 0
     assert data["planned_days_done"] == 0
     assert data["activities_by_day"] == {}
@@ -962,8 +961,8 @@ def test_week_summary_unclassified_minutes_field(client):
     data = resp.json()
     assert "unclassified_minutes" in data
     assert isinstance(data["unclassified_minutes"], int)
-    # exposure_minutes + unclassified_minutes should equal duration_min_done (±1 rounding)
-    total = sum(data["exposure_minutes"].values()) + data["unclassified_minutes"]
+    # zone_minutes + unclassified_minutes should equal duration_min_done (±1 rounding)
+    total = sum(data["zone_minutes"].values()) + data["unclassified_minutes"]
     assert abs(total - data["duration_min_done"]) <= 1
 
 

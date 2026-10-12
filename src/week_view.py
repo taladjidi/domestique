@@ -8,7 +8,8 @@ disagreeing; the calendar's history rows said a past week was planned at 0
 while the rollup invented a target for it (notes/review/architecture-audit-
 2026-09-14.md, notes/week-view-contract.md). This module is the contract's
 P1, P3 and P9 on the read side: one boundary, one planned load, one budget,
-one identity (the served file), one band map, and "no plan on record" said as
+one identity (the served file), one intensity count (the planner's three
+zones by the hybrid, slim/9.3), and "no plan on record" said as
 None, never as 0 or as a number nobody prescribed.
 
 The write side of the week (the builders, the passes, what a session's label
@@ -24,29 +25,11 @@ from typing import Callable, Optional
 import clock
 import zones
 
-BANDS = ("low_aerobic", "mid_aerobic", "high_aerobic", "anaerobic")
-
 # A week within this of its budget holds it: the planner's volume pass trims
 # and fills to the same band (training_planner._VOLUME_CEILING_TOLERANCE).
 BUDGET_TOLERANCE = 1.05
 # The weeks that unload a block (plan_invariants.UNLOAD_PHASES).
 UNLOAD_PHASES = ("taper", "recon", "recovery_ramp", "consolidation")
-
-# Coggan zones to the four exposure bands, the same table the actual side
-# (app._exposure_split_from_tiz) uses for a ride's measured time in zone.
-ZONE_BAND = {"z1": "low_aerobic", "z2": "low_aerobic", "z3": "mid_aerobic",
-             "z4": "high_aerobic", "z5": "anaerobic", "z6": "anaerobic", "z7": "anaerobic"}
-
-# A session with no served file is banded by its type. One table, replacing
-# app._SESSION_TYPE_TO_BAND, tp.SESSION_TYPE_TO_BAND and the dashboard's copy.
-TYPE_BAND = {
-    "recovery": "low_aerobic", "z2": "low_aerobic", "long_z2": "low_aerobic",
-    "endurance": "low_aerobic", "tempo": "mid_aerobic", "sweetspot": "high_aerobic",
-    "threshold": "high_aerobic", "ftp_test": "high_aerobic", "overunder": "anaerobic",
-    "vo2max": "anaerobic", "anaerobic": "anaerobic", "sprint": "anaerobic",
-    "neuromuscular": "anaerobic",
-}
-
 
 # The planner's three zones (zones.THREE_ZONE_FROM_COGGAN, owner's D1), as
 # the payloads name them.
@@ -193,32 +176,6 @@ def derived_type(session: dict, lib: dict, type_of_row: Callable[[dict], str]) -
     return "long_z2" if slot == "long_z2" and served == "z2" else served
 
 
-def zone_minutes(session: dict, lib: dict, session_type: str) -> dict:
-    """Minutes per exposure band: from the served file's zone shares when it
-    has one, else the type's band for the whole duration."""
-    out = {b: 0.0 for b in BANDS}
-    dur = float(session.get("duration_min") or 0)
-    if session_type == "rest" or dur <= 0:
-        return out
-    row = lib.get(session.get("zwo_file") or "")
-    shares = {}
-    if row:
-        for i in range(1, 8):
-            v = row.get(f"Z{i}%")
-            if v not in (None, ""):
-                try:
-                    shares[f"z{i}"] = float(v)
-                except (TypeError, ValueError):
-                    pass
-    if sum(shares.values()) > 0:
-        total = sum(shares.values())
-        for z, pct in shares.items():
-            out[ZONE_BAND.get(z, "low_aerobic")] += dur * pct / total
-        return out
-    out[TYPE_BAND.get(session_type, "low_aerobic")] = dur
-    return out
-
-
 @dataclass
 class WeekView:
     start: date
@@ -232,7 +189,9 @@ class WeekView:
     planned_tss: Optional[float]          # what the rider was given: sum of stored sessions
     sessions: list = field(default_factory=list)   # one per day, Monday first
     planned_minutes: int = 0
-    exposure_minutes_planned: dict = field(default_factory=dict)
+    # Minutes per zone the week's sessions prescribe, by the hybrid count
+    # (zones.hybrid_minutes over the served files; contract slim/9.3, I2).
+    zone_minutes_planned: dict = field(default_factory=dict)
     # Contract 9.6: a week planned under its budget by more than the
     # tolerance says so -- {"budget", "planned", "reason"}: "ridden" when the
     # rides so far and what is still planned reach the budget (then
@@ -268,7 +227,8 @@ class WeekView:
             "on_record": self.on_record,
             "is_stepback": self.is_stepback,
             "sessions": [dict(s) for s in self.sessions],
-            "exposure_minutes_planned": {k: int(round(v)) for k, v in self.exposure_minutes_planned.items()},
+            "zone_minutes_planned": {k: int(round(v)) for k, v in self.zone_minutes_planned.items()},
+            "zone_method": "hybrid",
             "short_of_budget": self.short_of_budget,
             "budget_lowered": self.budget_lowered,
         }
@@ -279,17 +239,19 @@ def _placeholder(day: date) -> dict:
             "slot_type": "rest", "duration_min": 0, "tss_estimate": 0, "description": "",
             "zwo_file": "", "zwo_name": "", "display_name": "", "zwo_duration_min": 0,
             "zone_dist": None, "score": None, "zwo_tss": None,
-            "zone_minutes": {b: 0 for b in BANDS}, "status": "pending", "on_record": False}
+            "zone_minutes": {z: 0 for z in ZONES}, "goal_zone": None,
+            "status": "pending", "on_record": False}
 
 
 def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[dict], str],
           naming: Optional[Callable[..., tuple]] = None, offset: int = 0,
-          rides=None) -> WeekView:
+          rides=None, minutes_of: Optional[Callable[..., Optional[dict]]] = None) -> WeekView:
     """The week beginning ``start`` (a Monday) as the stored ``plan`` has it.
     ``rides`` (the ride records, as week_done reads them) tell a week whose
     budget the rider's rides already spent from one the plan left short.
     ``naming(zwo_file, stored_session)`` gives a session's display name and
-    the minutes its workout lasts as served."""
+    the minutes its workout lasts as served; ``minutes_of`` reads a served
+    workout's minutes per zone (hybrid_zone_minutes)."""
     end = start + timedelta(days=6)
     s_iso, e_iso = start.isoformat(), end.isoformat()
     # A replaced plan's prescriptions (kept by Generate) are on record too.
@@ -306,7 +268,7 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
     sessions = []
     planned = 0.0
     minutes = 0
-    exposure = {b: 0.0 for b in BANDS}
+    per_zone = {z: 0.0 for z in ZONES}
     for i in range(7):
         day = start + timedelta(days=i)
         stored = by_day.get(day.isoformat())
@@ -336,10 +298,11 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
             out.setdefault("zone_dist", None)
             out.setdefault("score", None)
             out.setdefault("zwo_tss", None)
-        zm = zone_minutes(stored, lib, st)
+        out["goal_zone"] = goal_zone_of(stored, lib, st)
+        zm = hybrid_zone_minutes(stored, lib, st, minutes_of)
         out["zone_minutes"] = {k: int(round(v)) for k, v in zm.items()}
         for b, v in zm.items():
-            exposure[b] += v
+            per_zone[b] += v
         if st != "rest":
             planned += float(stored.get("tss_estimate") or 0)
             minutes += int(round(float(stored.get("duration_min") or 0)))
@@ -390,7 +353,7 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
         is_stepback=bool((owner or {}).get("is_stepback")),
         budget=budget,
         planned_tss=planned if on_record else None,
-        sessions=sessions, planned_minutes=minutes, exposure_minutes_planned=exposure,
+        sessions=sessions, planned_minutes=minutes, zone_minutes_planned=per_zone,
         short_of_budget=short,
         budget_lowered=(dict(owner["guard_lowered"]) if owner is not None and len(owners) == 1
                         and isinstance(owner.get("guard_lowered"), dict) else None),

@@ -2880,52 +2880,18 @@ def get_budget_for_phase(phase_name: str, goal=None) -> "IntensityBudget":
     return table.get(phase_name, table["base"])
 
 
-# v2.3.0: map a session_type → one of the 5 user-facing intensity bands, for
-# computing/displaying the realized training-type distribution of a plan.
-_SESSION_TYPE_TO_BAND: dict[str, str] = {
-    "recovery": "easy", "z2": "easy", "long_z2": "easy", "endurance": "easy",
-    "endurance_intervals": "easy",
-    "tempo": "tempo_ss", "tempo_intervals": "tempo_ss", "tempo_ladder": "tempo_ss",
-    "sweetspot": "tempo_ss", "sweet_spot": "tempo_ss", "sweet_spot_ladder": "tempo_ss",
-    "threshold": "threshold", "threshold_ladder": "threshold",
-    "overunder": "threshold", "over_under": "threshold",
-    "vo2max": "vo2", "vo2_short": "vo2", "vo2_ladder": "vo2", "anaerobic": "vo2",
-    "sprint": "sprint", "neuromuscular": "sprint",
-}
-
 # Band order for stable display (easy → hardest).
 BAND_ORDER: tuple = ("easy", "tempo_ss", "threshold", "vo2", "sprint")
 
 # Typical realized distribution per intensity-distribution model (v2.3.0). Shown
 # as a pre-generation hint; labelled "typical" because the realized split depends
 # on phase mix + library availability. The post-generation readout computes the
-# ACTUAL split via realized_band_distribution.
+# ACTUAL split per zone (app._plan_zone_distribution, slim/9.3).
 PRESET_TYPICAL_BANDS: dict[str, dict] = {
     "polarized": {"easy": 80, "tempo_ss": 4, "threshold": 6, "vo2": 8, "sprint": 2},
     "pyramidal": {"easy": 78, "tempo_ss": 13, "threshold": 6, "vo2": 3, "sprint": 0},
     "threshold": {"easy": 78, "tempo_ss": 16, "threshold": 5, "vo2": 1, "sprint": 0},
 }
-
-
-def realized_band_distribution(plan: dict) -> dict:
-    """Compute the ACTUAL training-type distribution of a generated plan as %
-    of total non-rest session minutes across the 5 bands (v2.3.0). Honest
-    (computed, not hard-coded) — used to show the user what they actually got."""
-    mins = {b: 0.0 for b in BAND_ORDER}
-    for w in (plan.get("weeks") or []):
-        for s in (w.get("sessions") or []):
-            st = (s.get("session_type") or "").strip()
-            if st in ("", "rest", "ftp_test"):
-                continue
-            band = _SESSION_TYPE_TO_BAND.get(st)
-            if not band:
-                continue
-            try:
-                mins[band] += float(s.get("duration_min") or 0)
-            except (TypeError, ValueError):
-                continue
-    total = sum(mins.values()) or 1.0
-    return {b: round(100 * mins[b] / total) for b in BAND_ORDER}
 
 
 # ── v4.4.0 — composite "on-track" score helpers (CONCEPT-SCI §6) ──────────────

@@ -219,11 +219,13 @@ def _placeholder(day: date) -> dict:
 
 
 def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[dict], str],
-          naming: Optional[Callable[[str], tuple]] = None, offset: int = 0,
+          naming: Optional[Callable[..., tuple]] = None, offset: int = 0,
           rides=None) -> WeekView:
     """The week beginning ``start`` (a Monday) as the stored ``plan`` has it.
     ``rides`` (the ride records, as week_done reads them) tell a week whose
-    budget the rider's rides already spent from one the plan left short."""
+    budget the rider's rides already spent from one the plan left short.
+    ``naming(zwo_file, stored_session)`` gives a session's display name and
+    the minutes its workout lasts as served."""
     end = start + timedelta(days=6)
     s_iso, e_iso = start.isoformat(), end.isoformat()
     # A replaced plan's prescriptions (kept by Generate) are on record too.
@@ -257,7 +259,7 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
         row = lib.get(zf) if zf else None
         if naming is not None:
             try:
-                dn, zdur = naming(zf)
+                dn, zdur = naming(zf, stored)
                 out["display_name"], out["zwo_duration_min"] = dn, zdur
             except Exception:  # noqa: BLE001
                 pass

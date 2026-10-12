@@ -476,6 +476,7 @@ def test_the_modal_headline_and_chart_are_the_served_workout():
         src, "_sessTypeLabel", "_adjPlannedNowHtml", "_effectiveTodaySession",
         "_dayModalModel", "_todayDayModalModel", "_calTodayStr",
         "_dayModalTitle", "_adjBannerHtml", "_adjOriginalBlockHtml",
+        "_slotTypeOf", "_servedWorkoutQuery",
         "dayModalTssStat", "openDayWorkout"
     ) + """
 const SESSION = %s; SESSION.day = new Date().toLocaleDateString('en-CA');
@@ -503,3 +504,189 @@ const SESSION = %s; SESSION.day = new Date().toLocaleDateString('en-CA');
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
 """ % json.dumps(session)
     m3._run_node(harness)
+
+
+# ── slim/9.2: every payload states the minutes the workout is served at ─────
+
+def _payload_minutes(client, day):
+    """zwo_duration_min for ``day`` as /api/plan, /api/weekly-plan and
+    /api/calendar state it (the week view, the calendar cells, the modal)."""
+    import datetime as _dt
+    import json
+    import clock
+    out = {}
+    r = client.get("/api/plan").json()
+    pj = r["plan_json"] if isinstance(r["plan_json"], dict) else json.loads(r["plan_json"])
+    out["plan"] = next(s["zwo_duration_min"] for w in pj["weeks"]
+                       for s in w["sessions"] if s["day"] == day)
+    d, t = _dt.date.fromisoformat(day), clock.today()
+    off = ((d - _dt.timedelta(days=d.weekday())) - (t - _dt.timedelta(days=t.weekday()))).days // 7
+    wk = client.get(f"/api/weekly-plan?week_offset={off}").json()
+    out["weekly-plan"] = next(s["zwo_duration_min"] for s in wk["sessions"] if s["day"] == day)
+    found = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get("date", o.get("day")) == day and isinstance(o.get("planned"), dict):
+                found.append(o["planned"].get("zwo_duration_min"))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(client.get("/api/calendar").json())
+    out["calendar"] = found[0] if found else None
+    return out
+
+
+def test_every_payload_states_the_served_minutes_of_a_fitted_session(easy):
+    """The week view, the calendar and the plan stated the file's 160 min for
+    a 177-min easy slot the push and the head unit serve at 177."""
+    from test_icu_push import D1
+    _write_plan([_sess(D1, zwo=E160, stype="z2", duration_min=177)])
+    assert _payload_minutes(easy.client, D1) == {
+        "plan": 177, "weekly-plan": 177, "calendar": 177}
+
+
+@pytest.mark.parametrize("stype,slot", [("tempo", 177), ("z2", 161)])
+def test_a_session_served_as_written_states_the_files_minutes(easy, stype, slot):
+    """A hard slot, and an easy one within 2 min, serve the file: its 160."""
+    from test_icu_push import D1
+    _write_plan([_sess(D1, zwo=E160, stype=stype, duration_min=slot)])
+    assert _payload_minutes(easy.client, D1) == {
+        "plan": 160, "weekly-plan": 160, "calendar": 160}
+
+
+# ── slim/9.2: the dashboard asks for the workout as served, by the slot's type
+
+_SLOT_Z2_CONTENT_VO2 = {
+    "day": "__TODAY__", "day_name": "Monday", "session_type": "vo2max", "slot_type": "z2",
+    "content_class": "", "duration_min": 60, "tss_estimate": 45,
+    "zwo_file": "anaerobic_2x3x15s-45s_140pct_45min.zwo",
+    "zwo_name": "Anaerobic (45min)", "display_name": "", "zwo_duration_min": 60,
+    "description": "Z2 60min", "zone_dist": None, "status": "pending"}
+
+
+def _node():
+    import shutil
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
+    import test_341_m3 as m3
+    return m3, m3.DASHBOARD.read_text(encoding="utf-8")
+
+
+def test_the_served_query_names_the_slots_type():
+    """The calendar push fits by the stored slot's type; week view, calendar
+    and today payloads name the file's content as session_type (a z2 slot
+    serving an anaerobic file reads vo2max: 44 sessions in the golden)."""
+    m3, src = _node()
+    m3._run_node(m3._fns(src, "_slotTypeOf", "_servedWorkoutQuery") + """
+const eq = (a, b) => { if (a !== b) throw new Error(JSON.stringify(a) + ' != ' + JSON.stringify(b)); };
+eq(_servedWorkoutQuery({duration_min: 60, slot_type: 'z2', session_type: 'vo2max'}),
+   '?slot_min=60&session_type=z2');
+eq(_servedWorkoutQuery({duration_min: 60, session_type: 'z2'}), '?slot_min=60&session_type=z2');
+eq(_servedWorkoutQuery({duration_min: 0, session_type: 'z2'}), '');
+eq(_servedWorkoutQuery(null), '');
+console.log('OK');
+""")
+
+
+def test_the_modal_serves_by_the_slots_type():
+    import json
+    m3, src = _node()
+    harness = m3._MODAL_STUBS + m3._fns(
+        src, "_sessTypeLabel", "_adjPlannedNowHtml", "_effectiveTodaySession",
+        "_dayModalModel", "_todayDayModalModel", "_calTodayStr",
+        "_dayModalTitle", "_adjBannerHtml", "_adjOriginalBlockHtml",
+        "_slotTypeOf", "_servedWorkoutQuery", "dayModalTssStat", "openDayWorkout"
+    ) + """
+const SESSION = %s; SESSION.day = new Date().toLocaleDateString('en-CA');
+(async () => {
+  global.window = {_weekPlanSessions: [SESSION], _targetMode: 'power'};
+  const asked = [];
+  global.fetch = async (url) => {
+    if (url === '/api/settings') return {ok: true, json: async () => ({ftp: 250, lthr: 170})};
+    if (String(url).startsWith('/api/workout/all/')) {
+      asked.push(String(url));
+      return {ok: true, json: async () => ({segments: [{type: 'SteadyState', duration: 3600, power: 155}],
+                                            ftp: 250, total_seconds: 3600})};
+    }
+    if (String(url).startsWith('/api/')) return {ok: false, json: async () => ({})};
+    throw new Error('unexpected fetch ' + url);
+  };
+  await openDayWorkout(0);
+  if (!asked.some(u => u.endsWith('?slot_min=60&session_type=z2'))) throw new Error('chart: ' + asked);
+  const zwo = modalHtml.match(/downloadZwoFile\\('[^']*', 60, '([^']*)'\\)/);
+  if (!zwo || zwo[1] !== 'z2') throw new Error('ZWO download type: ' + (zwo && zwo[1]));
+  const fit = modalHtml.match(/downloadFIT\\('([^']*)', 60,/);
+  if (!fit || fit[1] !== 'z2') throw new Error('FIT download type: ' + (fit && fit[1]));
+  console.log('OK');
+})().catch(e => { console.error(e && e.stack || e); process.exit(1); });
+""" % json.dumps(_SLOT_Z2_CONTENT_VO2)
+    m3._run_node(harness)
+
+
+def test_the_today_card_preview_is_the_served_workout():
+    """The today card's silhouette asked for the file as written: a 160-min
+    chart over a 177-min slot."""
+    m3, src = _node()
+    m3._run_node(m3._fns(src, "_effectiveTodaySession", "_todayPreviewSource",
+                         "_slotTypeOf", "_servedWorkoutQuery") + """
+const src = _todayPreviewSource({was_modified: false,
+  planned: {session_type: 'vo2max', slot_type: 'z2', duration_min: 177, zwo_file: 'e.zwo'},
+  adjusted: {session_type: 'vo2max', duration_min: 177}});
+if (src.kind !== 'file' || src.zwo_file !== 'e.zwo') throw new Error(JSON.stringify(src));
+const q = _servedWorkoutQuery(src);
+if (q !== '?slot_min=177&session_type=z2') throw new Error(q);
+console.log('OK');
+""")
+    body = src[src.index("const _prevSrc = _todayPreviewSource(d);"):]
+    body = body[:body.index(".then(")]
+    assert "${_servedWorkoutQuery(_prevSrc)}" in body, body
+
+
+def test_the_original_plan_preview_is_the_served_workout():
+    import json
+    m3, src = _node()
+    m3._run_node(m3._STUBS + m3._fns(
+        src, "_sessTypeLabel", "_adjOriginalBlockHtml", "_slotTypeOf",
+        "_servedWorkoutQuery", "_loadAdjOrigPreview") + """
+global.window = {_targetMode: 'power'};
+const html = _adjOriginalBlockHtml(%s);
+const q = (html.match(/data-q="([^"]*)"/) || [])[1];
+if (q !== '?slot_min=60&amp;session_type=z2' && q !== '?slot_min=60&session_type=z2') throw new Error('data-q: ' + q);
+const asked = [];
+global.fetch = async (url) => { asked.push(url);
+  return {ok: true, json: async () => ({segments: [{duration: 60}], ftp: 250, total_seconds: 3600})}; };
+global.workoutProfileSVG = () => '<svg></svg>';
+global.settingsFtp = 250;
+const box = {dataset: {zwo: 'a.zwo', q: '?slot_min=60&session_type=z2'}, innerHTML: ''};
+(async () => {
+  await _loadAdjOrigPreview({open: true, querySelector: () => box});
+  if (asked[0] !== '/api/workout/all/a.zwo?slot_min=60&session_type=z2') throw new Error(asked[0]);
+  console.log('OK');
+})().catch(e => { console.error(e && e.stack || e); process.exit(1); });
+""" % json.dumps(_SLOT_Z2_CONTENT_VO2))
+
+
+def test_the_calendar_and_today_payloads_name_the_slots_type(easy):
+    """The dashboard asks for the served workout by the slot's own type; the
+    calendar cell and the today card named only the file's content."""
+    import clock
+    today = clock.today().isoformat()
+    _write_plan([_sess(today, zwo=E160, stype="long_z2", duration_min=177)])
+    t = easy.client.get("/api/today-session").json()
+    assert t["planned"]["slot_type"] == "long_z2", t["planned"]
+    found = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get("date", o.get("day")) == today and isinstance(o.get("planned"), dict):
+                found.append(o["planned"].get("slot_type"))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk(easy.client.get("/api/calendar").json())
+    assert found == ["long_z2"], found

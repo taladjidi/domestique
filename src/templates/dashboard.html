@@ -17824,7 +17824,7 @@ async function loadTodaySession() {
     };
     const _prevSrc = _todayPreviewSource(d);
     if (_prevSrc.kind === 'file') {
-      fetch(`/api/workout/all/${encodeURIComponent(_prevSrc.zwo_file)}`)
+      fetch(`/api/workout/all/${encodeURIComponent(_prevSrc.zwo_file)}${_servedWorkoutQuery(_prevSrc)}`)
         .then(r => (r.ok ? r.json() : null))
         .then(sd => {
           if (!sd || !sd.segments || !sd.segments.length || !sd.ftp) return;
@@ -17988,9 +17988,28 @@ function _effectiveTodaySession(d) {
 // 3.4.1 M3: the mod?adjusted:planned choice moved to _effectiveTodaySession
 // so the day modal consumes the identical decision. Semantics unchanged.
 // Pure + DOM-free so the node harness can pin the contract.
+// slim/9.2: a planned session's workout is served fitted to its slot, by the
+// slot's own type (download_lib.served_zwo_bytes, as the calendar push does).
+// The week view, calendar and today payloads name the file's content
+// session_type and the slot's slot_type; a stored plan session has only
+// session_type, which is the slot's.
+function _slotTypeOf(s) {
+  return (s && (s.slot_type || s.session_type)) || '';
+}
+
+// The query that asks /api/workout/all for a planned session's workout as
+// served; '' (the file as written) when the session has no slot length.
+function _servedWorkoutQuery(s) {
+  const slot = Number(s && s.duration_min) || 0;
+  return slot ? `?slot_min=${slot}&session_type=${encodeURIComponent(_slotTypeOf(s))}` : '';
+}
+
 function _todayPreviewSource(d) {
   const {mod, planned, eff} = _effectiveTodaySession(d);
-  if (!mod && planned.zwo_file) return {kind: 'file', zwo_file: planned.zwo_file};
+  if (!mod && planned.zwo_file) return {kind: 'file', zwo_file: planned.zwo_file,
+                                        duration_min: planned.duration_min,
+                                        slot_type: planned.slot_type,
+                                        session_type: planned.session_type};
   if (eff.session_type && eff.session_type !== 'rest' && eff.duration_min) {
     return {kind: 'synthetic', session_type: eff.session_type,
             duration_min: eff.duration_min};
@@ -18449,7 +18468,7 @@ function _adjOriginalBlockHtml(orig) {
   // the original's hard blocks alongside the adjusted lead chart) still holds
   // for the collapsed default.
   const chartBox = orig.zwo_file
-    ? `<div class="adj-orig-chart" data-zwo="${esc(orig.zwo_file)}" style="margin-top:8px;"></div>`
+    ? `<div class="adj-orig-chart" data-zwo="${esc(orig.zwo_file)}" data-q="${esc(_servedWorkoutQuery(orig))}" style="margin-top:8px;"></div>`
     : '';
   return `<details class="adj-original-block" style="margin-top:14px;border:1px solid var(--border);border-radius:8px;padding:8px 12px;" ontoggle="_loadAdjOrigPreview(this)">
     <summary style="cursor:pointer;font-size:12px;color:var(--text2);">Original plan: <b style="color:var(--text);">${esc(name || label)}</b> <span style="color:var(--text3);">— open to preview</span></summary>
@@ -18475,7 +18494,7 @@ async function _loadAdjOrigPreview(det) {
     box.dataset.loaded = '1';
     const zwo = box.dataset.zwo || '';
     if (!zwo) return;
-    const res = await fetch(`/api/workout/all/${encodeURIComponent(zwo)}`);
+    const res = await fetch(`/api/workout/all/${encodeURIComponent(zwo)}${box.dataset.q || ''}`);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();
     if (!d || !d.segments || !d.segments.length) throw new Error('no segments');
@@ -18715,6 +18734,9 @@ async function openDayWorkout(sessionIdx, day) {
   };
 
   const type = session.session_type;
+  // slim/9.2: the served workout is fitted by the slot's own type (as the
+  // calendar push does); session_type is the file's content (week_view).
+  const slotType = _slotTypeOf(session);
   const hr = SESSION_HR[type] || [0, 0];
   const pw = SESSION_POWER[type] || [0, 0];
   const typeUpper = (type || '').toUpperCase().replace('_', ' ');
@@ -18735,7 +18757,7 @@ async function openDayWorkout(sessionIdx, day) {
   if (session.zwo_file) {
     try {
       // slim/9.1: the served workout (fitted to the slot), not the file.
-      const segRes = await fetch(`/api/workout/all/${encodeURIComponent(session.zwo_file)}?slot_min=${Number(session.duration_min) || 0}&session_type=${encodeURIComponent(type || '')}`);
+      const segRes = await fetch(`/api/workout/all/${encodeURIComponent(session.zwo_file)}${_servedWorkoutQuery(session)}`);
       if (segRes.ok) {
         const segData = await segRes.json();
         if (segData && segData.segments && segData.segments.length > 0) {
@@ -18895,7 +18917,7 @@ async function openDayWorkout(sessionIdx, day) {
   // hr target_mode (red-team F2): a no-power rider's deliverable is the FIT
   // (bpm targets + RPE cues) — lead with it and demote the power-only ZWO.
   const _hrLead = window._targetMode === 'hr';
-  const _fitBtn = `<button class="btn${_hrLead ? ' btn-primary' : ''}" onclick="downloadFIT('${escJs(type)}', ${session.duration_min}, '${escJs(fitName)}', ${session.zwo_file ? `'${escJs(session.zwo_file)}', ${_hrLead ? "'hr'" : 'null'}, false, ${Number(session.duration_min) || 0}` : `null${_hrLead ? ", 'hr'" : ''}`})">${_hrLead ? 'Download FIT (HR targets)' : 'Download FIT'}</button>`;
+  const _fitBtn = `<button class="btn${_hrLead ? ' btn-primary' : ''}" onclick="downloadFIT('${escJs(session.zwo_file ? slotType : type)}', ${session.duration_min}, '${escJs(fitName)}', ${session.zwo_file ? `'${escJs(session.zwo_file)}', ${_hrLead ? "'hr'" : 'null'}, false, ${Number(session.duration_min) || 0}` : `null${_hrLead ? ", 'hr'" : ''}`})">${_hrLead ? 'Download FIT (HR targets)' : 'Download FIT'}</button>`;
   let _zwoBtn;
   if (_hrLead) {
     // ZWO cannot encode heart rate — greyed out, not hidden, so the user
@@ -18903,7 +18925,7 @@ async function openDayWorkout(sessionIdx, day) {
     _zwoBtn = `<button class="btn" disabled style="opacity:0.4;cursor:not-allowed;" title="ZWO is a power-only format — it cannot encode heart-rate targets. Only FIT carries your bpm ranges.">ZWO — can't encode HR</button>`;
   } else if (session.zwo_file) {
     // v1.0.3: route through downloadZwoFile() — WKWebView ignores <a download>.
-    _zwoBtn = `<button class="btn btn-primary" onclick="downloadZwoFile('${escJs(session.zwo_file)}', ${Number(session.duration_min) || 0}, '${escJs(type)}')">Download ZWO (Virtual Trainer)</button>`;
+    _zwoBtn = `<button class="btn btn-primary" onclick="downloadZwoFile('${escJs(session.zwo_file)}', ${Number(session.duration_min) || 0}, '${escJs(slotType)}')">Download ZWO (Virtual Trainer)</button>`;
   } else {
     // Generate ZWO on-the-fly only when no matched library file is available.
     _zwoBtn = `<button class="btn btn-primary" onclick="downloadGeneratedZwo('${escJs(type)}', ${session.duration_min}, '${escJs(session.day_name)} ${escJs(typeUpper)}')">Download ZWO (Virtual Trainer)</button>`;

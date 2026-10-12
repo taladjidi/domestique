@@ -215,7 +215,8 @@ console.log('OK');
 @requires_node
 def test_original_plan_secondary_block():
     src = DASHBOARD.read_text(encoding="utf-8")
-    harness = _STUBS + _fns(src, "_sessTypeLabel", "_adjOriginalBlockHtml") + """
+    harness = _STUBS + _fns(src, "_sessTypeLabel", "_adjOriginalBlockHtml",
+                            "_slotTypeOf", "_servedWorkoutQuery") + """
 global.window = {_targetMode: 'power'};
 let html = _adjOriginalBlockHtml({
   session_type: 'sweetspot', content_class: '', duration_min: 80,
@@ -371,6 +372,7 @@ def test_modal_renders_adjusted_lead_and_effective_downloads():
         src, "_sessTypeLabel", "_adjPlannedNowHtml", "_effectiveTodaySession",
         "_dayModalModel", "_todayDayModalModel", "_calTodayStr",
         "_dayModalTitle", "_adjBannerHtml", "_adjOriginalBlockHtml",
+        "_slotTypeOf", "_servedWorkoutQuery",
         "dayModalTssStat", "openDayWorkout"
     ) + _TODAY_FIXTURE + """
 (async () => {
@@ -441,6 +443,7 @@ def test_unadjusted_day_renders_exactly_as_before():
         src, "_sessTypeLabel", "_adjPlannedNowHtml", "_effectiveTodaySession",
         "_dayModalModel", "_todayDayModalModel", "_calTodayStr",
         "_dayModalTitle", "_adjBannerHtml", "_adjOriginalBlockHtml",
+        "_slotTypeOf", "_servedWorkoutQuery",
         "dayModalTssStat", "openDayWorkout"
     ) + _TODAY_FIXTURE + """
 (async () => {

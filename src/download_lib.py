@@ -12,6 +12,7 @@ Unlike the other extracted modules this one imports fastapi, because building
 the response is what it does.
 """
 import collections
+import functools
 import io
 import logging
 import re
@@ -271,6 +272,30 @@ class _NamedBytes(io.BytesIO):
 def served_fit(zwo_path, slot_min, session_type) -> Fit:
     """The library file at ``zwo_path`` fitted to the slot (no capacity cap)."""
     return fit_zwo_to_slot(Path(zwo_path).read_bytes(), slot_min, session_type)
+
+
+def served_minutes(zwo_path, slot_min, session_type) -> "int | None":
+    """The minutes a planned session's workout lasts as served: the slot's
+    when the file is fitted to it, None when it is served as the library
+    wrote it (the caller states the file's own length). What the dashboard
+    states for a session's workout, so it says what the head unit gets."""
+    path = Path(zwo_path)
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    return _served_minutes(str(path), mtime, slot_min, session_type or "")
+
+
+# ponytail: keyed on the file's mtime, unbounded by profile; per-profile
+# invalidation if a library edit ever keeps its mtime.
+@functools.lru_cache(maxsize=1024)
+def _served_minutes(path: str, mtime: int, slot_min, session_type: str):
+    if session_type not in _EASY_SLOTS:
+        return None
+    if served_fit(path, slot_min, session_type).status != "fitted":
+        return None
+    return int(slot_min)
 
 
 def served_zwo_bytes(zwo_file, slot_min, session_type, pm, *, cap=None) -> bytes:

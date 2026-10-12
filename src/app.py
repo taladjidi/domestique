@@ -392,6 +392,7 @@ def _session_naming_lookup(
     zwo_file: str,
     classifications: dict | None,
     lib_by_file: dict | None,
+    session: dict | None = None,
 ) -> tuple[str, int]:
     """v1.0.4 IMPL-WIRING — resolve display_name + zwo_duration_min for a session.
 
@@ -404,6 +405,10 @@ def _session_naming_lookup(
     (sum of segment durations, rounded), so the dashboard can render the
     *real* workout length instead of the planner's ``duration_min`` target
     when the two disagree (e.g. "title says 51min but content is 82min").
+
+    slim/9.2: given the planned ``session``, it is the length as served
+    (download_lib.served_minutes): an easy slot's file fitted to the slot
+    lasts the slot, so the dashboard states what the head unit gets.
 
     Free-form sessions (no zwo_file) yield ("", 0) — caller decides whether
     to emit empty string or null.
@@ -418,6 +423,15 @@ def _session_naming_lookup(
         zwo_duration_min = int(round(float(raw_dur))) if raw_dur is not None else 0
     except (TypeError, ValueError):
         zwo_duration_min = 0
+    if session:
+        try:
+            path = _safe_path(active_workout_dir(), zwo_file)
+            served = path and served_minutes(
+                path, session.get("duration_min"), session.get("session_type"))
+            if served:
+                zwo_duration_min = served
+        except Exception:  # noqa: BLE001 -- a label, never a failed payload
+            _log.debug("served minutes unavailable for %s", zwo_file, exc_info=True)
     return display_name, zwo_duration_min
 
 
@@ -768,6 +782,7 @@ from download_lib import (  # noqa: F401
     _cap_active_for_download,
     served_zwo_bytes,
     served_fit,
+    served_minutes,
     restate_minutes,
 )
 from search_lib import (  # noqa: F401
@@ -8931,7 +8946,8 @@ def _stored_week_view(plan: "dict | None", week_offset: int = 0, rides=None):
         classifications = {}
     return _wv.build(
         plan, start, lib_by_file, tp._session_type_from_row,
-        naming=lambda zf: _session_naming_lookup(zf, classifications, lib_by_file),
+        naming=lambda zf, s=None: _session_naming_lookup(
+            zf, classifications, lib_by_file, session=s),
         offset=week_offset, rides=rides)
 
 
@@ -10368,6 +10384,9 @@ def _api_today_session_impl():
             # actual blocks (same source the day-detail modal charts).
             "zwo_file": planned_data.get("zwo_file") or None,
             "zwo_name": planned_data.get("zwo_name") or None,
+            # slim/9.2: the slot's own type, which the served workout is
+            # fitted by (the preview asks for the workout as served).
+            "slot_type": planned_data.get("slot_type") or None,
         },
         "adjusted": {
             "session_type": adjusted.session_type,
@@ -13883,6 +13902,7 @@ def _compute_missed_suggestions(plan: dict, today: date) -> list[dict]:
         summary = ", ".join(summary_bits) if summary_bits else (miss.get("description") or "")
         _missed_dn, _missed_zdur = _session_naming_lookup(
             miss.get("zwo_file") or "", classifications, _missed_lib_by_file,
+            session=miss,
         )
         suggestions.append({
             "missed_date": missed_iso,
@@ -14526,7 +14546,8 @@ def _enrich_plan_for_response_uncached(plan_dict: dict, today_iso: str) -> dict:
         for s in w.get("sessions", []) or []:
             zwo = s.get("zwo_file") or ""
             meta = lib_by_file.get(zwo) if zwo else None
-            _dn, _zdur = _session_naming_lookup(zwo, classifications, lib_by_file)
+            _dn, _zdur = _session_naming_lookup(zwo, classifications, lib_by_file,
+                                                session=s)
             s["display_name"] = _dn
             s["zwo_duration_min"] = _zdur
             if meta:
@@ -15480,12 +15501,17 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                 # calendar planned cell so the dashboard cascade can pick the
                 # canonical title and the actual library duration.
                 _zwo = sess.get("zwo_file") or ""
-                _dn, _zdur = _session_naming_lookup(_zwo, classifications, lib_by_file)
+                _dn, _zdur = _session_naming_lookup(_zwo, classifications, lib_by_file,
+                                                    session=sess)
                 planned_payload = {
                     # The served file's identity, the one the Today card and
                     # the This Week list read (src/week_view.py).
                     "session_type": _wv.derived_type(
                         sess, lib_by_file, tp._session_type_from_row),
+                    # The stored slot's type: what the served workout is
+                    # fitted by (download_lib.served_zwo_bytes), as in the
+                    # week view.
+                    "slot_type": sess.get("session_type") or "rest",
                     # Always "": the dashboard names, colours, gates and opens
                     # a cell by session_type, with content_class as an override
                     # through tables of its own that know only the broad

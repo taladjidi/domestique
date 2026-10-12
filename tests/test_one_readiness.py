@@ -171,6 +171,11 @@ async function getResource() { return { ok: true, json: async () => payload }; }
                            advice: 'Ensure Garmin is synced with Intervals.icu' } };
   await loadReadinessComposite();
   if (host.innerHTML.indexOf('Readiness unknown (no hrv, sleep)') < 0) throw new Error('unknown not said: ' + host.innerHTML);
+  // a composite reason does not hide the unknown
+  payload.severity_reasons = ['Readiness 6.8/10 — normal training day'];
+  await loadReadinessComposite();
+  if (host.innerHTML.indexOf('Readiness unknown (no hrv, sleep) · Readiness 6.8/10') < 0)
+    throw new Error('unknown must come first: ' + host.innerHTML);
   payload = { score_0_100: 72, severity: 'normal', severity_reasons: [],
               readiness: { score: 72, advice: 'Z2 / planned moderate session' } };
   await loadReadinessComposite();
@@ -180,3 +185,22 @@ async function getResource() { return { ok: true, json: async () => payload }; }
 """
     res = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0, res.stderr + res.stdout
+
+
+def test_local_wellness_reads_the_sqlite_table_too():
+    """R3: readiness_composite reads the SQLite wellness table; the readiness
+    fallback read only the JSON file store, so on the owner's sandbox the
+    composite card had today's HRV and the readiness said "no hrv"."""
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE wellness (date TEXT PRIMARY KEY, ctl REAL, atl REAL, hrv REAL,"
+                 " rhr INTEGER, sleep_secs INTEGER, sleep_score INTEGER, eftp REAL, raw_json TEXT)")
+    today = clock.today()
+    for i in range(14):
+        conn.execute("INSERT INTO wellness (date, hrv, rhr, sleep_secs) VALUES (?, ?, ?, ?)",
+                     ((today - timedelta(days=i)).isoformat(), 60 + i % 3, 45, 27000))
+    with patch("ride_storage.load_recent_wellness", return_value=[]), \
+         patch.object(app_module.db, "get_db", return_value=conn):
+        m = app_module._local_sleep_metrics(days=14)
+    assert m.get("ln_rmssd_7d") is not None and m.get("sleep_h") == 7.5 and m.get("rhr_today") == 45

@@ -145,3 +145,45 @@ def test_every_distribution_figure_says_its_method():
                    "Polarization index <span style=\"font-weight:400;color:var(--text3);\">(time in zone)</span>",
                    "PI = ${piVal} · Treff 2019 · time in zone", "Realized mix (hybrid): "):
         assert needle in DASH, needle
+
+
+class TestWeekSummaryFindsEachRidesTimeInZone(_Week):
+    """/api/activities ids from the ride store are "icu_i..." while the store
+    is keyed "icu_..." too, or bare from intervals.icu: the week summary found
+    a ride's time in zone only for the bare spelling, and counted every other
+    ride by its average HR while the card said "hybrid" (review of 82b17875)."""
+
+    def test_both_id_spellings_reach_the_hybrid(self):
+        d = (MON + timedelta(1)).isoformat()
+        for rid, aid in (("icu_i77", "icu_i77"), ("icu_i77", "i77")):
+            ride = dict(self.ride, ride_id=rid)
+            act = [{"id": aid, "date": d, "sport": "Ride", "duration_min": 76, "tss": 80,
+                    "avg_hr": 150}]
+            app_module.clear_cache()
+            with patch.object(app_module, "_load_all_rides_safe", return_value=[ride]), \
+                 patch.object(app_module, "api_activities", return_value=act):
+                ws = self._get("/api/week-summary")
+            self.assertEqual(ws["zone_minutes"], {"zone1": 55, "zone2": 0, "zone3": 21}, aid)
+            self.assertEqual(ws["activities_by_day"][d][0]["zone_signal"], "time_in_zone", aid)
+
+
+class TestARideWithoutPowerZonesIsCountedTheSameEverywhere(_Week):
+    """A mountain-bike ride with HR and no power time in zone: the week
+    summary counted its minutes by average HR, the calendar counted none
+    (the owner's 2026-10-06, found by the probe's ridden-minutes rule)."""
+
+    def test_hr_fallback_on_both_surfaces(self):
+        d = (MON + timedelta(1)).isoformat()
+        mtb = {"ride_id": "icu_88", "source": "icu", "sport": "MountainBikeRide",
+               "started_at": f"{d}T10:00:00", "date": d, "tss": 50, "avg_hr": 130,
+               "moving_time_s": 3600, "duration_s": 3600, "time_in_zone": {}}
+        act = [{"id": "icu_88", "date": d, "sport": "MountainBikeRide", "duration_min": 60,
+                "tss": 50, "avg_hr": 130}]
+        with patch.object(app_module, "_load_all_rides_safe", return_value=[mtb]), \
+             patch.object(app_module, "api_activities", return_value=act), \
+             patch.object(app_module.config, "ATHLETE_LTHR", 170):
+            ws = self._get("/api/week-summary")
+            cal = self._get("/api/calendar")
+        cw = next(w for w in cal["weeks"] if w["start_date"] == MON.isoformat())
+        self.assertEqual(ws["zone_minutes"]["zone1"], 60)
+        self.assertAlmostEqual(cw["actual_zone1_min"], 60, delta=0.5)

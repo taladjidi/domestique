@@ -73,13 +73,15 @@ def ride_zone_minutes(tiz: "dict | None", goal: "int | None") -> dict:
     return {f"zone{i}": m[f"z{i}"] for i in (1, 2, 3)}
 
 
-def zone_owed(sessions, ridden: dict, today: date, rode_today: bool) -> dict:
+def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
+              today_holds: Optional[dict] = None) -> dict:
     """Minutes per zone the week still owes that no planned day holds
     (contract slim/9.3, H3): the week's planned minutes, minus what was
     ridden (``ridden``, per zone, this week up to today), minus what the
     remaining planned days hold (the days after today, and today when it has
     not been ridden). Never below 0. ``sessions`` carry ``zone_minutes`` per
-    zone (hybrid) and ``day``."""
+    zone (hybrid) and ``day``. ``today_holds`` is what today holds when the
+    day was adjusted (the adjusted session, not the planned minutes)."""
     t = today.isoformat()
     planned = {z: 0.0 for z in ZONES}
     held = {z: 0.0 for z in ZONES}
@@ -89,8 +91,10 @@ def zone_owed(sessions, ridden: dict, today: date, rode_today: bool) -> dict:
         for z in ZONES:
             v = float(zm.get(z) or 0)
             planned[z] += v
-            if d > t or (d == t and not rode_today):
+            if d > t:
                 held[z] += v
+            elif d == t and not rode_today:
+                held[z] += v if today_holds is None else float(today_holds.get(z) or 0)
     return {z: max(0.0, planned[z] - float(ridden.get(z) or 0) - held[z]) for z in ZONES}
 
 

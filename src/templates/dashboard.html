@@ -7359,8 +7359,10 @@ async function loadReadinessComposite() {
 
     // slim/9.3 R2: no score is "readiness unknown", naming what is missing.
     const _miss = (d.readiness && Array.isArray(d.readiness.missing)) ? d.readiness.missing : [];
-    const why = reasons.length ? reasons[0]
-              : (s100 == null ? `Readiness unknown${_miss.length ? ` (no ${_miss.join(', ')})` : ''}` : advice);
+    // The unknown is said first; a composite reason (Hooper, HRV + form) may follow.
+    const why = s100 == null
+      ? `Readiness unknown${_miss.length ? ` (no ${_miss.join(', ')})` : ''}${reasons.length ? ` · ${reasons[0]}` : ''}`
+      : (reasons.length ? reasons[0] : advice);
 
     // Single action, gated on severity. ids preserved for the handlers.
     let actionHtml = '';

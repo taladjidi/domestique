@@ -3878,12 +3878,30 @@ def _local_sleep_metrics(days: int = 14) -> dict:
         import ride_storage as _rs
         records = _rs.load_recent_wellness(days=days)
     except Exception:
+        records = []
+    # The SQLite wellness table the 30-min sync writes is local wellness too,
+    # and the one readiness_composite reads: a day the file store lacks (or
+    # holds without HRV) is filled from it, so the composite card and this
+    # readiness cannot read different HRV (slim/9.3, R3).
+    by_day = {r.get("id"): dict(r) for r in records if r.get("id")}
+    try:
+        start = (clock.today() - timedelta(days=days)).isoformat()
+        rows = db.get_db().execute(
+            "SELECT date, hrv, rhr, sleep_secs, sleep_score FROM wellness "
+            "WHERE date >= ? AND date <= ?", (start, clock.today().isoformat())).fetchall()
+    except Exception:  # noqa: BLE001 -- a store without the table has nothing to add
+        rows = []
+    for row in rows:
+        rec = by_day.setdefault(row["date"], {"id": row["date"]})
+        for key, col in (("hrv", "hrv"), ("restingHR", "rhr"),
+                         ("sleepSecs", "sleep_secs"), ("sleepScore", "sleep_score")):
+            if rec.get(key) is None and row[col] is not None:
+                rec[key] = row[col]
+    if not by_day:
         return {}
-    if not records:
-        return {}
-    # load_recent_wellness returns newest-first; sleep helper expects oldest-first.
+    # The sleep helper expects oldest-first.
     from sleep import compute_sleep_metrics_from_wellness
-    return compute_sleep_metrics_from_wellness(list(reversed(records)))
+    return compute_sleep_metrics_from_wellness([by_day[d] for d in sorted(by_day)])
 
 
 @app.get("/api/readiness")
@@ -6238,24 +6256,10 @@ def api_picker(subjective: float = Query(7), duration: int = Query(75)):
        baseline; since slim/9.3 (R1) readiness stays None, the card says
        "readiness unknown", and today's planned family is offered.
     """
+    # The one readiness /api/readiness and /api/today-session read (R3),
+    # with the picker's own subjective rating.
     try:
-        training = cached("training", get_today_metrics)
-    except Exception as _e:
-        _log.debug(f"picker training metrics unavailable: {_e}")
-        training = {}
-    try:
-        sleep = cached("sleep", get_sleep_metrics)
-    except Exception as _e:
-        _log.debug(f"picker sleep metrics unavailable: {_e}")
-        sleep = {}
-
-    try:
-        r = compute_readiness(
-            ln_rmssd_7d=sleep.get("ln_rmssd_7d"),
-            swc_lower=sleep.get("swc_lower"), swc_upper=sleep.get("swc_upper"),
-            tsb=training.get("tsb"), sleep_h=sleep.get("sleep_h"),
-            rhr_delta=sleep.get("rhr_delta"), subjective=subjective,
-        )
+        r = _readiness_today(subjective)[0]
     except Exception:
         _log.exception("picker readiness compute failed — readiness unknown")
         r = {"score": None, "status": "INSUFFICIENT_DATA", "advice": ""}
@@ -9127,10 +9131,6 @@ def _classify_exposure(activity: dict, lthr: float) -> str:
     return "zone1"
 
 
-    # No usable signal — park in low_aerobic bucket (gotcha: see report).
-    return "low_aerobic"
-
-
 # v3.5.3 — full ICU cycling taxonomy. The old 3-entry set predated sport
 # being persisted on ICU envelopes; once envelopes carry real types, the
 # offline /api/activities fallback feeds typed GravelRide/MountainBikeRide
@@ -9301,10 +9301,12 @@ def api_week_summary(week_offset: int = Query(0)):
             if not _tiz:
                 continue
             _rid = str(_r.get("ride_id") or "")
-            if _rid.startswith("icu_"):
-                _rid = _rid[4:]
             if _rid:
+                # by both spellings: /api/activities ids are "icu_i..." from
+                # the ride store and bare from intervals.icu; matching only
+                # the bare one sent every stored ride to the HR fallback
                 _tiz_by_id[_rid] = _tiz
+                _tiz_by_id[_rid[4:] if _rid.startswith("icu_") else "icu_" + _rid] = _tiz
     except Exception:  # noqa: BLE001 - never break the rollup over the archive
         _tiz_by_id = {}
 
@@ -9904,6 +9906,7 @@ def _plan_zone_distribution(plan: dict) -> dict:
 def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
                                  rides: list[dict], week: dict, effective_type: str,
                                  planned_type: str, adjustment_reason: str = "",
+                                 effective_duration: float = 0,
                                  today: "date | None" = None) -> dict:
     """Today's headline (contract slim/9.3, H1-H3): the session the rider is
     told to ride, ``effective_type`` (the adjusted one when the day was
@@ -9918,10 +9921,16 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
                None)
     sessions = week.get("sessions") or []
     mine = next((s for s in sessions if s.get("day") == today_iso), {})
+    held = None
     if effective_type == planned_type:
         goal = mine.get("goal_zone")
     else:
+        # Adjusted: today holds the adjusted session, its duration in its
+        # goal zone, not the planned file's minutes (which stay planned).
         goal = _zones_mod.goal_zone(None, effective_type)
+        held = {z: 0.0 for z in _wv.ZONES}
+        if goal and effective_duration:
+            held[f"zone{goal}"] = float(effective_duration)
     ridden = _rides_zone_minutes(rides, sessions, week.get("start") or "", today_iso)
     rode_today = any(_ride_started_local_iso_date(r) == today_iso for r in rides or [])
     return cpol.today_headline(
@@ -9934,7 +9943,7 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
         },
         days_since_last_anaerobic=_days_since_last_anaerobic(rides, today),
         deload_week=bool((cur or {}).get("is_stepback")),
-        owed=_wv.zone_owed(sessions, ridden, today, rode_today),
+        owed=_wv.zone_owed(sessions, ridden, today, rode_today, today_holds=held),
         planned_type=planned_type, adjustment_reason=adjustment_reason,
     )
 
@@ -10402,7 +10411,8 @@ def _api_today_session_impl():
                 _stored, sleep, training, _all_rides, week_data,
                 effective_type=adjusted.session_type,
                 planned_type=planned.session_type,
-                adjustment_reason=adjustment_reason)
+                adjustment_reason=adjustment_reason,
+                effective_duration=adjusted.duration_min)
         except Exception as _e:  # noqa: BLE001 — advisory only
             _log.debug(f"/api/today-session: continuous suggestion failed: {_e}")
         if _deload_chip:
@@ -14215,10 +14225,21 @@ def _ride_power_tiz(ride: dict, ftp: int | None) -> dict:
     return tiz
 
 
-def _ride_zone_fields(tiz: dict, goal) -> dict:
-    """zone1_min / zone2_min / zone3_min of a calendar ride payload."""
+def _ride_zone_fields(tiz: dict, goal, ride: "dict | None" = None,
+                      duration_min: float = 0) -> dict:
+    """zone1_min / zone2_min / zone3_min of a calendar ride payload. A ride
+    with no power time in zone counts its minutes in the zone of its average
+    HR or TRIMP (_classify_exposure), as /api/week-summary counts it, so the
+    two surfaces agree on what was ridden."""
     import week_view as _wv
-    return {f"{z}_min": round(v, 1) for z, v in _wv.ride_zone_minutes(tiz, goal).items()}
+    out = {f"{z}_min": round(v, 1) for z, v in _wv.ride_zone_minutes(tiz, goal).items()}
+    if ride is not None and duration_min and not any(out.values()):
+        act = {"avg_hr": ride.get("avg_hr"), "trimp": ride.get("trimp"),
+               "duration_min": duration_min}
+        zone, signal = _classify_exposure_with_signal(act, config.ATHLETE_LTHR or 175)
+        if signal != "inferred":
+            out[f"{zone}_min"] = round(float(duration_min), 1)
+    return out
 
 
 # ── v1.4.0 — locked session field contract ────────────────────────────────
@@ -14643,7 +14664,7 @@ def _summarize_ride_for_calendar(
             "duration_min": duration_min,
             "tss": ride.get("tss"),
             "avg_power_w": int(ride.get("avg_power_w") or 0),
-            **_ride_zone_fields(tiz, goal_zone),
+            **_ride_zone_fields(tiz, goal_zone, ride, duration_min),
             "decoupling_pct": ride.get("decoupling_pct"),
             "started_at": ride.get("started_at") or "",
             "classification": _pol.get("classification") if isinstance(_pol, dict) else None,
@@ -14692,7 +14713,9 @@ def _summarize_ride_for_calendar(
         "duration_min": duration_min,
         "tss": tss,
         "avg_power_w": int(avg_p) if avg_p else 0,
-        **_ride_zone_fields(tiz, goal_zone),
+        **_ride_zone_fields(tiz, goal_zone,
+                            {"avg_hr": summary.get("avg_hr") or parsed.get("avg_hr")},
+                            duration_min),
         "decoupling_pct": decoupling,
         "started_at": ride.get("started_at") or parsed.get("start_time") or "",
         "classification": _pol.get("classification") if isinstance(_pol, dict) else None,

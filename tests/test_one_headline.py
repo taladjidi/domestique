@@ -118,3 +118,17 @@ class TestTheOwnersMonday(unittest.TestCase):
         app_module.clear_cache()
         _d, h = self._headline()
         self.assertNotIn("owed", h["reason"])
+
+
+def test_an_adjusted_day_holds_the_adjusted_session_not_the_planned_minutes():
+    """Today's VO2max eased to Z2: today holds Z2 minutes, so the VO2 work it
+    no longer carries is owed (review of 82b17875)."""
+    tue = (MON + timedelta(1))
+    week = {"start": MON.isoformat(), "sessions": [
+        dict(s, goal_zone=3 if s["session_type"] == "vo2max" else 1) for s in WEEK]}
+    plan = {"weeks": [{"start": MON.isoformat(), "end": (MON + timedelta(6)).isoformat()}]}
+    h = app_module._continuous_today_suggestion(
+        plan, {}, {"tsb": 5.0}, [], week, effective_type="z2", planned_type="vo2max",
+        adjustment_reason="HRV below SWC day 1", effective_duration=76, today=tue)
+    assert h["family"] == "zone_1"
+    assert "Zone 3 still owed 21min" in h["reason"], h["reason"]

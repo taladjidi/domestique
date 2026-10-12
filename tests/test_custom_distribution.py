@@ -69,7 +69,8 @@ def test_realized_zone_distribution_normalizes():
         {"session_type": "rest", "duration_min": 0, "zwo_file": ""},
     ]}]}
     d = app._plan_zone_distribution(plan)
-    assert (d["zone1"], d["zone2"], d["zone3"], d["method"]) == (67, 0, 33, "hybrid")
+    # no file is read here: a session-goal count, and it says so (SF4)
+    assert (d["zone1"], d["zone2"], d["zone3"], d["method"]) == (67, 0, 33, "by type")
 
 
 def test_parse_custom_bands_validates():
@@ -113,7 +114,7 @@ def test_generate_custom_persists_and_tracks_request(sandbox_plan_dir):
     assert pj["goal"]["custom_bands"]["tempo_ss"] == 70.0
     assert pj["goal"]["plan_mode"] == "template"
     assert pj["goal"]["template_id"] == "custom"
-    assert pj["realized_zones"]["method"] == "hybrid"
+    assert pj["realized_zones"]["method"].startswith(("hybrid", "by type"))
     assert set(pj["realized_zones"]) == {"zone1", "zone2", "zone3", "method"}
 
     # The HARD work actually tracks the request: sweetspot is the dominant HIT.

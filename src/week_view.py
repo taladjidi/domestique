@@ -43,16 +43,18 @@ def goal_zone_of(session: dict, lib: dict, session_type: str) -> "int | None":
     return zones.goal_zone(row.get("ContentClass"), session_type)
 
 
-def hybrid_zone_minutes(session: dict, lib: dict, session_type: str,
-                        minutes_of: "Optional[Callable[..., Optional[dict]]]" = None) -> dict:
-    """Minutes per zone of a planned session by the hybrid count (zones.
-    hybrid_minutes over the served workout). ``minutes_of(zwo_file, slot_min,
-    slot_type, goal)`` reads the served file; a session with no file it can
-    read counts its whole duration to its goal zone (zone 1 when unknown)."""
+def planned_zone_minutes(session: dict, lib: dict, session_type: str,
+                         minutes_of: "Optional[Callable[..., Optional[dict]]]" = None):
+    """(minutes per zone, method) of a planned session. The method is
+    "hybrid" when the served workout was read (zones.hybrid_minutes over it;
+    ``minutes_of(zwo_file, slot_min, slot_type, goal)`` reads it), "by type"
+    when no file could be read and the whole duration counts to the goal zone
+    (zone 1 when unknown) -- a session-goal count, said as such (SF4 of the
+    evaluation of 2382cfd1) -- and None for a rest day."""
     out = {z: 0.0 for z in ZONES}
     dur = float(session.get("duration_min") or 0)
     if session_type == "rest" or dur <= 0:
-        return out
+        return out, None
     goal = goal_zone_of(session, lib, session_type)
     zf = session.get("zwo_file") or ""
     m = None
@@ -60,9 +62,28 @@ def hybrid_zone_minutes(session: dict, lib: dict, session_type: str,
         slot = session.get("slot_type") or session.get("session_type") or ""
         m = minutes_of(zf, session.get("duration_min"), slot, goal)
     if m:
-        return {f"zone{i}": float(m.get(f"z{i}") or 0) for i in (1, 2, 3)}
+        return {f"zone{i}": float(m.get(f"z{i}") or 0) for i in (1, 2, 3)}, "hybrid"
     out[f"zone{goal or 1}"] = dur
-    return out
+    return out, "by type"
+
+
+def hybrid_zone_minutes(session: dict, lib: dict, session_type: str,
+                        minutes_of: "Optional[Callable[..., Optional[dict]]]" = None) -> dict:
+    """Minutes per zone of a planned session (planned_zone_minutes)."""
+    return planned_zone_minutes(session, lib, session_type, minutes_of)[0]
+
+
+def zone_method_label(methods) -> str:
+    """The method a total of planned sessions was counted by: "hybrid",
+    "by type", or "hybrid, N by type" when some sessions had no readable
+    file."""
+    ms = [m for m in methods if m]
+    n = sum(1 for m in ms if m == "by type")
+    if not n:
+        return "hybrid"
+    if n == len(ms):
+        return "by type"
+    return f"hybrid, {n} by type"
 
 
 def ride_zone_minutes(tiz: "dict | None", goal: "int | None") -> dict:
@@ -204,6 +225,7 @@ class WeekView:
     # Minutes per zone the week's sessions prescribe, by the hybrid count
     # (zones.hybrid_minutes over the served files; contract slim/9.3, I2).
     zone_minutes_planned: dict = field(default_factory=dict)
+    zone_method: str = "hybrid"           # zone_method_label of the sessions
     # Contract 9.6: a week planned under its budget by more than the
     # tolerance says so -- {"budget", "planned", "reason"}: "ridden" when the
     # rides so far and what is still planned reach the budget (then
@@ -240,7 +262,7 @@ class WeekView:
             "is_stepback": self.is_stepback,
             "sessions": [dict(s) for s in self.sessions],
             "zone_minutes_planned": {k: int(round(v)) for k, v in self.zone_minutes_planned.items()},
-            "zone_method": "hybrid",
+            "zone_method": self.zone_method,
             "short_of_budget": self.short_of_budget,
             "budget_lowered": self.budget_lowered,
         }
@@ -251,7 +273,7 @@ def _placeholder(day: date) -> dict:
             "slot_type": "rest", "duration_min": 0, "tss_estimate": 0, "description": "",
             "zwo_file": "", "zwo_name": "", "display_name": "", "zwo_duration_min": 0,
             "zone_dist": None, "score": None, "zwo_tss": None,
-            "zone_minutes": {z: 0 for z in ZONES}, "goal_zone": None,
+            "zone_minutes": {z: 0 for z in ZONES}, "goal_zone": None, "zone_method": None,
             "status": "pending", "on_record": False}
 
 
@@ -281,6 +303,7 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
     planned = 0.0
     minutes = 0
     per_zone = {z: 0.0 for z in ZONES}
+    methods: list = []
     for i in range(7):
         day = start + timedelta(days=i)
         stored = by_day.get(day.isoformat())
@@ -311,7 +334,8 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
             out.setdefault("score", None)
             out.setdefault("zwo_tss", None)
         out["goal_zone"] = goal_zone_of(stored, lib, st)
-        zm = hybrid_zone_minutes(stored, lib, st, minutes_of)
+        zm, out["zone_method"] = planned_zone_minutes(stored, lib, st, minutes_of)
+        methods.append(out["zone_method"])
         out["zone_minutes"] = {k: int(round(v)) for k, v in zm.items()}
         for b, v in zm.items():
             per_zone[b] += v
@@ -366,6 +390,7 @@ def build(plan: Optional[dict], start: date, lib: dict, type_of_row: Callable[[d
         budget=budget,
         planned_tss=planned if on_record else None,
         sessions=sessions, planned_minutes=minutes, zone_minutes_planned=per_zone,
+        zone_method=zone_method_label(methods),
         short_of_budget=short,
         budget_lowered=(dict(owner["guard_lowered"]) if owner is not None and len(owners) == 1
                         and isinstance(owner.get("guard_lowered"), dict) else None),

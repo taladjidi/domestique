@@ -8043,7 +8043,7 @@ async function loadLastWeekFeedback() {
           ${row('Duration (min)', d.duration_min_done || 0, d.duration_min_planned || 0)}
         </div>
         <div style="flex:1;min-width:180px;">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Minutes per zone (hybrid)</div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">Minutes per zone (planned: ${esc(d.zone_method || 'hybrid')})</div>
           ${row('zone 1 (endurance)', z1, z1P)}
           ${row('zone 2 (tempo to threshold)', z2, z2P, 'over')}
           ${row('zone 3 (VO2max and above)', z3, z3P, 'over')}
@@ -12828,7 +12828,7 @@ async function generatePlan(opts) {
     try {
       const ro = $('plan-dist-readout');
       if (ro && d.plan_json && d.plan_json.realized_zones)
-        ro.textContent = _fmtBands(d.plan_json.realized_zones, 'Realized mix (hybrid): ');
+        ro.textContent = _fmtBands(d.plan_json.realized_zones, `Realized mix (${d.plan_json.realized_zones.method || 'hybrid'}): `);
     } catch(_) {}
     // v1.4.0 — mandatory loadCalendar() after every plan mutation
     // (CALENDAR_REDESIGN §8.4). Single canonical refresh path keeps
@@ -13998,10 +13998,10 @@ function renderCalendar(data) {
       ? `<span class="cal-tss-pill ${tssCls}" title="TSS actual / planned">${aTss} / ${pOnRecord ? pTss : '—'}</span>`
       : '';
     // slim/9.3 I2: the planner's three zones, counted by the hybrid.
-    const z12 = `<span class="cal-z-pill" title="Zone 1 minutes (endurance) actual/planned, hybrid count">zone 1: ${Math.round(w.actual_zone1_min || 0)}/${Math.round(w.planned_zone1_min || 0)} min</span>`;
-    const z34 = `<span class="cal-z-pill" title="Zone 2 minutes (tempo to threshold) actual/planned, hybrid count">zone 2: ${Math.round(w.actual_zone2_min || 0)}/${Math.round(w.planned_zone2_min || 0)} min</span>`;
+    const z12 = `<span class="cal-z-pill" title="Zone 1 minutes (endurance) actual/planned, planned by ${esc(w.zone_method || 'hybrid')}">zone 1: ${Math.round(w.actual_zone1_min || 0)}/${Math.round(w.planned_zone1_min || 0)} min</span>`;
+    const z34 = `<span class="cal-z-pill" title="Zone 2 minutes (tempo to threshold) actual/planned, planned by ${esc(w.zone_method || 'hybrid')}">zone 2: ${Math.round(w.actual_zone2_min || 0)}/${Math.round(w.planned_zone2_min || 0)} min</span>`;
     const z5p = (w.planned_zone3_min != null || w.actual_zone3_min != null)
-      ? `<span class="cal-z-pill" title="Zone 3 minutes (VO2max and above) actual/planned, hybrid count">zone 3: ${Math.round(w.actual_zone3_min || 0)}/${Math.round(w.planned_zone3_min || 0)} min</span>`
+      ? `<span class="cal-z-pill" title="Zone 3 minutes (VO2max and above) actual/planned, planned by ${esc(w.zone_method || 'hybrid')}">zone 3: ${Math.round(w.actual_zone3_min || 0)}/${Math.round(w.planned_zone3_min || 0)} min</span>`
       : '';
 
     const rowCls = `cal-row${w.is_current ? ' cal-current-week' : ''}${w.is_stepback ? ' cal-stepback' : ''}`;
@@ -17543,7 +17543,7 @@ function _renderWeeklyRollup(s, EXPOSURE_META) {
     if (unclass > 0) {
       legendBits.push(`<span title="Activities without HR or TRIMP signal — not counted in zone breakdown."><span class="leg-dot" style="background:var(--text3);"></span>? ${unclass}m</span>`);
     }
-    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Work bouts count to the session's goal zone, warm-up, cool-down and recovery to zone 1.">counted by the hybrid method</span>`);
+    legendBits.push(`<span title="Three zones (zone 1 below LT1, zone 2 to FTP, zone 3 above). Work bouts count to the session's goal zone, warm-up, cool-down and recovery to zone 1. A session whose file cannot be read counts by its type.">planned minutes: ${esc(s.zone_method || 'hybrid')}</span>`);
 
     // Planned bar — dashed border outline + 70% opacity to read as a target.
     const plannedBar = totalPlan > 0
@@ -20544,7 +20544,7 @@ function renderOnTrackBar(data) {
     if (Math.abs(dHigh) >= 3) parts.push(`${dHigh > 0 ? '+' : ''}${dHigh} min zone 3`);
     if (parts.length) deltaLineHtml = `<div class="intensity-delta" style="grid-column:1/-1;padding-left:68px;">${esc(parts.join(' · '))} vs planned</div>`;
   }
-  const actualBarHtml = `<div class="intensity-delta" style="grid-column:1/-1;">minutes per zone, hybrid method</div>`
+  const actualBarHtml = `<div class="intensity-delta" style="grid-column:1/-1;">minutes per zone, planned: ${esc((cur && cur.zone_method) || 'hybrid')}</div>`
     + compRow('PLANNED', pLow, pMid, pHigh, pTotal, true)
     + compRow('ACTUAL', actLow, actMid, actHigh, actTotal, false)
     + deltaLineHtml;

@@ -97,7 +97,10 @@ class TestTheWeekViewCountsByTheHybrid(_Week):
         # a VO2max session with no file counts its duration to its goal zone
         wed = by[(MON + timedelta(2)).isoformat()]
         self.assertEqual(wed["zone_minutes"], {"zone1": 0, "zone2": 0, "zone3": 60})
-        self.assertEqual(wk["zone_method"], "hybrid")
+        # the fileless VO2max day is a session-goal count and says so (SF4)
+        self.assertEqual(tue["zone_method"], "hybrid")
+        self.assertEqual(wed["zone_method"], "by type")
+        self.assertEqual(wk["zone_method"], "hybrid, 1 by type")
         self.assertNotIn("exposure_minutes_planned", wk)
 
     def test_the_hybrid_is_not_the_planners_time_in_zone(self):
@@ -117,7 +120,10 @@ class TestEverySurfaceCountsTheSame(_Week):
         self.assertEqual(ws["zone_minutes_planned"], wk["zone_minutes_planned"])
         for z in wv.ZONES:
             self.assertAlmostEqual(cw[f"planned_{z}_min"], wk["zone_minutes_planned"][z], delta=1.0)
-        self.assertEqual(cw["zone_method"], "hybrid")
+        self.assertEqual(cw["zone_method"], "hybrid, 1 by type")
+        self.assertEqual(ws["zone_method"], wk["zone_method"])
+        wed = next(dd for dd in cw["days"] if dd["date"] == (MON + timedelta(2)).isoformat())
+        self.assertEqual(wed["planned"]["zone_method"], "by type")
         # the VO2max day without a file: 60 min of zone 3, not 55/10/35
         self.assertGreaterEqual(cw["planned_zone3_min"], 60)
 
@@ -145,10 +151,13 @@ def test_the_dashboard_reads_no_retired_field():
 
 
 def test_every_distribution_figure_says_its_method():
-    for needle in ("Minutes per zone (hybrid)", "counted by the hybrid method",
+    for needle in ("Minutes per zone (planned: ${esc(d.zone_method || 'hybrid')})",
+                   "planned minutes: ${esc(s.zone_method || 'hybrid')}",
+                   "planned by ${esc(w.zone_method || 'hybrid')}",
                    "Intensity distribution <span style=\"font-weight:400;color:var(--text3);\">(hybrid)</span>",
                    "Polarization index <span style=\"font-weight:400;color:var(--text3);\">(time in zone)</span>",
-                   "PI = ${piVal} · Treff 2019 · time in zone", "Realized mix (hybrid): "):
+                   "PI = ${piVal} · Treff 2019 · time in zone",
+                   "`Realized mix (${d.plan_json.realized_zones.method || 'hybrid'}): `"):
         assert needle in DASH, needle
 
 

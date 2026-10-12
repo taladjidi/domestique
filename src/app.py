@@ -9457,6 +9457,9 @@ def api_week_summary(week_offset: int = Query(0)):
     zone_minutes_planned = dict(plan.get("zone_minutes_planned") or {
         "zone1": 0, "zone2": 0, "zone3": 0,
     })
+    # How the planned minutes were counted (week_view.zone_method_label); the
+    # ridden ones are hybrid (rides with power) or by HR.
+    zone_method = plan.get("zone_method") or "hybrid"
 
     # v1.7.6 — overreach flag for the "last week feedback" UI. Triggers
     # when actual TSS exceeds plan by >30 %, OR when the minutes above zone 1
@@ -9504,7 +9507,7 @@ def api_week_summary(week_offset: int = Query(0)):
         "duration_min_planned": duration_min_planned,
         "zone_minutes": zone_minutes,
         "zone_minutes_planned": zone_minutes_planned,
-        "zone_method": "hybrid",
+        "zone_method": zone_method,
         "unclassified_minutes": unclassified_minutes,
         "zone_dominant": zone_dominant,
         "sports": sports_counter,
@@ -9933,14 +9936,17 @@ def _plan_zone_distribution(plan: dict) -> dict:
     except Exception:  # noqa: BLE001
         lib = {}
     tot = {z: 0.0 for z in _wv.ZONES}
+    methods = []
     for w in plan.get("weeks") or []:
         for sess in w.get("sessions") or []:
             st = _wv.derived_type(sess, lib, tp._session_type_from_row)
-            for z, v in _wv.hybrid_zone_minutes(sess, lib, st, _served_zone_minutes_of).items():
+            zm, how = _wv.planned_zone_minutes(sess, lib, st, _served_zone_minutes_of)
+            methods.append(how)
+            for z, v in zm.items():
                 tot[z] += v
     total = sum(tot.values()) or 1.0
     out: dict = {z: round(100 * v / total) for z, v in tot.items()}
-    out["method"] = "hybrid"
+    out["method"] = _wv.zone_method_label(methods)
     return out
 
 
@@ -15403,6 +15409,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
         # against the FULL week on Wednesday.
         planned_tss_td = 0.0
         planned_z_td = {z: 0.0 for z in _wv.ZONES}
+        week_methods: list = []
         days_elapsed = 0
         on_record = False   # a stored session covers some day of this week
 
@@ -15529,8 +15536,10 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
                                   if isinstance(sess.get("execution"), dict)
                                   else None),
                 }
-                _pz = _wv.hybrid_zone_minutes(sess, lib_by_file, _derived,
-                                              _served_zone_minutes_of)
+                _pz, _how = _wv.planned_zone_minutes(sess, lib_by_file, _derived,
+                                                     _served_zone_minutes_of)
+                planned_payload["zone_method"] = _how
+                week_methods.append(_how)
                 for z in _wv.ZONES:
                     planned_z[z] += _pz[z]
                 planned_tss += float(planned_payload["tss"] or 0)
@@ -15608,7 +15617,7 @@ def merge_plan_with_rides(plan: dict, rides: list[dict]) -> dict:
             "actual_tss": round(actual_tss, 1),
             **{f"planned_{z}_min": round(planned_z[z], 1) for z in _wv.ZONES},
             **{f"actual_{z}_min": round(actual_z[z], 1) for z in _wv.ZONES},
-            "zone_method": "hybrid",
+            "zone_method": _wv.zone_method_label(week_methods),
             # v1.3.1 HIGH fix — to-date planned totals (sum of planned
             # for days where date <= today, capped at the full week).
             "planned_tss_to_date": round(planned_tss_td, 1),

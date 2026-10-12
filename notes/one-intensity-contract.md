@@ -195,3 +195,21 @@ off-leg at or above 76% FTP is work (325 library files, mostly over-unders,
 had their unders counted to zone 1), and a ride takes a session's goal zone
 only through the completion match, never by sharing its date.
 
+## Amendment 2 (2026-10-12, owner, after evaluation)
+D2 revised. The hybrid exists to correct heart-rate lag (Sylta 2014 used HR;
+the hybrid credits whole work bouts because HR under-reads them). Power has
+no lag: counting a powered workout or ride second by second already puts a
+30/30's work in zone 3 and its recoveries in zone 1. Applied to power, the
+amended work-bout rule credited warm-up primers and tempo blocks to the goal
+zone (evaluation: the 10-20 sprint file 3 -> 6 min zone 3; a 120-min
+neuromuscular file 77 min zone 3 with 1.2 min at or above 106%). Owner's
+choice:
+- Planned workouts and rides WITH power: time in zone in the three zones
+  (zones.THREE_ZONE_FROM_COGGAN), every second, no goal-zone credit. Same
+  method as the planner's targets: no phase B counting gap.
+- Rides with heart rate only: the hybrid, matched by completion to a session
+  (I1 amendment): time below the zone 1/2 seam in zone 1, the rest to the
+  session's goal zone; unmatched HR-only rides: HR time in zone.
+- A session whose file cannot be read: by type, labelled so.
+- Every figure states its method ("time in zone", "hybrid (HR)", "by type").
+

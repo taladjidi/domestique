@@ -67,7 +67,6 @@ from plan_invariants import (  # leaf: the auditor's rules are the planner's
     chronic_after)
 import week_plan  # single owner of week/session state (lazy tp import inside)
 import workout_facts  # v3.2.0 watertight classifier — L1 facts layer (leaf module)
-import week_view  # leaf: the one session type → exposure band table
 _LOG_ERROR_HOOK = None
 
 
@@ -16599,6 +16598,21 @@ def _ridden_status(rides: list[dict], planned_if: float | None, race: bool = Fal
     return None
 
 
+# Completion matching's own session type -> IF-band table, frozen (contract
+# slim/9.3, I3): byte for byte the week_view.TYPE_BAND it read until the
+# display moved to the planner's three zones. Matching keeps its behaviour
+# exactly; reading the session's goal zone instead (a VO2max session is
+# "anaerobic" here, so its IF axis almost never passes) is phase B, measured
+# first. Not an intensity scale for display: nothing else reads it.
+_REMATCH_TYPE_BAND = {
+    "recovery": "low_aerobic", "z2": "low_aerobic", "long_z2": "low_aerobic",
+    "endurance": "low_aerobic", "tempo": "mid_aerobic", "sweetspot": "high_aerobic",
+    "threshold": "high_aerobic", "ftp_test": "high_aerobic", "overunder": "anaerobic",
+    "vo2max": "anaerobic", "anaerobic": "anaerobic", "sprint": "anaerobic",
+    "neuromuscular": "anaerobic",
+}
+
+
 def classify_rematch(session: PlannedSession, activity: dict) -> dict:
     """Score a (session, activity) pair on 3 axes (fix26 §6.9).
 
@@ -16621,9 +16635,9 @@ def classify_rematch(session: PlannedSession, activity: dict) -> dict:
     dur_diff_pct = abs(actual_dur - planned_dur) / max(planned_dur, 1)
     duration_ok = (planned_dur > 0 and actual_dur > 0 and dur_diff_pct <= REMATCH_TOL_DURATION_PCT)
 
-    # Session type → IF-band (coarse zones): the one table the week view and
-    # the dashboard's bars read (week_view.TYPE_BAND). Rest has no band.
-    planned_band = week_view.TYPE_BAND.get(session.session_type)
+    # Session type → IF-band (coarse zones): matching's frozen table
+    # (_REMATCH_TYPE_BAND, slim/9.3 I3). Rest has no band.
+    planned_band = _REMATCH_TYPE_BAND.get(session.session_type)
     actual_band = _activity_if_band(activity)
     if_band_ok = (planned_band is not None and planned_band == actual_band)
 

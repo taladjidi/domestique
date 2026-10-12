@@ -392,7 +392,13 @@ class TestSessionTypeToBandLockedValues(unittest.TestCase):
         entry = re.compile(r"""["']?(z2|long_z2|tempo|threshold)["']?\s*:\s*["'](low|mid|high)_aerobic["']""")
         files = [src / "app.py", src / "training_planner.py", src / "templates" / "dashboard.html"]
         for f in files:
-            self.assertEqual(entry.findall(f.read_text(encoding="utf-8")), [], f.name)
+            text = f.read_text(encoding="utf-8")
+            if f.name == "training_planner.py":
+                # completion matching's own frozen copy (slim/9.3, I3) is the
+                # one sanctioned second table; it serves no display
+                a = text.index("_REMATCH_TYPE_BAND = {")
+                text = text[:a] + text[text.index("}", a) + 1:]
+            self.assertEqual(entry.findall(text), [], f.name)
         self.assertTrue(entry.findall((src / "week_view.py").read_text(encoding="utf-8")))
 
 

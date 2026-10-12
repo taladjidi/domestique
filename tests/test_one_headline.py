@@ -26,6 +26,7 @@ MON = date(2026, 10, 12)
 
 def _s(day, st, zm):
     return {"day": day.isoformat(), "session_type": st,
+            "goal_zone": 3 if st == "vo2max" else 1,
             "zone_minutes": dict(zip(wv.ZONES, zm))}
 
 
@@ -149,3 +150,23 @@ def test_an_adjusted_day_holds_the_adjusted_session_not_the_planned_minutes():
         adjustment_reason="HRV below SWC day 1", effective_duration=76, today=tue)
     assert h["family"] == "zone_1"
     assert "Zone 3 still owed 21min" in h["reason"], h["reason"]
+
+
+def test_a_missed_easy_days_surges_are_not_owed():
+    """SF2 (evaluation of 2382cfd1): 10-29 reported zone 2 owed from the
+    tempo pickups of missed endurance days. Only the planned hard sessions'
+    hard-zone minutes are a debt."""
+    week = [_s(MON, "z2", (110, 8, 0)), _s(MON + timedelta(1), "z2", (40, 5, 0))]
+    owed = wv.zone_owed(week, {z: 0 for z in wv.ZONES}, MON + timedelta(3), rode_today=False)
+    assert owed == {"zone1": 0, "zone2": 0, "zone3": 0}
+
+
+def test_no_owed_note_on_a_rest_or_recovery_day():
+    import continuous_policy as cpol
+    owed = {"zone2": 40, "zone3": 21}
+    for st, goal, planned in (("rest", None, None), ("recovery", 1, None),
+                              ("recovery", 1, "vo2max")):   # forced recovery (G5)
+        h = cpol.today_headline(st, goal, {"tsb": 5}, None, owed=owed, planned_type=planned,
+                                adjustment_reason="G5 soreness 6/7")
+        assert "owed" not in h["reason"], (st, h["reason"])
+    assert "owed" in cpol.today_headline("z2", 1, {"tsb": 5}, None, owed=owed)["reason"]

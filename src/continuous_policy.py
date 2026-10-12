@@ -211,7 +211,9 @@ def today_headline(
                      f"hard days (Hulin 2014).")
     if hard and deload_week:
         notes.append("Caution: deload week, every ride easy (Issurin 2010).")
-    for z in (2, 3):
+    # On a rest or recovery day (planned, or the adjustment's) the week's
+    # debt is not today's business: nothing owed is said (SF2).
+    for z in (2, 3) if st not in ("rest", "recovery") else ():
         v = float((owed or {}).get(f"zone{z}") or 0)
         if v >= OWED_MIN_MINUTES[z]:
             notes.append(f"{ZONE_NAME[z].capitalize()} still owed {v:.0f}min this week "

@@ -75,27 +75,35 @@ def ride_zone_minutes(tiz: "dict | None", goal: "int | None") -> dict:
 
 def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
               today_holds: Optional[dict] = None) -> dict:
-    """Minutes per zone the week still owes that no planned day holds
-    (contract slim/9.3, H3): the week's planned minutes, minus what was
-    ridden (``ridden``, per zone, this week up to today), minus what the
-    remaining planned days hold (the days after today, and today when it has
-    not been ridden). Never below 0. ``sessions`` carry ``zone_minutes`` per
-    zone (hybrid) and ``day``. ``today_holds`` is what today holds when the
-    day was adjusted (the adjusted session, not the planned minutes)."""
+    """Minutes of zone 2 and zone 3 the week still owes that no planned day
+    holds (contract slim/9.3, H3): the hard-zone minutes of the week's planned
+    hard sessions (goal zone 2 or 3), minus the zone 2 / zone 3 minutes
+    ridden this week up to today (``ridden``), minus what the remaining hard
+    sessions hold (the days after today, and today when it has not been
+    ridden). Never below 0; zone 1 is never owed. An easy day's surges are
+    not a debt: a missed endurance ride with two tempo pickups owes nothing
+    (the evaluation of 2382cfd1, SF2). ``sessions`` carry ``zone_minutes``
+    (hybrid), ``goal_zone`` and ``day``; ``today_holds`` is what today holds
+    when the day was adjusted (the adjusted session, not the planned
+    minutes)."""
     t = today.isoformat()
-    planned = {z: 0.0 for z in ZONES}
-    held = {z: 0.0 for z in ZONES}
+    hard = ("zone2", "zone3")
+    planned = {z: 0.0 for z in hard}
+    held = {z: 0.0 for z in hard}
     for s in sessions or []:
+        if s.get("goal_zone") not in (2, 3):
+            continue
         zm = s.get("zone_minutes") or {}
         d = s.get("day") or ""
-        for z in ZONES:
+        for z in hard:
             v = float(zm.get(z) or 0)
             planned[z] += v
             if d > t:
                 held[z] += v
             elif d == t and not rode_today:
                 held[z] += v if today_holds is None else float(today_holds.get(z) or 0)
-    return {z: max(0.0, planned[z] - float(ridden.get(z) or 0) - held[z]) for z in ZONES}
+    out = {z: max(0.0, planned[z] - float(ridden.get(z) or 0) - held[z]) for z in hard}
+    return {"zone1": 0.0, **out}
 
 
 def covered_days(sessions) -> "list[str]":

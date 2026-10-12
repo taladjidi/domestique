@@ -2,21 +2,26 @@
 
 Pure decision functions for the open-ended ("continuous") goal type:
 
-* ``suggest_today_family`` — HRV-gated rotation policy: maps
-  (focus_pref, zone-rail deficits, readiness, days-since-last-anaerobic)
-  to today's suggested stimulus family (low_aerobic | high_aerobic |
-  anaerobic) plus a one-sentence reason. Thresholds per the grill P3
-  verdict (GRILL_CONTINUOUS.md):
+* ``today_headline`` — today's headline (contract slim/9.3, H1-H3): the
+  session the rider is told to ride, by its goal zone on the planner's three
+  zones (zones.goal_zone; the adjusted session when the day was adjusted),
+  with the HRV-gated policy's rules as cautions. Until 2026-10-12 this was a
+  rotation policy that picked a family of its own from the week's zone-rail
+  deficits and never read today's session: on a Monday every hard minute of
+  the week was "owed today", over a planned recovery ride. The gates (grill
+  P3 verdict, GRILL_CONTINUOUS.md):
     - Hard days only when the 7-day LnRMSSD sits INSIDE the SWC band
       (baseline mean ± 0.5 SD) — Javaloyes 2019 IJSPP 14(1):23-32 and
       Javaloyes 2020 (both RCT, cyclists); band adopted TWO-SIDED per the
       Vesterinen/Altini refinement (a spike above the band is also a
-      stress signal). No fixed weekly HIT cap — hard-day frequency emerges
-      from the daily gate, exactly as in the HRV-guided RCT arms.
+      stress signal).
     - TSB deep-fatigue floor mirrors the reforecast downshift line
       (training_planner: ``tsb < TSB_EASE_BELOW``, -30).
-    - 48h hard-day spacing + easy day-after a glycolytic session are kept
-      (Hulin 2014 rolling 48h Z5+ ceiling; the R5 glyco day-after rule).
+    - 48h hard-day spacing + easy day-after a glycolytic session (Hulin
+      2014 rolling 48h Z5+ ceiling; the R5 glyco day-after rule).
+    - A deload week keeps every ride easy (Issurin 2010).
+  Whether a gate should also change the session is the adjustment's job
+  (training_planner.adjust_today_session), not the headline's (H2).
 
 * ``deload_trigger`` / ``foster_monotony`` — amendment C values (grill P4):
   advance the scheduled deload when Foster monotony >= 2.0 (Foster 1998
@@ -29,11 +34,18 @@ Hermetic by design: stdlib only, no I/O, no repo imports — the app layer
 """
 from __future__ import annotations
 
-# ── Families ────────────────────────────────────────────────────────────────
-FAMILY_LOW = "low_aerobic"          # Z1-Z2 (recovery / z2 / long_z2)
-FAMILY_HIGH = "high_aerobic"        # Z3-Z5 (tempo / SS / threshold / VO2max)
-FAMILY_ANAEROBIC = "anaerobic"      # Z6+ (sprint / anaerobic / neuromuscular)
-FAMILIES = (FAMILY_LOW, FAMILY_HIGH, FAMILY_ANAEROBIC)
+# ── Families: the planner's three zones (zones.goal_zone), and rest ────────
+FAMILY_REST = "rest"
+FAMILIES = ("zone_1", "zone_2", "zone_3", FAMILY_REST)
+ZONE_NAME = {1: "zone 1", 2: "zone 2", 3: "zone 3"}
+# Coggan detail, a sub-label only (D1): VO2max is aerobic work in zone 3.
+SESSION_LABEL = {
+    "recovery": "Recovery", "z2": "Endurance", "long_z2": "Long endurance",
+    "endurance": "Endurance", "tempo": "Tempo", "sweetspot": "Sweet spot",
+    "threshold": "Threshold", "overunder": "Over-under", "vo2max": "VO2max",
+    "sprint": "Sprint", "anaerobic": "Anaerobic capacity", "ftp_test": "FTP test",
+    "rest": "Rest",
+}
 
 # ── Amendment C thresholds (grill P4) ───────────────────────────────────────
 MONOTONY_DELOAD_MIN = 2.0   # Foster 1998: monotony >= 2.0 = elevated risk
@@ -42,18 +54,15 @@ ACWR_DELOAD_MIN = 1.5       # Gabbett 2016: > 1.5 doubles injury risk
 # SD = 0). Foster monotony is realistically < 7; 99 is unambiguous.
 MONOTONY_CAP = 99.0
 
-# ── Amendment D thresholds (grill P3) ───────────────────────────────────────
+# ── Headline gates (grill P3) ─────────────────────────────────────────────
 TSB_LOW_FLOOR = -30         # training_planner.TSB_EASE_BELOW; a test pins them equal
 ANAEROBIC_SPACING_DAYS = 2  # 48h hard-day spacing + glyco day-after (R5)
-ANAEROBIC_OVERDUE_DAYS = 7  # weekly anaerobic dose bar (grill P6 rotation)
-# A ride counts as anaerobic exposure at >= 60s of Z6+Z7 — the sprint
+# A ride counts as glycolytic exposure at >= 60s of Z6+Z7 — the sprint
 # contract's t150 >= 60s admissibility bar (grill P6).
 ANAEROBIC_Z67_MIN_S = 60
-# Minimum rail gap that counts as "owed" — sub-floor deficits are zone-edge
-# noise, not a prescription. Family-scaled: Z6+ minutes are inherently few
-# (a full sprint session banks only ~3-8min of Z6+), Z3-Z5 minutes are bulk.
-HIGH_OWED_MIN_MINUTES = 10
-ANAEROBIC_OWED_MIN_MINUTES = 2
+# Minimum gap that counts as "owed" — sub-floor gaps are zone-edge noise,
+# not a prescription. Zone 3 minutes are inherently few, zone 2 bulk.
+OWED_MIN_MINUTES = {2: 10, 3: 2}
 
 
 def foster_monotony(daily_tss) -> "float | None":
@@ -132,125 +141,81 @@ def hrv_band(ln_rmssd_7d: "float | None", swc_lower: "float | None",
     return "in_band"
 
 
-def suggest_today_family(
-    focus_pref: str,
-    deficits: "dict | None",
+def _label(session_type: str) -> str:
+    st = (session_type or "").lower()
+    return SESSION_LABEL.get(st, st.replace("_", " ").capitalize() or "Session")
+
+
+def today_headline(
+    session_type: str,
+    goal_zone: "int | None",
     readiness: "dict | None",
     days_since_last_anaerobic: "int | None",
     deload_week: bool = False,
+    owed: "dict | None" = None,
+    planned_type: "str | None" = None,
+    adjustment_reason: str = "",
 ) -> dict:
-    """Amendment D rotation policy — today's suggested stimulus family.
+    """Today's headline: the session the rider is told to ride (H1).
 
     Args:
-        focus_pref: continuous-goal focus pref ("ftp" | "vo2" | "both").
-        deficits: this week's planned-minus-actual zone-rail minutes per
-            family, e.g. ``{"low_aerobic": 120, "high_aerobic": 40,
-            "anaerobic": 8}``. Positive = still owed this week. Missing
-            keys / None → 0.
-        readiness: ``{ln_rmssd_7d, swc_lower, swc_upper, tsb}`` (any may
-            be None — the gate degrades, it never crashes).
-        days_since_last_anaerobic: calendar days since the last ride with
-            >= ANAEROBIC_Z67_MIN_S of Z6+Z7 time; None = none on record.
-        deload_week: True when the current plan week is a deload (scheduled
-            or advanced) — a deload outranks every hard rung, including the
-            weekly-anaerobic-dose one.
+        session_type: the effective session's content type (the adjusted one
+            when the day was adjusted, else the week view's session_type).
+        goal_zone: its zone, zones.goal_zone (None: rest or unknown).
+        readiness: ``{ln_rmssd_7d, swc_lower, swc_upper, tsb}`` (any may be
+            None).
+        days_since_last_anaerobic: days since the last ride with >=
+            ANAEROBIC_Z67_MIN_S of Z6+Z7 time; None = none on record.
+        deload_week: the current plan week is a deload.
+        owed: minutes per zone ({"zone2": .., "zone3": ..}) the week still
+            owes that no planned day holds (week_view.zone_owed, H3).
+        planned_type / adjustment_reason: the planned type and the reason,
+            when the adjustment changed the session.
 
-    Returns ``{"family": <one of FAMILIES>, "reason": <one sentence>}``.
-    First-match-wins ladder; every branch cites its rule.
+    Returns ``{family, goal_zone, session_type, reason}``; family is
+    "zone_N" or "rest". A gate that would forbid a hard day appears as a
+    caution when the session is hard; it never names another family (H2).
     """
-    if deload_week:
-        return {"family": FAMILY_LOW, "reason": (
-            "Low-aerobic today — deload week: recovery IS the training, "
-            "keep every ride easy (Issurin 2010)."
-        )}
+    st = (session_type or "rest").lower()
+    rest = st == "rest"
+    hard = goal_zone in (2, 3) and not rest
+    family = FAMILY_REST if rest else f"zone_{goal_zone}" if goal_zone else st
+    what = "Rest" if rest else _label(st)
+    if not rest and goal_zone:
+        what += f" ({ZONE_NAME[goal_zone]})"
+    if planned_type and planned_type.lower() != st:
+        head = f"{what} today, adjusted from {_label(planned_type)}"
+        head += f": {adjustment_reason.rstrip('.')}." if adjustment_reason else "."
+    else:
+        head = f"{what} today, as planned."
     r = readiness or {}
-    d = deficits or {}
-    high_min = float(d.get(FAMILY_HIGH) or 0)
-    ana_min = float(d.get(FAMILY_ANAEROBIC) or 0)
-    # Sub-floor rail gaps are noise, not debts (family-scaled floors).
-    high_owed = high_min if high_min >= HIGH_OWED_MIN_MINUTES else 0.0
-    ana_owed = ana_min if ana_min >= ANAEROBIC_OWED_MIN_MINUTES else 0.0
-    dsa = days_since_last_anaerobic
-    ln7 = r.get("ln_rmssd_7d")
-    lo, hi = r.get("swc_lower"), r.get("swc_upper")
-    tsb = r.get("tsb")
+    ln7, lo, hi, tsb = r.get("ln_rmssd_7d"), r.get("swc_lower"), r.get("swc_upper"), r.get("tsb")
     band = hrv_band(ln7, lo, hi)
-
-    # 1-2. HRV gate (Javaloyes 2019/2020, two-sided per Vesterinen/Altini):
-    # hard only when the 7-day LnRMSSD is IN the SWC band.
-    if band == "below":
-        return {"family": FAMILY_LOW, "reason": (
-            f"Low-aerobic today — 7-day LnRMSSD {ln7:.2f} is below your "
-            f"normal band ({lo:.2f}–{hi:.2f}); hard days only when HRV is "
-            f"in band (Javaloyes 2019)."
-        )}
-    if band == "above":
-        return {"family": FAMILY_LOW, "reason": (
-            f"Low-aerobic today — 7-day LnRMSSD {ln7:.2f} is above your "
-            f"normal band ({lo:.2f}–{hi:.2f}), which also signals stress "
-            f"(two-sided HRV rule, Vesterinen/Altini)."
-        )}
-
-    # 3. TSB deep-fatigue floor (same line the reforecast downshift uses).
-    if tsb is not None and float(tsb) < TSB_LOW_FLOOR:
-        return {"family": FAMILY_LOW, "reason": (
-            f"Low-aerobic today — TSB {float(tsb):.0f} is under "
-            f"{TSB_LOW_FLOOR} (deep fatigue); recover before the next "
-            f"hard day."
-        )}
-
-    # 4. 48h spacing + glyco day-after (Hulin 2014 / R5): a recent
-    # anaerobic day blocks ALL hard work today.
-    if dsa is not None and dsa < ANAEROBIC_SPACING_DAYS:
-        return {"family": FAMILY_LOW, "reason": (
-            f"Low-aerobic today — anaerobic work {dsa}d ago; keep 48h "
-            f"between hard days and ride easy the day after a glycolytic "
-            f"session (Hulin 2014)."
-        )}
-
-    # Hard is allowed from here. When there is no HRV baseline the gate is
-    # TSB-only — say so instead of pretending (Kiviniemi: no data, no gate).
-    gate_txt = ("HRV in band" if band == "in_band"
-                else "no HRV baseline yet (TSB-gated)")
-
-    # 5. Weekly anaerobic dose overdue (grill P6: >= 1 anaerobic/wk bar).
-    if dsa is not None and dsa >= ANAEROBIC_OVERDUE_DAYS:
-        return {"family": FAMILY_ANAEROBIC, "reason": (
-            f"Anaerobic today — {gate_txt}, last anaerobic stimulus "
-            f"{dsa}d ago (weekly sprint/neuromuscular dose due)."
-        )}
-
-    # 6. Both hard families still owed → focus pref breaks the tie:
-    # "vo2" reaches for the glycolytic stimulus first, "ftp"/"both" build
-    # the threshold engine first.
-    if high_owed > 0 and ana_owed > 0:
-        if str(focus_pref or "both") == "vo2":
-            return {"family": FAMILY_ANAEROBIC, "reason": (
-                f"Anaerobic today — {gate_txt}, Z6+ still owed "
-                f"{ana_owed:.0f}min this week and your focus is VO2max."
-            )}
-        return {"family": FAMILY_HIGH, "reason": (
-            f"High-aerobic today — {gate_txt}, Z3–Z5 still owed "
-            f"{high_owed:.0f}min this week."
-        )}
-
-    # 7. Single-family debts.
-    if high_owed > 0:
-        return {"family": FAMILY_HIGH, "reason": (
-            f"High-aerobic today — {gate_txt}, Z3–Z5 still owed "
-            f"{high_owed:.0f}min this week."
-        )}
-    if ana_owed > 0:
-        last = f"last anaerobic {dsa}d ago" if dsa is not None else \
-            "none on record"
-        return {"family": FAMILY_ANAEROBIC, "reason": (
-            f"Anaerobic today — {gate_txt}, Z6+ still owed "
-            f"{ana_owed:.0f}min this week ({last})."
-        )}
-
-    # 8. Nothing hard owed → base. Green HRV is not a licence to add
-    # intensity (Seiler 80/20 discipline).
-    return {"family": FAMILY_LOW, "reason": (
-        "Low-aerobic today — this week's hard-intensity budget is "
-        "already served; extend the aerobic base (Seiler 80/20)."
-    )}
+    notes = []
+    if band == "in_band":
+        notes.append("HRV in band.")
+    elif band == "unknown":
+        notes.append("No HRV baseline yet.")
+    elif hard:
+        where = "below" if band == "below" else "above"
+        notes.append(f"Caution: 7-day LnRMSSD {ln7:.2f} is {where} your normal band "
+                     f"({lo:.2f}–{hi:.2f}); hard days only when HRV is in band "
+                     f"(Javaloyes 2019{', two-sided per Vesterinen/Altini' if where == 'above' else ''}).")
+    else:
+        notes.append(f"HRV {'below' if band == 'below' else 'above'} your normal band: an easy day fits.")
+    if hard and tsb is not None and float(tsb) < TSB_LOW_FLOOR:
+        notes.append(f"Caution: TSB {float(tsb):.0f} is under {TSB_LOW_FLOOR} (deep fatigue).")
+    dsa = days_since_last_anaerobic
+    if hard and dsa is not None and dsa < ANAEROBIC_SPACING_DAYS:
+        notes.append(f"Caution: glycolytic work (Z6-Z7) {dsa}d ago; keep 48h between "
+                     f"hard days (Hulin 2014).")
+    if hard and deload_week:
+        notes.append("Caution: deload week, every ride easy (Issurin 2010).")
+    for z in (2, 3):
+        v = float((owed or {}).get(f"zone{z}") or 0)
+        if v >= OWED_MIN_MINUTES[z]:
+            notes.append(f"{ZONE_NAME[z].capitalize()} still owed {v:.0f}min this week "
+                         f"beyond the planned days.")
+    return {"family": family, "goal_zone": None if rest else goal_zone,
+            "session_type": "rest" if rest else st,
+            "reason": " ".join([head] + notes)}

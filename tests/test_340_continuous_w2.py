@@ -5,10 +5,12 @@ C — the already-computed monotony/ACWR series advance the deload in
     CURRENT week to the deload shape via plan_week(is_stepback=True) +
     match_zwo, never two deloads back-to-back, revertible + week-latched
     (DFA auto-swap pattern).
-D — continuous_policy.suggest_today_family: HRV-gated rotation policy
-    (LnRMSSD7d vs SWC two-sided, TSB floor, 48h spacing + glyco day-after,
-    weekly anaerobic dose) exposed as /api/today-session
-    `continuous_suggestion` — additive, absent for finite goals.
+D — continuous_policy.today_headline (slim/9.3 H1-H3, which replaced the
+    rotation policy suggest_today_family): the session the rider is told to
+    ride, by its goal zone, with the HRV-gated policy's gates (LnRMSSD7d vs
+    SWC two-sided, TSB floor, 48h spacing + glyco day-after, deload week) as
+    cautions, exposed as /api/today-session `continuous_suggestion` —
+    additive, absent for finite goals.
 
 Hermetic: policy fns are pure; app-level tests pin `today`, patch
 metrics/rides/plan-dir, never touch the network (conftest gates), and the
@@ -47,151 +49,100 @@ def _restore_library_index():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# D — policy fn truth table (pure, no I/O)
+# D — today's headline (pure, no I/O)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _suggest(focus="both", deficits=None, readiness=None, dsa=3):
-    return cpol.suggest_today_family(
-        focus_pref=focus, deficits=deficits or {},
+def _head(st="vo2max", goal=3, readiness=None, dsa=3, deload=False, owed=None, **kw):
+    return cpol.today_headline(
+        session_type=st, goal_zone=goal,
         readiness=readiness if readiness is not None else dict(GREEN),
-        days_since_last_anaerobic=dsa)
+        days_since_last_anaerobic=dsa, deload_week=deload, owed=owed, **kw)
 
 
 def _assert_shape(out):
-    assert set(out) == {"family", "reason"}
+    assert set(out) == {"family", "goal_zone", "session_type", "reason"}
     assert out["family"] in cpol.FAMILIES
     assert isinstance(out["reason"], str) and out["reason"].endswith(".")
-    # one sentence: no mid-string sentence break
-    assert ". " not in out["reason"].replace("e.g. ", "")
 
 
-def test_hrv_below_band_forces_low_aerobic():
-    r = dict(GREEN, ln_rmssd_7d=3.50)
-    out = _suggest(deficits={"high_aerobic": 60, "anaerobic": 10}, readiness=r, dsa=9)
+@pytest.mark.parametrize("st,goal,family", [
+    ("recovery", 1, "zone_1"), ("z2", 1, "zone_1"), ("threshold", 2, "zone_2"),
+    ("overunder", 2, "zone_2"), ("vo2max", 3, "zone_3"), ("sprint", 3, "zone_3")])
+def test_headline_names_the_session_and_its_zone(st, goal, family):
+    out = _head(st, goal)
     _assert_shape(out)
-    assert out["family"] == "low_aerobic"
-    assert "below" in out["reason"].lower()
+    assert (out["family"], out["goal_zone"], out["session_type"]) == (family, goal, st)
+    assert out["reason"].startswith(f"{cpol.SESSION_LABEL[st]} (zone {goal}) today, as planned.")
+    assert "HRV in band." in out["reason"]
+    # VO2max is aerobic work in zone 3, never "anaerobic" (owner's D1)
+    assert "naerobic" not in out["reason"]
 
 
-def test_hrv_above_band_forces_low_aerobic_two_sided():
-    r = dict(GREEN, ln_rmssd_7d=4.30)
-    out = _suggest(deficits={"high_aerobic": 60}, readiness=r, dsa=9)
+def test_the_owners_recovery_monday():
+    """The reported case: a planned recovery Monday with no HRV and the
+    week's hard minutes on Tue/Thu (held by those days) reads as recovery."""
+    out = _head("recovery", 1, readiness={"tsb": 5.0}, dsa=None,
+                owed={"zone1": 0, "zone2": 0, "zone3": 0})
+    assert out["family"] == "zone_1"
+    assert out["reason"] == "Recovery (zone 1) today, as planned. No HRV baseline yet."
+
+
+def test_rest_day_says_rest():
+    out = _head("rest", None)
     _assert_shape(out)
-    assert out["family"] == "low_aerobic"
-    assert "above" in out["reason"].lower()
+    assert (out["family"], out["goal_zone"]) == ("rest", None)
+    assert out["reason"].startswith("Rest today, as planned.")
 
 
-def test_tsb_deep_fatigue_forces_low_aerobic():
-    r = dict(GREEN, tsb=-31.0)
-    out = _suggest(deficits={"high_aerobic": 60}, readiness=r, dsa=9)
+def test_adjusted_session_is_the_headline():
+    out = _head("z2", 1, planned_type="vo2max",
+                adjustment_reason="HRV below SWC day 1 → capped at Z2 (was vo2max)")
+    assert out["family"] == "zone_1" and out["session_type"] == "z2"
+    assert out["reason"].startswith("Endurance (zone 1) today, adjusted from VO2max: HRV below SWC")
+
+
+@pytest.mark.parametrize("readiness,dsa,deload,needle", [
+    (dict(GREEN, ln_rmssd_7d=3.50), 3, False, "below your normal band"),
+    (dict(GREEN, ln_rmssd_7d=4.30), 3, False, "above your normal band"),
+    (dict(GREEN, tsb=-31.0), 3, False, "TSB -31"),
+    (dict(GREEN), 1, False, "48h"),
+    (dict(GREEN), 3, True, "deload week"),
+])
+def test_gates_are_cautions_on_a_hard_day_never_another_family(readiness, dsa, deload, needle):
+    out = _head("vo2max", 3, readiness=readiness, dsa=dsa, deload=deload)
     _assert_shape(out)
-    assert out["family"] == "low_aerobic"
-    assert "tsb" in out["reason"].lower()
-    # boundary: exactly -30 does NOT trip (strictly below the floor)
-    assert _suggest(deficits={"high_aerobic": 60},
-                    readiness=dict(GREEN, tsb=-30.0))["family"] == "high_aerobic"
+    assert out["family"] == "zone_3"          # the session, not "low aerobic"
+    assert "Caution:" in out["reason"] and needle in out["reason"]
+    # on an easy day the same gate is not a caution
+    easy = _head("z2", 1, readiness=readiness, dsa=dsa, deload=deload)
+    assert easy["family"] == "zone_1" and "Caution:" not in easy["reason"]
+
+
+def test_tsb_floor_is_strict():
+    assert "Caution" not in _head(readiness=dict(GREEN, tsb=-30.0))["reason"]
 
 
 def test_the_deep_fatigue_floor_is_reforecasts():
-    """The continuous suggestion's floor mirrors reforecast's fatigue easing:
-    the policy module keeps no repo imports, so a test keeps the two equal."""
+    """The headline's floor mirrors reforecast's fatigue easing: the policy
+    module keeps no repo imports, so a test keeps the two equal."""
     import continuous_policy
     import training_planner
     assert continuous_policy.TSB_LOW_FLOOR == training_planner.TSB_EASE_BELOW
 
 
-@pytest.mark.parametrize("dsa", [0, 1])
-def test_recent_anaerobic_spacing_forces_low_aerobic(dsa):
-    out = _suggest(deficits={"high_aerobic": 60, "anaerobic": 15}, dsa=dsa)
-    _assert_shape(out)
-    assert out["family"] == "low_aerobic"
-    assert "48h" in out["reason"]
-
-
-@pytest.mark.parametrize("dsa", [7, 12])
-def test_anaerobic_overdue_wins_on_green_day(dsa):
-    out = _suggest(deficits={"high_aerobic": 60, "anaerobic": 0}, dsa=dsa)
-    _assert_shape(out)
-    assert out["family"] == "anaerobic"
-    assert f"{dsa}d" in out["reason"]
-
-
-def test_high_aerobic_owed_green_day():
-    out = _suggest(deficits={"high_aerobic": 40, "anaerobic": 0}, dsa=3)
-    _assert_shape(out)
-    assert out["family"] == "high_aerobic"
-    assert "40min" in out["reason"]
-
-
-def test_anaerobic_owed_only_green_day():
-    out = _suggest(deficits={"high_aerobic": 0, "anaerobic": 12}, dsa=3)
-    _assert_shape(out)
-    assert out["family"] == "anaerobic"
-
-
-@pytest.mark.parametrize("focus,family", [
-    ("ftp", "high_aerobic"), ("both", "high_aerobic"), ("vo2", "anaerobic")])
-def test_focus_pref_breaks_both_owed_tie(focus, family):
-    out = _suggest(focus=focus,
-                   deficits={"high_aerobic": 40, "anaerobic": 12}, dsa=3)
-    _assert_shape(out)
-    assert out["family"] == family
-
-
-def test_budget_served_stays_low_aerobic():
-    out = _suggest(deficits={"high_aerobic": 0, "anaerobic": -5,
-                             "low_aerobic": 120}, dsa=3)
-    _assert_shape(out)
-    assert out["family"] == "low_aerobic"
-    assert "80/20" in out["reason"]
-
-
-def test_sub_floor_deficits_are_noise_not_debts():
-    # 9min of Z3-Z5 / 1min of Z6+ are zone-edge wobble — never a hard call.
-    assert _suggest(deficits={"high_aerobic": 9}, dsa=3)["family"] == "low_aerobic"
-    assert _suggest(deficits={"anaerobic": 1}, dsa=3)["family"] == "low_aerobic"
-    # ...while the family-scaled floors themselves DO count.
-    assert _suggest(deficits={"high_aerobic": 10}, dsa=3)["family"] == "high_aerobic"
-    assert _suggest(deficits={"anaerobic": 2}, dsa=3)["family"] == "anaerobic"
-
-
-def test_unknown_hrv_falls_back_to_tsb_only():
-    # No baseline + fresh TSB → hard allowed, but the reason says so.
-    r = {"ln_rmssd_7d": None, "swc_lower": None, "swc_upper": None, "tsb": 5.0}
-    out = _suggest(deficits={"high_aerobic": 40}, readiness=r, dsa=3)
-    _assert_shape(out)
-    assert out["family"] == "high_aerobic"
-    assert "no HRV baseline" in out["reason"]
-    # No baseline + deep fatigue → the TSB floor still protects.
-    r2 = dict(r, tsb=-40.0)
-    assert _suggest(deficits={"high_aerobic": 40},
-                    readiness=r2, dsa=3)["family"] == "low_aerobic"
-
-
-def test_dsa_none_neither_blocks_nor_flags_overdue():
-    # None (nothing on record) can't block spacing NOR auto-fire overdue —
-    # a fresh install must not open with "Anaerobic today".
-    out = _suggest(deficits={"anaerobic": 12}, dsa=None)
-    assert out["family"] == "anaerobic"          # owed → still reachable
-    out2 = _suggest(deficits={}, dsa=None)
-    assert out2["family"] == "low_aerobic"       # nothing owed → base
-
-
-def test_deload_week_outranks_every_hard_rung():
-    # Green HRV + overdue anaerobic + big debts — the deload still wins:
-    # the suggestion must never contradict the (scheduled or advanced) deload.
-    out = cpol.suggest_today_family(
-        "vo2", {"high_aerobic": 60, "anaerobic": 15}, dict(GREEN),
-        days_since_last_anaerobic=10, deload_week=True)
-    _assert_shape(out)
-    assert out["family"] == "low_aerobic"
-    assert "deload" in out["reason"].lower()
+def test_owed_minutes_cite_the_zone_above_the_floor():
+    out = _head("z2", 1, owed={"zone2": 40, "zone3": 12})
+    assert "Zone 2 still owed 40min" in out["reason"]
+    assert "Zone 3 still owed 12min" in out["reason"]
+    # sub-floor gaps are zone-edge noise (zone 2: 10 min, zone 3: 2 min)
+    out = _head("z2", 1, owed={"zone2": 9, "zone3": 1})
+    assert "owed" not in out["reason"]
 
 
 def test_empty_inputs_never_crash():
-    out = cpol.suggest_today_family("both", None, None, None)
+    out = cpol.today_headline("z2", 1, None, None)
     _assert_shape(out)
-    assert out["family"] == "low_aerobic"
+    assert out["family"] == "zone_1"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -563,8 +514,11 @@ class TestTodaySessionContinuousFields(TodaySessionBase):
         data = self._get(_calm_rides(self.today))
         self.assertIn("continuous_suggestion", data)
         sug = data["continuous_suggestion"]
-        self.assertEqual(set(sug), {"family", "reason"})
+        self.assertEqual(set(sug), {"family", "goal_zone", "session_type", "reason"})
         self.assertIn(sug["family"], cpol.FAMILIES)
+        # H1: the headline is the session the rider is told to ride
+        eff = data["adjusted"]["session_type"]
+        self.assertEqual(sug["session_type"], eff)
         self.assertTrue(sug["reason"])
         # calm rides → no deload chip
         self.assertNotIn("deload_advance", data)

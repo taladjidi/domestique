@@ -783,6 +783,7 @@ from download_lib import (  # noqa: F401
     served_zwo_bytes,
     served_fit,
     served_minutes,
+    served_zone_minutes,
     restate_minutes,
 )
 from search_lib import (  # noqa: F401
@@ -9807,9 +9808,10 @@ def api_retest_nudge_snooze():
 #     auto-swap pattern (FIX-CONTRACT C6): revert restores the snapshot and
 #     latches the week against re-triggering.
 #
-# D — rotation policy: continuous_policy.suggest_today_family (hermetic fn)
-#     exposed as `continuous_suggestion: {family, reason}` on
-#     /api/today-session — additive, continuous goals only.
+# D — today's headline: continuous_policy.today_headline (hermetic fn)
+#     exposed as `continuous_suggestion: {family, goal_zone, session_type,
+#     reason}` on /api/today-session — additive, continuous goals only. It
+#     names the session the rider is told to ride (slim/9.3, H1-H3).
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _plan_is_continuous(plan: "dict | None") -> bool:
@@ -9857,80 +9859,72 @@ def _days_since_last_anaerobic(rides: list[dict], today: date,
         return None
 
 
-_ANAEROBIC_CONTENT_CLASSES = frozenset({"anaerobic", "neuromuscular", "sprint"})
-_LOW_AEROBIC_SESSION_TYPES = frozenset({"recovery", "z2", "long_z2"})
-
-
-def _continuous_family_deficits(week_json: "dict | None", rides: list[dict],
-                                today: date) -> dict:
-    """This week's planned-minus-actual zone-rail minutes per stimulus family.
-
-    Planned side: each session's minutes are split over the families using
-    its matched library row's Z1%..Z6% zone shares (the honest "zone rail" —
-    a 60min VO2 session is NOT 60 high-aerobic minutes); sessions without a
-    matched row fall back to their session_type's family for the whole
-    duration. Actual side: ride time_in_zone (z1+z2 | z3+z4+z5 | z6+z7).
-    Positive deficit = still owed this week. Advisory precision only.
-    """
-    planned = {f: 0.0 for f in cpol.FAMILIES}
-    actual = {f: 0.0 for f in cpol.FAMILIES}
-    if not week_json:
-        return {f: 0 for f in cpol.FAMILIES}
+def _served_zone_minutes_of(zwo_file: str, slot_min, slot_type: str, goal):
+    """week_view's reader of a planned session's served workout: minutes per
+    zone (zones.hybrid_minutes) of the file fitted to its slot, or None."""
+    if not zwo_file:
+        return None
     try:
-        lib_by_file = {row.get("File"): row for row in tp.load_workout_library()}
+        path = active_workout_dir() / zwo_file
     except Exception:  # noqa: BLE001
-        lib_by_file = {}
-    for s in week_json.get("sessions", []):
-        st = s.get("session_type") or ""
-        dur = float(s.get("duration_min") or 0)
-        if st == "rest" or dur <= 0:
-            continue
-        row = lib_by_file.get(s.get("zwo_file") or "")
-        zshares = [float(row.get(f"Z{i}%") or 0) for i in range(1, 7)] if row else []
-        if row and sum(zshares) > 0:
-            planned[cpol.FAMILY_LOW] += dur * (zshares[0] + zshares[1]) / 100.0
-            planned[cpol.FAMILY_HIGH] += dur * (zshares[2] + zshares[3] + zshares[4]) / 100.0
-            planned[cpol.FAMILY_ANAEROBIC] += dur * zshares[5] / 100.0
-            continue
-        cc = ""
-        try:
-            cc = tp._content_class_for_zwo(s.get("zwo_file") or "") or ""
-        except Exception:  # noqa: BLE001
-            cc = ""
-        if cc in _ANAEROBIC_CONTENT_CLASSES or st == "sprint":
-            planned[cpol.FAMILY_ANAEROBIC] += dur
-        elif st in _LOW_AEROBIC_SESSION_TYPES:
-            planned[cpol.FAMILY_LOW] += dur
-        else:
-            planned[cpol.FAMILY_HIGH] += dur
-    w_start = week_json.get("start") or ""
+        return None
+    return served_zone_minutes(path, slot_min, slot_type, goal)
+
+
+def _rides_zone_minutes(rides, sessions, start: str, end: str) -> dict:
+    """Minutes per zone the rides in [start, end] spent, each by the hybrid
+    count for the goal zone of the session planned on its day (unmatched:
+    time in zone). ``sessions`` carry ``day`` and ``goal_zone``."""
+    import week_view as _wv
+    goal_by_day = {s.get("day"): s.get("goal_zone") for s in sessions or []
+                   if s.get("session_type") not in (None, "rest")}
+    out = {z: 0.0 for z in _wv.ZONES}
     for r in rides or []:
         d = _ride_started_local_iso_date(r) or ""
-        if not d or d < w_start or d > today.isoformat():
+        if not d or d < start or d > end:
             continue
         tiz = _ride_tiz_seconds(r)
         if not tiz:
             continue
-        actual[cpol.FAMILY_LOW] += float((tiz.get("z1") or 0) + (tiz.get("z2") or 0)) / 60.0
-        actual[cpol.FAMILY_HIGH] += float(
-            (tiz.get("z3") or 0) + (tiz.get("z4") or 0) + (tiz.get("z5") or 0)) / 60.0
-        actual[cpol.FAMILY_ANAEROBIC] += float(
-            (tiz.get("z6") or 0) + (tiz.get("z7") or 0)) / 60.0
-    return {f: int(round(planned[f] - actual[f])) for f in cpol.FAMILIES}
+        for z, v in _wv.ride_zone_minutes(tiz, goal_by_day.get(d)).items():
+            out[z] += v
+    return out
 
 
 def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
-                                 rides: list[dict],
+                                 rides: list[dict], week: dict, effective_type: str,
+                                 planned_type: str, adjustment_reason: str = "",
                                  today: "date | None" = None) -> dict:
-    """Amendment D wiring: assemble the policy-fn inputs from stored state."""
+    """Today's headline (contract slim/9.3, H1-H3): the session the rider is
+    told to ride, ``effective_type`` (the adjusted one when the day was
+    adjusted, else the week view's ``planned_type``), with the policy's
+    gates as cautions and the zone minutes the week owes beyond its planned
+    days. ``week`` is today's week as /api/weekly-plan serves it."""
+    import week_view as _wv
     today = today or clock.today()
     today_iso = today.isoformat()
     cur = next((w for w in plan.get("weeks", [])
                 if (w.get("start") or "") <= today_iso <= (w.get("end") or "")),
                None)
-    return cpol.suggest_today_family(
-        focus_pref=str((plan.get("goal") or {}).get("focus") or "both"),
-        deficits=_continuous_family_deficits(cur, rides, today),
+    try:
+        lib = _wv.library_by_file(tp.load_workout_library())
+    except Exception:  # noqa: BLE001
+        lib = {}
+    sessions = []
+    for s in week.get("sessions") or []:
+        st = s.get("session_type") or "rest"
+        sessions.append(dict(s, goal_zone=_wv.goal_zone_of(s, lib, st),
+                             zone_minutes=_wv.hybrid_zone_minutes(
+                                 s, lib, st, _served_zone_minutes_of)))
+    mine = next((s for s in sessions if s.get("day") == today_iso), {})
+    if effective_type == planned_type:
+        goal = mine.get("goal_zone")
+    else:
+        goal = _zones_mod.goal_zone(None, effective_type)
+    ridden = _rides_zone_minutes(rides, sessions, week.get("start") or "", today_iso)
+    rode_today = any(_ride_started_local_iso_date(r) == today_iso for r in rides or [])
+    return cpol.today_headline(
+        session_type=effective_type, goal_zone=goal,
         readiness={
             "ln_rmssd_7d": sleep.get("ln_rmssd_7d"),
             "swc_lower": sleep.get("swc_lower"),
@@ -9938,9 +9932,9 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
             "tsb": training.get("tsb"),
         },
         days_since_last_anaerobic=_days_since_last_anaerobic(rides, today),
-        # A deload week (scheduled OR just advanced by amendment C) outranks
-        # every hard rung — the suggestion must never contradict the deload.
         deload_week=bool((cur or {}).get("is_stepback")),
+        owed=_wv.zone_owed(sessions, ridden, today, rode_today),
+        planned_type=planned_type, adjustment_reason=adjustment_reason,
     )
 
 
@@ -10404,7 +10398,10 @@ def _api_today_session_impl():
     if _plan_is_continuous(_stored):
         try:
             resp["continuous_suggestion"] = _continuous_today_suggestion(
-                _stored, sleep, training, _all_rides)
+                _stored, sleep, training, _all_rides, week_data,
+                effective_type=adjusted.session_type,
+                planned_type=planned.session_type,
+                adjustment_reason=adjustment_reason)
         except Exception as _e:  # noqa: BLE001 — advisory only
             _log.debug(f"/api/today-session: continuous suggestion failed: {_e}")
         if _deload_chip:

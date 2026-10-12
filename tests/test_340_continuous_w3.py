@@ -286,20 +286,24 @@ def test_t_suggestion_chip_renders_family_reason_and_escapes():
     src = _src()
     fn = _extract_js_function(src, "_continuousSuggestionHtml")
     harness = _ESC_STUB + fn + """
-// The IP's exact example shape.
+// slim/9.3 H1: the session's goal zone, the session named in the reason.
 let html = _continuousSuggestionHtml({ continuous_suggestion: {
-  family: 'high_aerobic', reason: 'HRV in band, 32min Z4 deficit' } });
+  family: 'zone_3', goal_zone: 3, session_type: 'vo2max',
+  reason: 'VO2max (zone 3) today, as planned. HRV in band.' } });
 if (html.indexOf('Today:') < 0) throw new Error('headline must lead with Today:');
-if (html.indexOf('high-aerobic') < 0) throw new Error('family label missing');
-if (html.indexOf('HRV in band, 32min Z4 deficit') < 0) throw new Error('reason missing');
-if (html.indexOf('#f97316') < 0) throw new Error('high-aerobic must wear the exposure orange');
+if (html.indexOf('<b>zone 3</b>') < 0) throw new Error('zone label missing');
+if (html.indexOf('VO2max (zone 3) today, as planned. HRV in band.') < 0) throw new Error('reason missing');
+if (html.indexOf('#ef4444') < 0) throw new Error('zone 3 must wear the exposure red');
 if (html.indexOf('cont-suggestion-chip') < 0) throw new Error('chip class missing');
+if (html.indexOf('naerobic') >= 0) throw new Error('VO2max is never labelled anaerobic');
 
-// All three families tint from the palette the UI already teaches.
-if (_continuousSuggestionHtml({continuous_suggestion:{family:'low_aerobic'}}).indexOf('#22c55e') < 0)
-  throw new Error('low-aerobic green');
-if (_continuousSuggestionHtml({continuous_suggestion:{family:'anaerobic'}}).indexOf('#ef4444') < 0)
-  throw new Error('anaerobic red');
+// All three zones tint from the palette the UI already teaches; rest is neutral.
+if (_continuousSuggestionHtml({continuous_suggestion:{family:'zone_1'}}).indexOf('#22c55e') < 0)
+  throw new Error('zone 1 green');
+if (_continuousSuggestionHtml({continuous_suggestion:{family:'zone_2'}}).indexOf('#f97316') < 0)
+  throw new Error('zone 2 orange');
+if (_continuousSuggestionHtml({continuous_suggestion:{family:'rest'}}).indexOf('<b>rest</b>') < 0)
+  throw new Error('rest says rest');
 
 // Unknown family degrades to the adjustment-chip yellow, never crashes.
 html = _continuousSuggestionHtml({ continuous_suggestion: { family: 'weird_family' } });
@@ -308,7 +312,7 @@ if (html.indexOf('weird-family') < 0 || html.indexOf('rgba(234,179,8,0.1)') < 0)
 
 // Server text is escaped — a hostile reason cannot script the card.
 html = _continuousSuggestionHtml({ continuous_suggestion: {
-  family: 'anaerobic', reason: '<script>alert(1)</script>' } });
+  family: 'zone_3', reason: '<script>alert(1)</script>' } });
 if (html.indexOf('<script>') >= 0) throw new Error('reason must be escaped');
 if (html.indexOf('&lt;script&gt;') < 0) throw new Error('escaped reason must render');
 

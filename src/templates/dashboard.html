@@ -17854,20 +17854,22 @@ async function loadTodaySession() {
   }
 }
 
-// 3.4.0 W3 — continuous-mode today headline ("Today: high-aerobic — HRV in
-// band, 32min Z4 deficit"). Renders the additive `continuous_suggestion`
-// field of /api/today-session ({family, reason}, continuous goals only) in
-// the adjustment-chip skin, tinted by the exposure palette the UI already
-// teaches (weekly-calendar bands / library heat-ramp). Pure + DOM-free so
-// the node harness pins it; absent or malformed → '' so finite plans (and
-// error paths) render byte-identical to before.
+// 3.4.0 W3 — continuous-mode today headline. Renders the additive
+// `continuous_suggestion` field of /api/today-session ({family, goal_zone,
+// session_type, reason}, continuous goals only) in the adjustment-chip skin.
+// slim/9.3 H1: the headline is the session the rider is told to ride, on the
+// planner's three zones ("zone 1 / 2 / 3"); the reason carries the session's
+// own name (Coggan detail such as "VO2max" is a sub-label only). Pure +
+// DOM-free so the node harness pins it; absent or malformed → '' so finite
+// plans (and error paths) render byte-identical to before.
 function _continuousSuggestionHtml(d) {
   const cs = d && d.continuous_suggestion;
   if (!cs || !cs.family) return '';
   const FAM = {
-    low_aerobic:  { label: 'low-aerobic',  color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
-    high_aerobic: { label: 'high-aerobic', color: '#f97316', bg: 'rgba(249,115,22,0.1)' },
-    anaerobic:    { label: 'anaerobic',    color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+    zone_1: { label: 'zone 1', color: '#22c55e', bg: 'rgba(34,197,94,0.1)' },
+    zone_2: { label: 'zone 2', color: '#f97316', bg: 'rgba(249,115,22,0.1)' },
+    zone_3: { label: 'zone 3', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+    rest:   { label: 'rest',   color: 'var(--text2)', bg: 'var(--surface2)' },
   };
   const meta = FAM[String(cs.family)] || {
     label: String(cs.family).replace(/_/g, '-'),

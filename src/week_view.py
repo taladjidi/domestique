@@ -22,6 +22,7 @@ from datetime import date, timedelta
 from typing import Callable, Optional
 
 import clock
+import zones
 
 BANDS = ("low_aerobic", "mid_aerobic", "high_aerobic", "anaerobic")
 
@@ -45,6 +46,69 @@ TYPE_BAND = {
     "vo2max": "anaerobic", "anaerobic": "anaerobic", "sprint": "anaerobic",
     "neuromuscular": "anaerobic",
 }
+
+
+# The planner's three zones (zones.THREE_ZONE_FROM_COGGAN, owner's D1), as
+# the payloads name them.
+ZONES = ("zone1", "zone2", "zone3")
+
+
+def goal_zone_of(session: dict, lib: dict, session_type: str) -> "int | None":
+    """The session's goal zone (zones.goal_zone): its served file's content
+    class first, else its content type."""
+    row = lib.get(session.get("zwo_file") or "") or {}
+    return zones.goal_zone(row.get("ContentClass"), session_type)
+
+
+def hybrid_zone_minutes(session: dict, lib: dict, session_type: str,
+                        minutes_of: "Optional[Callable[..., Optional[dict]]]" = None) -> dict:
+    """Minutes per zone of a planned session by the hybrid count (zones.
+    hybrid_minutes over the served workout). ``minutes_of(zwo_file, slot_min,
+    slot_type, goal)`` reads the served file; a session with no file it can
+    read counts its whole duration to its goal zone (zone 1 when unknown)."""
+    out = {z: 0.0 for z in ZONES}
+    dur = float(session.get("duration_min") or 0)
+    if session_type == "rest" or dur <= 0:
+        return out
+    goal = goal_zone_of(session, lib, session_type)
+    zf = session.get("zwo_file") or ""
+    m = None
+    if zf and minutes_of is not None:
+        slot = session.get("slot_type") or session.get("session_type") or ""
+        m = minutes_of(zf, session.get("duration_min"), slot, goal)
+    if m:
+        return {f"zone{i}": float(m.get(f"z{i}") or 0) for i in (1, 2, 3)}
+    out[f"zone{goal or 1}"] = dur
+    return out
+
+
+def ride_zone_minutes(tiz: "dict | None", goal: "int | None") -> dict:
+    """Minutes per zone of a ride from its Coggan time in zone (seconds), by
+    the hybrid count for the goal zone of the session it was matched to
+    (None: unmatched, plain time in zone)."""
+    m = zones.hybrid_ride_minutes(tiz, goal)
+    return {f"zone{i}": m[f"z{i}"] for i in (1, 2, 3)}
+
+
+def zone_owed(sessions, ridden: dict, today: date, rode_today: bool) -> dict:
+    """Minutes per zone the week still owes that no planned day holds
+    (contract slim/9.3, H3): the week's planned minutes, minus what was
+    ridden (``ridden``, per zone, this week up to today), minus what the
+    remaining planned days hold (the days after today, and today when it has
+    not been ridden). Never below 0. ``sessions`` carry ``zone_minutes`` per
+    zone (hybrid) and ``day``."""
+    t = today.isoformat()
+    planned = {z: 0.0 for z in ZONES}
+    held = {z: 0.0 for z in ZONES}
+    for s in sessions or []:
+        zm = s.get("zone_minutes") or {}
+        d = s.get("day") or ""
+        for z in ZONES:
+            v = float(zm.get(z) or 0)
+            planned[z] += v
+            if d > t or (d == t and not rode_today):
+                held[z] += v
+    return {z: max(0.0, planned[z] - float(ridden.get(z) or 0) - held[z]) for z in ZONES}
 
 
 def covered_days(sessions) -> "list[str]":

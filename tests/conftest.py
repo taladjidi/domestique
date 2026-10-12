@@ -482,7 +482,7 @@ def pytest_configure(config):
     if all((workouts / n).is_file() for n in (".library_index.json", ".workout_facts.json")):
         return
     subprocess.run([sys.executable, str(root / "tools" / "build-library-caches.py")],
-                   check=True, cwd=str(root))
+                   check=True, cwd=str(root), timeout=600)
 
 
 def pytest_collection_modifyitems(session, config, items):

@@ -69,7 +69,9 @@ CENSUS = {
     },
     "profile:athlete.json": {
         "profile_manager.py",       # the owner: _set_fact gates every write
-        "app.py", "db.py", "training_planner.py", "migrate_profiles.py",
+        # training_planner left 2026-10-12: the eFTP drift rule asks the
+        # gate and no longer stamps ftp_source by hand (upstream 16da7dbe).
+        "app.py", "db.py", "migrate_profiles.py",
         "facts.py",                 # names the store in the registry
     },
     "plan:current_plan.json": {

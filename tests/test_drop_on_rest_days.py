@@ -10,8 +10,11 @@ Runs the real calDragStart / pgDragStart from dashboard.html under node with a
 minimal fake DOM.
 """
 import json
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 SRC = (Path(__file__).resolve().parent.parent / "src" / "templates" / "dashboard.html"
        ).read_text(encoding="utf-8")
@@ -53,6 +56,8 @@ def _today(iso: str) -> str:
 
 
 def _run(js: str) -> dict:
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
     res = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0, res.stderr
     return json.loads(res.stdout)

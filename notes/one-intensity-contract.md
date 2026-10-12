@@ -110,13 +110,18 @@ hybrid counter:
   VO2max, anaerobic, sprint, neuromuscular, FTP test -> 3 (a maximal 20-min or
   ramp test is above CP); unknown -> None.
 - `hybrid_minutes(workout, goal_zone)` for a planned workout (the served
-  bytes): Warmup, Cooldown, and steady blocks below 76% FTP -> zone 1;
-  IntervalsT off-bouts -> zone 1 (active) or uncounted (power 0); every
-  other block at or above 76% FTP (a work bout) -> the goal zone. With goal
+  bytes): Warmup, Cooldown, and every block or leg below 76% FTP -> zone 1
+  (an IntervalsT off-leg below 76% is active recovery; power 0 is passive
+  and uncounted); every block or leg at or above 76% FTP is a work bout ->
+  the goal zone, whatever its element (the "unders" of an over-under at
+  90-95% are work, not recovery: Sylta counts recovery as zone 1 only when
+  it is rest). With goal
   zone 1 or None the file is counted by time in zone (an easy ride's
   surges are not reclassified).
 - `hybrid_ride_minutes(tiz, goal_zone)` for a ride: matched to a planned
-  session, its time below 76% FTP is zone 1 and its time at or above counts
+  session by the app's existing completion match (the ride IS that session,
+  not merely a ride on its day; a commute on a VO2 day is unmatched), its
+  time below 76% FTP is zone 1 and its time at or above counts
   to the session's goal zone; unmatched, plain time in zone.
 No other table maps a session type, content class or Coggan zone to an
 intensity bucket for display or advice.
@@ -183,3 +188,10 @@ the message); full gate (`UV_OFFLINE=1`, `unshare -rn`) and characterization
 with every golden change read before `--bless`; then an independent evaluator
 on the sandbox copy (consistency probe R1-R8 plus readiness with wellness
 removed); then the owner's deploy decision.
+
+## Amendment (2026-10-12, after implementation)
+I1 clarified on two points the first implementation read literally: an
+off-leg at or above 76% FTP is work (325 library files, mostly over-unders,
+had their unders counted to zone 1), and a ride takes a session's goal zone
+only through the completion match, never by sharing its date.
+

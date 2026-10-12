@@ -10024,7 +10024,6 @@ def _plan_zone_distribution(plan: dict) -> dict:
 def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
                                  rides: list[dict], week: dict, effective_type: str,
                                  planned_type: str, adjustment_reason: str = "",
-                                 effective_duration: float = 0,
                                  today: "date | None" = None) -> dict:
     """Today's headline (contract slim/9.3, H1-H3): the session the rider is
     told to ride, ``effective_type`` (the adjusted one when the day was
@@ -10039,16 +10038,10 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
                None)
     sessions = week.get("sessions") or []
     mine = next((s for s in sessions if s.get("day") == today_iso), {})
-    held = None
-    if effective_type == planned_type:
-        goal = mine.get("goal_zone")
-    else:
-        # Adjusted: today holds the adjusted session, its duration in its
-        # goal zone, not the planned file's minutes (which stay planned).
-        goal = _zones_mod.goal_zone(None, effective_type)
-        held = {z: 0.0 for z in _wv.ZONES}
-        if goal and effective_duration:
-            held[f"zone{goal}"] = float(effective_duration)
+    # Adjusted, the headline names the adjusted session and says nothing owed
+    # (continuous_policy.today_headline).
+    goal = (mine.get("goal_zone") if effective_type == planned_type
+            else _zones_mod.goal_zone(None, effective_type))
     ridden = _rides_zone_minutes(rides, _plan_goal_by_ride(plan), week.get("start") or "", today_iso)
     rode_today = any(_ride_started_local_iso_date(r) == today_iso for r in rides or [])
     return cpol.today_headline(
@@ -10061,7 +10054,7 @@ def _continuous_today_suggestion(plan: dict, sleep: dict, training: dict,
         },
         days_since_last_anaerobic=_days_since_last_anaerobic(rides, today),
         deload_week=bool((cur or {}).get("is_stepback")),
-        owed=_wv.zone_owed(sessions, ridden, today, rode_today, today_holds=held),
+        owed=_wv.zone_owed(sessions, ridden, today, rode_today),
         planned_type=planned_type, adjustment_reason=adjustment_reason,
     )
 
@@ -10529,8 +10522,7 @@ def _api_today_session_impl():
                 _stored, sleep, training, _all_rides, week_data,
                 effective_type=adjusted.session_type,
                 planned_type=planned.session_type,
-                adjustment_reason=adjustment_reason,
-                effective_duration=adjusted.duration_min)
+                adjustment_reason=adjustment_reason)
         except Exception as _e:  # noqa: BLE001 — advisory only
             _log.debug(f"/api/today-session: continuous suggestion failed: {_e}")
         if _deload_chip:

@@ -137,18 +137,19 @@ class TestTheOwnersMonday(unittest.TestCase):
         self.assertNotIn("owed", h["reason"])
 
 
-def test_an_adjusted_day_holds_the_adjusted_session_not_the_planned_minutes():
-    """Today's VO2max eased to Z2: today holds Z2 minutes, so the VO2 work it
-    no longer carries is owed (review of 82b17875)."""
+def test_an_adjusted_day_names_the_adjusted_session_and_owes_nothing():
+    """Today's VO2max eased to Z2: the headline names Z2 and, the session
+    having been taken down, says nothing owed (re-evaluation of 33b519c2;
+    82b17875's review had it cite the dropped work as owed)."""
     tue = (MON + timedelta(1))
     week = {"start": MON.isoformat(), "sessions": [
         dict(s, goal_zone=3 if s["session_type"] == "vo2max" else 1) for s in WEEK]}
     plan = {"weeks": [{"start": MON.isoformat(), "end": (MON + timedelta(6)).isoformat()}]}
     h = app_module._continuous_today_suggestion(
         plan, {}, {"tsb": 5.0}, [], week, effective_type="z2", planned_type="vo2max",
-        adjustment_reason="HRV below SWC day 1", effective_duration=76, today=tue)
+        adjustment_reason="HRV below SWC day 1", today=tue)
     assert h["family"] == "zone_1"
-    assert "Zone 3 still owed 21min" in h["reason"], h["reason"]
+    assert "owed" not in h["reason"], h["reason"]
 
 
 def test_a_missed_easy_days_surges_are_not_owed():
@@ -169,3 +170,18 @@ def test_no_owed_note_on_a_rest_or_recovery_day():
                                 adjustment_reason="G5 soreness 6/7")
         assert "owed" not in h["reason"], (st, h["reason"])
     assert "owed" in cpol.today_headline("z2", 1, {"tsb": 5}, None, owed=owed)["reason"]
+
+
+def test_no_owed_note_on_any_adjusted_day():
+    """Re-evaluation of 33b519c2: a VO2max day capped at Z2 by the Hooper
+    gate (G6) said "Zone 3 still owed 38min", today's dropped dose included.
+    Any day the adjustment changed the session is silent about owed minutes."""
+    import continuous_policy as cpol
+    owed = {"zone2": 0, "zone3": 38}
+    for st, goal in (("z2", 1), ("threshold", 2)):
+        h = cpol.today_headline(st, goal, {"tsb": 5}, None, owed=owed, planned_type="vo2max",
+                                adjustment_reason="G6 Hooper 20 >= 18 -> Z2 cap")
+        assert "owed" not in h["reason"], h["reason"]
+    # the same owed minutes on an unadjusted day are said
+    assert "owed" in cpol.today_headline("z2", 1, {"tsb": 5}, None, owed=owed,
+                                         planned_type="z2")["reason"]

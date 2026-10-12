@@ -211,9 +211,13 @@ def today_headline(
                      f"hard days (Hulin 2014).")
     if hard and deload_week:
         notes.append("Caution: deload week, every ride easy (Issurin 2010).")
-    # On a rest or recovery day (planned, or the adjustment's) the week's
-    # debt is not today's business: nothing owed is said (SF2).
-    for z in (2, 3) if st not in ("rest", "recovery") else ():
+    # On a rest or recovery day (planned, or the adjustment's), and on any
+    # day the adjustment took the session down from the planned one, the
+    # week's debt is not today's business: nothing owed is said (SF2, and the
+    # re-evaluation of 33b519c2: a G6 Z2 cap on a VO2max day quoted "Zone 3
+    # still owed 38min", today's dropped dose included).
+    adjusted = bool(planned_type) and planned_type.lower() != st
+    for z in (2, 3) if st not in ("rest", "recovery") and not adjusted else ():
         v = float((owed or {}).get(f"zone{z}") or 0)
         if v >= OWED_MIN_MINUTES[z]:
             notes.append(f"{ZONE_NAME[z].capitalize()} still owed {v:.0f}min this week "

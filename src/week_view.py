@@ -96,8 +96,7 @@ def ride_minutes(power_tiz: "dict | None", hr_tiz: "dict | None",
     return None
 
 
-def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
-              today_holds: Optional[dict] = None) -> dict:
+def zone_owed(sessions, ridden: dict, today: date, rode_today: bool) -> dict:
     """Minutes of zone 2 and zone 3 the week still owes that no planned day
     holds (contract slim/9.3, H3): the hard-zone minutes of the week's planned
     hard sessions (goal zone 2 or 3), minus the zone 2 / zone 3 minutes
@@ -106,9 +105,8 @@ def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
     ridden). Never below 0; zone 1 is never owed. An easy day's surges are
     not a debt: a missed endurance ride with two tempo pickups owes nothing
     (the evaluation of 2382cfd1, SF2). ``sessions`` carry ``zone_minutes``,
-    ``goal_zone`` and ``day``; ``today_holds`` is what today holds
-    when the day was adjusted (the adjusted session, not the planned
-    minutes)."""
+    ``goal_zone`` and ``day``. (An adjusted day says nothing owed:
+    continuous_policy.today_headline.)"""
     t = today.isoformat()
     hard = ("zone2", "zone3")
     planned = {z: 0.0 for z in hard}
@@ -124,7 +122,7 @@ def zone_owed(sessions, ridden: dict, today: date, rode_today: bool,
             if d > t:
                 held[z] += v
             elif d == t and not rode_today:
-                held[z] += v if today_holds is None else float(today_holds.get(z) or 0)
+                held[z] += v
     out = {z: max(0.0, planned[z] - float(ridden.get(z) or 0) - held[z]) for z in hard}
     return {"zone1": 0.0, **out}
 

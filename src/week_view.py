@@ -83,16 +83,16 @@ def ride_minutes(power_tiz: "dict | None", hr_tiz: "dict | None",
     """(minutes per zone, method) of a ride (contract slim/9.3, amendment 2),
     or None when it carries neither power nor HR time in zone. With power:
     time in zone, every second ("time in zone"). HR only: the hybrid for the
-    goal zone of the session its completion match says it is ("hybrid
-    (HR)", zones.hr_hybrid_minutes), else HR time in zone ("HR time in
-    zone")."""
+    goal zone of the session its completion match says it is when that goal
+    is zone 2 or 3 ("hybrid (HR)", zones.hr_hybrid_minutes), else HR time in
+    zone ("HR time in zone")."""
     p = zones.three_zone(power_tiz or {})
     if sum(p.values()) > 0:
         return {f"zone{i}": p[f"z{i}"] / 60.0 for i in (1, 2, 3)}, "time in zone"
     if sum(float(v or 0) for k, v in (hr_tiz or {}).items() if str(k).startswith("z")) > 0:
         m = zones.hr_hybrid_minutes(hr_tiz, goal)
         return ({f"zone{i}": m[f"z{i}"] for i in (1, 2, 3)},
-                "hybrid (HR)" if goal else "HR time in zone")
+                "hybrid (HR)" if goal in (2, 3) else "HR time in zone")
     return None
 
 

@@ -205,12 +205,14 @@ def hr_hybrid_minutes(hr_tiz: "dict | None", goal: "int | None") -> dict[str, fl
     LTHR-anchored zones (Friel: Z1-Z2 below 90 % LTHR, Z3-Z4 to LTHR, Z5a-c
     above). Matched by completion to a session with a goal zone, the time
     below the zone 1/2 seam (HR Z1-Z2) is zone 1 and the rest counts to that
-    goal zone; unmatched (goal None), plain HR time in zone, folded at the
-    same seams as power (zone 3 above LT2)."""
+    goal zone 2 or 3; unmatched, or matched to an easy session (goal 1 or
+    None), plain HR time in zone, folded at the same seams as power (zone 3
+    above LT2): the hybrid credits the work bouts of a hard goal, and an easy
+    ride's surges are not reclassified (contract I1)."""
     h = {k: float((hr_tiz or {}).get(k) or 0) for k in ("z1", "z2", "z3", "z4", "z5", "z6", "z7")}
     z1 = h["z1"] + h["z2"]
     rest = sum(h.values()) - z1
-    if goal in (1, 2, 3):
+    if goal in (2, 3):
         out = {"z1": z1, "z2": 0.0, "z3": 0.0}
         out[f"z{goal}"] += rest
     else:

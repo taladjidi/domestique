@@ -91,3 +91,19 @@ def test_tiz_minutes_is_scan_zwo(tmp_path):
     assert zones.tiz_minutes(zones._workout_element(VO2)) == t
 
 
+
+
+@pytest.mark.parametrize("goal,want,method", [
+    (1, {"z1": 30, "z2": 10, "z3": 3}, "HR time in zone"),   # easy goal: surges not reclassified
+    (2, {"z1": 30, "z2": 13, "z3": 0}, "hybrid (HR)"),
+    (3, {"z1": 30, "z2": 0, "z3": 13}, "hybrid (HR)"),
+])
+def test_a_matched_hr_only_ride_for_each_goal_zone(goal, want, method):
+    """A synthetic HR-only ride matched by completion to a session of goal
+    zone 1, 2 or 3 (no owner HR-only ride is matched): only a hard goal gets
+    the hybrid."""
+    import week_view
+    assert zones.hr_hybrid_minutes(HR, goal) == pytest.approx(want)
+    m, how = week_view.ride_minutes({}, HR, goal)
+    assert how == method
+    assert m == pytest.approx({f"zone{k[1]}": v for k, v in want.items()})

@@ -35,12 +35,10 @@ def hard_finish():
 def neuromuscular_ridden_long():
     """A 20-min tempo stretch with surges and easy minutes in it, after hard
     bursts (10-13)."""
-    ride = flat(150, 10)
-    for _ in range(3):
-        ride += flat(300, 1) + flat(160, 2)
+    ride = flat(150, 10) + flat(290, 4) + flat(160, 3)
     block = []
     for i in range(20):
-        block += [180 if i in (4, 11) else 250] * 60
+        block += [190 if i in (4, 11) else 262] * 60
     return ride + block + flat(100, 15)
 
 
@@ -99,3 +97,13 @@ def test_sync_path_counts_seconds_not_samples(monkeypatch):
     data = {"name": "Afternoon Ride", "started_at": "2026-10-06T14:41:42"}
     power_curve._maybe_detect_ftp_test(data, {"watts": w, "time": t})
     assert data.get("ftp_test_type") == "ramp"
+
+
+def test_a_build_held_after_its_peak_is_not_a_ramp():
+    """A ramp ends in failure; a progressive build that is held after its
+    peak minute (here 3 more minutes at 95% of it) is not one."""
+    ride = flat(130, 15)
+    for w in range(150, 321, 15):
+        ride += [w] * 60
+    ride += flat(300, 3) + flat(120, 15)
+    assert fe.evaluate_ftp_test(ride, prior_ftp=FTP) is None

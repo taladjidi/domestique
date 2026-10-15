@@ -7975,11 +7975,11 @@ def _icu_active_pid() -> "str | None":
 
 def _icu_push_note_result(res: dict, pid: "str | None" = None) -> None:
     """Record a reconcile result (+timestamp) for the status endpoint, under
-    the profile it ran for: the caller's, else the one the reconcile names
-    (#34: a switch during a slow run must not relabel it), else the active
-    one."""
+    the profile it ran for: the one the reconcile names (#34: a switch
+    during a slow run must not relabel it), else the caller's, else the
+    active one."""
     try:
-        pid = pid or res.get("profile_id") or _icu_active_pid()
+        pid = res.get("profile_id") or pid or _icu_active_pid()
         if pid is not None:
             _icu_push_last_result[pid] = {"at": clock.now().isoformat(), **res}
     except Exception:

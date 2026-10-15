@@ -302,6 +302,10 @@ def test_settings_count_is_labelled_with_the_profile_the_run_was_for(monkeypatch
     app_module._icu_push_note_result({"pushed": 0, "held": 2, "profile_id": "anna"})
     assert app_module._icu_push_last_result["anna"]["held"] == 2
     assert app_module._icu_push_last_result.get("ben") is None
+    # A caller's pid captured before a switch never relabels the run either.
+    app_module._icu_push_note_result({"pushed": 1, "profile_id": "anna"}, "ben")
+    assert app_module._icu_push_last_result["anna"]["pushed"] == 1
+    assert app_module._icu_push_last_result.get("ben") is None
 
 
 

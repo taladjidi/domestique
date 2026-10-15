@@ -914,7 +914,8 @@ def reconcile(horizon_days: int = HORIZON_DAYS, abort_if_swept: bool = True) -> 
     most one of needs_reconnect / needs_lthr / error ("busy" when another
     run held the lock for a minute). ``held`` counts our events dated today
     or later left where the rider moved them in intervals.icu (#28); it is 0
-    on every early return (W6). Never raises; never writes the plan.
+    on every early return (W6). Never raises. It writes the plan only to
+    learn moves made in intervals.icu (#33, _learn_moves, via update_plan).
     """
     # The rider's own Push (abort_if_swept=False) is never dropped: it asked
     # for this run after whatever sweep it waited behind.

@@ -107,3 +107,37 @@ def test_a_build_held_after_its_peak_is_not_a_ramp():
         ride += [w] * 60
     ride += flat(300, 3) + flat(120, 15)
     assert fe.evaluate_ftp_test(ride, prior_ftp=FTP) is None
+
+
+def test_a_ramp_found_inside_a_ride_is_not_called_halted():
+    """The halt check assumes the shipped protocol from second 0; on a ramp
+    found inside a ride it read the warm-up as "halted at step 2"."""
+    ride = ramp_inside_a_ride()
+    cadence = [85] * len(ride)
+    for s in range(200, 210):          # a coast in the warm-up
+        cadence[s] = 0
+        ride[s] = 0
+    r = fe.evaluate_ftp_test(ride, cadence_series=cadence, prior_ftp=FTP)
+    assert r and r["ftp_test_type"] == "ramp"
+    assert r["ftp_test_halted"] is False
+
+
+def test_a_planned_test_day_shows_a_real_drop():
+    """On a planned test day an unnamed 20-min test reading well below FTP
+    is still offered: the rider meant to test."""
+    assert fe.evaluate_ftp_test(coggan_test(200), prior_ftp=FTP) is None
+    r = fe.evaluate_ftp_test(coggan_test(200), prior_ftp=FTP, planned_test=True)
+    assert r and r["ftp_test_type"] == "coggan_20min"
+
+
+def test_sync_path_sees_a_ramp_recorded_only_to_failure(monkeypatch):
+    """5-min warm-up + 13 steps, recording stopped at failure: 18 min."""
+    import config
+    monkeypatch.setattr(config, "ATHLETE_FTP_W", FTP, raising=False)
+    ride = flat(120, 5)
+    for w in range(150, 331, 15):
+        ride += [w] * 60
+    data = {"name": "Afternoon Ride", "started_at": "2026-10-06T14:41:42"}
+    power_curve._maybe_detect_ftp_test(
+        data, {"watts": ride, "time": list(range(len(ride)))})
+    assert data.get("ftp_test_type") == "ramp"

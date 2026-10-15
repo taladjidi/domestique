@@ -978,7 +978,8 @@ def detect_ftp_test_shape(
 
 def evaluate_ftp_test(power_series, cadence_series=None,
                       filename_hint: "str | None" = None,
-                      prior_ftp: int = 0) -> "dict | None":
+                      prior_ftp: int = 0,
+                      planned_test: bool = False) -> "dict | None":
     """FTP-tests IP W2b — THE single entry point for scoring a ride as an FTP
     test. Both ingestion paths (FIT import in app._parse_fit_stats, ICU
     sync-path detection in power_curve's backfill) call this, so recognition
@@ -1049,8 +1050,10 @@ def evaluate_ftp_test(power_series, cadence_series=None,
     # owner's history read 6-45% below FTP (tempo and long rides); a rider
     # testing all-out lands near FTP. A named or structured test is scored
     # whatever it reads.
+    # A test planned for the day is a test whatever it reads (planned_test):
+    # the rider meant to test, so a real drop must be able to show.
     if (kind in ("coggan_20min", "sixty_min") and prior > 0
-            and not _hint_test_kind(filename_hint)
+            and not planned_test and not _hint_test_kind(filename_hint)
             and val < _NEAR_MAXIMAL * prior):
         return None
     delta = round((val - prior) / prior * 100.0, 1) if prior > 0 else 0.0
@@ -1082,7 +1085,12 @@ def evaluate_ftp_test(power_series, cadence_series=None,
         "ftp_test_halted": False,
         "ftp_test_halt_step": None,
     }
-    if kind == "ramp" and cadence_series:
+    # The halt check assumes the shipped ramp protocol from the ride's first
+    # second, so it reads only a named/structured ramp. A ramp found by shape
+    # (_ramp_segment) may sit anywhere in the ride and ends in a collapse by
+    # definition; on the owner's 10-06 ride the check read the warm-up as
+    # "halted at step 2".
+    if kind == "ramp" and cadence_series and _hint_test_kind(filename_hint):
         halt = detect_ramp_halt(power_series, cadence_series)
         if halt and halt.get("halted"):
             out["ftp_test_halted"] = True

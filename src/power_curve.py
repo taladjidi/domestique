@@ -802,12 +802,16 @@ def _maybe_detect_ftp_test(data: dict, streams: dict) -> None:
         # The test windows count seconds: intervals.icu streams skip seconds
         # (smart recording, pauses), so put them on the 1 Hz grid the FIT
         # path uses, or a "20-min" window spans more than 20 minutes.
+        cadence = streams.get("cadence")
         times = streams.get("time")
         if isinstance(times, list) and len(times) == len(watts_c):
+            if isinstance(cadence, list) and len(cadence) == len(watts_c):
+                cadence = fe.resample_series_1hz(times, cadence)
             watts_c = fe.resample_series_1hz(times, watts_c)
-        # Conservative floor: every scorable protocol sustains ≥20 min (of
-        # time, after the grid; a sample count under-reads a sparse ride).
-        if len(watts_c) < 1200:
+        # Floor (of time, after the grid): a ramp recorded only up to failure
+        # can be ~18 min (5-min warm-up + 13 steps); the detector's own rules
+        # ask more of each protocol.
+        if len(watts_c) < 600:
             return
         # Grill pipeline/F1: the activity NAME is the only recognition hint —
         # the planned slot's zwo filename must never be force-fed here, or
@@ -816,10 +820,11 @@ def _maybe_detect_ftp_test(data: dict, streams: dict) -> None:
         # already runs the power-shape rules on EVERY ride (a name that says
         # nothing falls through to them), not only on planned test days, so
         # those rules carry the precision (2026-10-15: steady, near-maximal,
-        # a ramp anywhere); the planned-day retry below adds nothing today.
+        # a ramp anywhere). The planned-day retry lifts the near-maximal rule:
+        # on a planned test day a real FTP drop must be able to show.
         res = fe.evaluate_ftp_test(
             watts_c,
-            cadence_series=streams.get("cadence"),
+            cadence_series=cadence,
             filename_hint=[data.get("name") or ""],
             prior_ftp=prior,
         )
@@ -828,9 +833,10 @@ def _maybe_detect_ftp_test(data: dict, streams: dict) -> None:
             if _planned_ftp_test_hint(day):
                 res = fe.evaluate_ftp_test(
                     watts_c,
-                    cadence_series=streams.get("cadence"),
+                    cadence_series=cadence,
                     filename_hint=None,
                     prior_ftp=prior,
+                    planned_test=True,
                 )
         if res:
             data.update(res)

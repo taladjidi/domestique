@@ -780,7 +780,7 @@ def _maybe_detect_ftp_test(data: dict, streams: dict) -> None:
     the fetch-policy circularity the grill flagged: ICU list payloads carry
     no watts, so a shape gate could never fire pre-fetch). Recognition =
     evaluate_ftp_test, the SAME entry point as the FIT-import path, hinted
-    with the planned test-day's zwo filename + the ICU activity name.
+    with the ICU activity name; the power-shape rules run on every ride.
     Strava-origin rides never reach here (no streams — documented carve-out;
     FIT import remains their path). A ride the rider already reviewed
     (ftp_test_review) or that already carries a suggestion is never
@@ -790,8 +790,7 @@ def _maybe_detect_ftp_test(data: dict, streams: dict) -> None:
                 or data.get("ftp_test_review") is not None):
             return
         watts = streams.get("watts") or streams.get("power")
-        # Conservative floor: every scorable protocol sustains ≥20 min.
-        if not isinstance(watts, list) or len(watts) < 1200:
+        if not isinstance(watts, list):
             return
         import fitness_estimation as fe
         try:
@@ -800,13 +799,24 @@ def _maybe_detect_ftp_test(data: dict, streams: dict) -> None:
         except Exception:
             prior = 0
         watts_c = [int(w or 0) for w in watts]
+        # The test windows count seconds: intervals.icu streams skip seconds
+        # (smart recording, pauses), so put them on the 1 Hz grid the FIT
+        # path uses, or a "20-min" window spans more than 20 minutes.
+        times = streams.get("time")
+        if isinstance(times, list) and len(times) == len(watts_c):
+            watts_c = fe.resample_series_1hz(times, watts_c)
+        # Conservative floor: every scorable protocol sustains ≥20 min (of
+        # time, after the grid; a sample count under-reads a sparse ride).
+        if len(watts_c) < 1200:
+            return
         # Grill pipeline/F1: the activity NAME is the only recognition hint —
         # the planned slot's zwo filename must never be force-fed here, or
         # ANY ≥20-min ride on a planned test day (an easy spin instead of the
-        # skipped test) would be stamped as that test. The planned day only
-        # earns a shape-heuristic retry when the name says nothing: a genuine
-        # test ridden under a garbage title still gets recognised by its
-        # power profile, while a Z2 spin fails every shape guard.
+        # skipped test) would be stamped as that test. Note the first call
+        # already runs the power-shape rules on EVERY ride (a name that says
+        # nothing falls through to them), not only on planned test days, so
+        # those rules carry the precision (2026-10-15: steady, near-maximal,
+        # a ramp anywhere); the planned-day retry below adds nothing today.
         res = fe.evaluate_ftp_test(
             watts_c,
             cadence_series=streams.get("cadence"),

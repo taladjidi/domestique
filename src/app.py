@@ -17482,53 +17482,11 @@ def api_plan_auto_recalc():
 # history list.
 
 
+# The FTP tests' 1 Hz grid lives with the detector (fitness_estimation), so
+# the intervals.icu sync path uses it too; the FIT path keeps this name.
 def _resample_series_1hz(ts: list, values: list) -> list:
-    """FTP-tests IP — strict 1 Hz grid for the test calculators.
-
-    Zwift writes 1 Hz FITs, but Garmin/Wahoo "smart recording" writes a
-    record only when something changes (0.2–1 Hz, uneven). Every FTP-test
-    window in fitness_estimation counts SAMPLES as seconds, so on a sparse
-    file a "20-min" window would silently span far more wall time and
-    under-read the test. Rebuild second-by-second using record timestamps:
-    hold the last value across gaps ≤ 3 s (sensor cadence), zero beyond
-    (coasting/pause — matches how power meters behave when stopped).
-
-    Returns ``values`` unchanged when timestamps are absent/unusable or the
-    stream is already ~1 Hz (the overwhelmingly common case — zero risk to
-    the existing Zwift path).
-    """
-    n = len(values)
-    if n < 2 or len(ts) != n:
-        return values
-    pairs = [(t, v) for t, v in zip(ts, values) if t is not None]
-    if len(pairs) < max(2, int(0.9 * n)):
-        return values  # too many missing timestamps to trust the grid
-    t0 = pairs[0][0]
-    tN = pairs[-1][0]
-    span = tN - t0
-    if span <= 0 or span > 24 * 3600:
-        return values
-    # Already ~1 Hz? Grill F2: the tolerance must not scale unbounded with
-    # ride length — on a 3000-sample ride a flat 2% allowance (60 s) swallowed
-    # a genuine 60-s autopause, letting a 20-min window span the pause as
-    # contiguous time and over-read the test. Absolute cap 10 s.
-    if abs(span - (len(pairs) - 1)) <= max(2.0, min(10.0, 0.02 * len(pairs))):
-        return values
-    out = [0] * (int(span) + 1)
-    prev_t = None
-    prev_v = 0
-    for t, v in pairs:
-        i = int(t - t0)
-        if 0 <= i < len(out):
-            out[i] = v
-        if prev_t is not None:
-            gap_lo = int(prev_t - t0) + 1
-            gap_hi = min(i, gap_lo + 3)  # hold ≤3 s, zero beyond
-            for j in range(gap_lo, gap_hi):
-                if 0 <= j < len(out):
-                    out[j] = prev_v
-        prev_t, prev_v = t, v
-    return out
+    import fitness_estimation as _fe
+    return _fe.resample_series_1hz(ts, values)
 
 
 def _sitko_advisory(best_20min_w: int) -> "dict | None":

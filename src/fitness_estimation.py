@@ -745,9 +745,109 @@ def _hint_test_kind(filename_hint) -> "str | None":
     return None
 
 
+_RAMP_MIN_STEPS = 10      # shortest common ramp: Zwift ~11 min, TrainerRoad ~12
+_RAMP_MIN_RISE = 1.4      # peak minute / first minute of the climb
+_RAMP_MIN_PEAK_FTP = 1.1  # a ramp ends near MAP, well above FTP
+_RAMP_COLLAPSE = 0.70     # the two minutes after the peak, / the peak minute
+_NEAR_MAXIMAL = 0.92      # unnamed 20/60-min test: result / current FTP
+
+
+def resample_series_1hz(ts: list, values: list) -> list:
+    """FTP-tests IP — strict 1 Hz grid for the test calculators.
+
+    Zwift writes 1 Hz FITs, but Garmin/Wahoo "smart recording" writes a
+    record only when something changes (0.2–1 Hz, uneven). Every FTP-test
+    window in fitness_estimation counts SAMPLES as seconds, so on a sparse
+    file a "20-min" window would silently span far more wall time and
+    under-read the test. Rebuild second-by-second using record timestamps:
+    hold the last value across gaps ≤ 3 s (sensor cadence), zero beyond
+    (coasting/pause — matches how power meters behave when stopped).
+
+    Returns ``values`` unchanged when timestamps are absent/unusable or the
+    stream is already ~1 Hz (the overwhelmingly common case — zero risk to
+    the existing Zwift path).
+    """
+    n = len(values)
+    if n < 2 or len(ts) != n:
+        return values
+    pairs = [(t, v) for t, v in zip(ts, values) if t is not None]
+    if len(pairs) < max(2, int(0.9 * n)):
+        return values  # too many missing timestamps to trust the grid
+    t0 = pairs[0][0]
+    tN = pairs[-1][0]
+    span = tN - t0
+    if span <= 0 or span > 24 * 3600:
+        return values
+    # Already ~1 Hz? Grill F2: the tolerance must not scale unbounded with
+    # ride length — on a 3000-sample ride a flat 2% allowance (60 s) swallowed
+    # a genuine 60-s autopause, letting a 20-min window span the pause as
+    # contiguous time and over-read the test. Absolute cap 10 s.
+    if abs(span - (len(pairs) - 1)) <= max(2.0, min(10.0, 0.02 * len(pairs))):
+        return values
+    out = [0] * (int(span) + 1)
+    prev_t = None
+    prev_v = 0
+    for t, v in pairs:
+        i = int(t - t0)
+        if 0 <= i < len(out):
+            out[i] = v
+        if prev_t is not None:
+            gap_lo = int(prev_t - t0) + 1
+            gap_hi = min(i, gap_lo + 3)  # hold ≤3 s, zero beyond
+            for j in range(gap_lo, gap_hi):
+                if 0 <= j < len(out):
+                    out[j] = prev_v
+        prev_t, prev_v = t, v
+    return out
+
+
+def _ramp_segment(powers, prior_ftp: int = 0) -> "dict | None":
+    """A ramp to failure anywhere in a 1 Hz power series, or None.
+
+    The climb ends at the ride's best 60 s. Minutes are counted on a grid
+    aligned to that best minute, walking back while each minute is no more
+    than 5 W below the one before it and no more than 40 W above (a ramp
+    step; a flat block entered from easy riding has a larger cliff). It
+    qualifies with at least _RAMP_MIN_STEPS minutes, a rise of
+    _RAMP_MIN_RISE, a peak of _RAMP_MIN_PEAK_FTP x FTP when FTP is known, and
+    a collapse: the two minutes after the peak average at most
+    _RAMP_COLLAPSE of it (or the ride ends there). A hard climb at the end
+    of a ride is too short; a steady block is flat."""
+    n = len(powers)
+    if n < 180:
+        return None
+    cur = sum(powers[:60])
+    best, bi = cur, 0
+    for i in range(1, n - 59):
+        cur += powers[i + 59] - powers[i - 1]
+        if cur > best:
+            best, bi = cur, i
+    off = bi % 60
+    minutes = [sum(powers[i:i + 60]) / 60.0
+               for i in range(off, n - 59, 60)]
+    k = (bi - off) // 60
+    if not (0 <= k < len(minutes)):
+        return None
+    j = k
+    while j > 0 and -5 <= minutes[j] - minutes[j - 1] <= 40:
+        j -= 1
+    steps = k - j + 1
+    peak = minutes[k]
+    after = minutes[k + 1:k + 3]
+    collapse = (len(after) < 2
+                or sum(after) / len(after) <= _RAMP_COLLAPSE * peak)
+    if (steps >= _RAMP_MIN_STEPS
+            and peak >= _RAMP_MIN_RISE * max(minutes[j], 1.0)
+            and (not prior_ftp or peak >= _RAMP_MIN_PEAK_FTP * prior_ftp)
+            and collapse):
+        return {"start_s": off + 60 * j, "peak_s": bi, "steps": steps}
+    return None
+
+
 def detect_ftp_test_shape(
     power_series: list[int] | list[float],
     filename_hint=None,
+    prior_ftp: int = 0,
 ) -> str | None:
     """T1 — classify a ride's power profile as Coggan 20-min, Ramp, or not a test.
 
@@ -757,12 +857,15 @@ def detect_ftp_test_shape(
     the tests as tagged workouts, this is the normal path.
 
     The power-shape heuristic is a CONSERVATIVE fallback for free-form rides:
-      * Ramp: a LATE-PEAKING monotone climb — the ride's best-60s sits in the
-        last third AND the last-third mean is ≥ 1.5× the first-third mean. A
-        4×8 threshold ride (peaks spread throughout, first-third ≈ last-third)
-        fails both ⇒ not a ramp.
-      * Coggan: a single sustained ≥18-min plateau ≥ 1.15× ride-mean with NO
+      * Ramp: a ramp to failure ANYWHERE in the ride (_ramp_segment): ten or
+        more one-minute steps climbing to the ride's best minute, then a
+        collapse. A rider rides to and from a test, so the ride around it
+        must not hide it (the owner's 10-06 ramp, inside a 75-min ride, was
+        missed by the old whole-ride rule).
+      * Coggan: a single steady ≥18-min plateau ≥ 1.15× ride-mean with NO
         second comparable plateau (rejects 2×20) and a blow-out shape present.
+      * Unnamed Coggan and 60-min results must also be near-maximal
+        (evaluate_ftp_test, _NEAR_MAXIMAL).
 
     Ambiguous → None (never auto-score a random hard ride).
 
@@ -777,46 +880,10 @@ def detect_ftp_test_shape(
     n = len(power_series)
     powers = [float(p or 0) for p in power_series]
 
-    # Ramp heuristic. Grill FP-2: "best-60s late + 1.5× thirds ratio" alone
-    # fires on ANY easy-start/hard-finish ride (a late 15-min climb at steady
-    # power scored as a ramp, suggesting 0.75× climb power). A real ramp is a
-    # MONOTONE CLIMB: require (c) a run of ≥8 consecutive non-decreasing
-    # minute-means ending at the best minute with a ≥40% net rise across the
-    # run — a steady block is flat (run length 1–2) and fails — and (d) ride
-    # short enough to be a ramp at all (≤60 min; the shipped protocol is 35).
-    if 180 <= n <= 3600:
-        third = n // 3
-        first_mean = sum(powers[:third]) / third
-        last_mean = sum(powers[2 * third:]) / (n - 2 * third)
-        # best-60s location
-        window = 60
-        cur = sum(powers[:window])
-        best = cur
-        best_idx = 0
-        for i in range(1, n - window + 1):
-            cur += powers[i + window - 1] - powers[i - 1]
-            if cur > best:
-                best = cur
-                best_idx = i
-        best_in_last_third = best_idx >= 2 * third
-        if (best_in_last_third and first_mean > 0
-                and last_mean >= 1.5 * first_mean):
-            minutes = _minute_averages(powers)
-            m_best = min(best_idx // 60, len(minutes) - 1)
-            j = m_best
-            # Extend the climb backwards: each backward step may neither rise
-            # (>5 W would mean power FELL going forward) nor drop more than a
-            # plausible ramp step (40 W) — a flat block preceded by easy
-            # riding has a >40 W cliff at its start and the run stops there.
-            while j > 0:
-                d = minutes[j] - minutes[j - 1]
-                if d < -5 or d > 40:
-                    break
-                j -= 1
-            run_len = m_best - j + 1
-            run_base = max(minutes[j], 1.0)
-            if run_len >= 8 and minutes[m_best] >= 1.4 * run_base:
-                return "ramp"
+    # Ramp heuristic (_ramp_segment). Grill FP-2 still holds: a late steady
+    # climb is flat, not a staircase, and fails; so does a short hard finish.
+    if n >= 180 and _ramp_segment(powers, prior_ftp) is not None:
+        return "ramp"
 
     # Sixty-min heuristic — checked BEFORE Coggan because a 60-min plateau
     # contains an 18-min one (order is load-bearing). Guards keep an ordinary
@@ -877,7 +944,15 @@ def detect_ftp_test_shape(
                     best = cur
                     best_idx = k
             best_mean = best / pw
-            if best_mean >= 1.15 * ride_mean and best_mean >= 150:
+            # 2026-10-15 (owner's rides): the plateau must be one steady
+            # effort, as the test is. A long tempo stretch broken by
+            # surges and easy minutes (a neuromuscular session ridden long)
+            # matched the old rule and was offered as a test 8 times out of
+            # 8 on the owner's history: no minute of a test sits below 85%
+            # of its mean.
+            flat = all(m >= 0.85 * best_mean
+                       for m in minutes[best_idx:best_idx + pw])
+            if best_mean >= 1.15 * ride_mean and best_mean >= 150 and flat:
                 # Reject a SECOND comparable ≥18-min plateau that does not
                 # overlap the first (2×20 / repeat-block ride).
                 second = False
@@ -931,7 +1006,8 @@ def evaluate_ftp_test(power_series, cadence_series=None,
             0 if (p is None or p < 0 or p > 2500) else p
             for p in power_series
         ]
-    kind = detect_ftp_test_shape(power_series, filename_hint=filename_hint)
+    kind = detect_ftp_test_shape(power_series, filename_hint=filename_hint,
+                                 prior_ftp=int(prior_ftp or 0))
     if not kind:
         return None
     if (kind == "coggan_20min" and not _hint_test_kind(filename_hint)
@@ -968,6 +1044,15 @@ def evaluate_ftp_test(power_series, cadence_series=None,
     if not (50 <= val <= 600):
         return None
     prior = int(prior_ftp or 0)
+    # 2026-10-15: a sustained block found by shape alone (no test name) is a
+    # test only if it was near-maximal. Every unnamed false positive on the
+    # owner's history read 6-45% below FTP (tempo and long rides); a rider
+    # testing all-out lands near FTP. A named or structured test is scored
+    # whatever it reads.
+    if (kind in ("coggan_20min", "sixty_min") and prior > 0
+            and not _hint_test_kind(filename_hint)
+            and val < _NEAR_MAXIMAL * prior):
+        return None
     delta = round((val - prior) / prior * 100.0, 1) if prior > 0 else 0.0
     method = "coggan_20min" if (kind == "sixty_min" and fallback) else kind
     sug = {

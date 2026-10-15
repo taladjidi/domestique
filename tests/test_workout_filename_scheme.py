@@ -28,9 +28,10 @@ sys.path.insert(0, str(ROOT / "src" / "scripts"))
 
 _REP = r"\d+x\d+(?:s|min)(?:-\d+(?:s|min))?"        # 4x8min-4min, 13x30s
 _SERIES = r"\d+x" + _REP                            # 3x13x30s-15s (Ronnestad)
+_EFFORTS = r"\d+(?:-\d+)+min"                       # 12-7-3min: separate efforts (CP test)
 NAME_RE = re.compile(
     r"^(?P<cls>[a-z0-9]+(?:_[a-z0-9]+)*?)"
-    r"_(?P<struct>steady|ladder\d+|" + _SERIES + r"|" + _REP + r")"
+    r"_(?P<struct>steady|ladder\d+|" + _SERIES + r"|" + _REP + r"|" + _EFFORTS + r")"
     r"(?:_(?P<pct>\d+)pct)?"
     r"_(?P<dur>\d+)min(?:_v\d+)?\.zwo$")
 

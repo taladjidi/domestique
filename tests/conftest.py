@@ -255,11 +255,18 @@ def _restore_tp_profile_dirs():
     """
     import training_planner as _tp
     plan_dir, workout_dir = _tp.PLAN_DIR, _tp.WORKOUT_DIR
+    extra_dir = getattr(_tp, "EXTRA_WORKOUT_DIR", None)
     yield
     if _tp.PLAN_DIR != plan_dir:
         _tp.PLAN_DIR = plan_dir
     if _tp.WORKOUT_DIR != workout_dir:
         _tp.WORKOUT_DIR = workout_dir
+    # 3.13.1: the rider's extra workouts folder is the same kind of global.
+    _tp.EXTRA_WORKOUT_DIR = extra_dir
+    import sys as _sys
+    _app = _sys.modules.get("app")
+    if _app is not None and hasattr(_app, "EXTRA_WORKOUT_DIR"):
+        _app.EXTRA_WORKOUT_DIR = extra_dir
 
 
 @pytest.fixture(autouse=True)

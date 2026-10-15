@@ -9,9 +9,9 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python">
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-green" alt="Platform">
-  <img src="https://img.shields.io/badge/Workouts-4307-orange" alt="Workouts">
+  <img src="https://img.shields.io/badge/Workouts-4308-orange" alt="Workouts">
   <img src="https://img.shields.io/badge/Routes-622-purple" alt="Routes">
-  <img src="https://img.shields.io/badge/Version-v3.12.2-brightgreen" alt="Version">
+  <img src="https://img.shields.io/badge/Version-v3.13.1-brightgreen" alt="Version">
   <img src="https://img.shields.io/badge/Tests-3240-success" alt="Tests">
   <img src="https://img.shields.io/github/downloads/platypus45/domestique/total?label=Downloads&color=blue" alt="Downloads">
 </p>
@@ -759,7 +759,7 @@ One session, end to end — the prescription, the ride that came back, and what 
 
 ## Releases
 
-Latest: **[v3.12.2 — Your profile and your FTP stay yours](https://github.com/platypus45/domestique/releases/latest)** (2026-10-12).
+Latest: **[v3.13.1 — Your own workouts, added to the full library](https://github.com/platypus45/domestique/releases/latest)** (2026-10-14).
 
 GitHub Actions ([release.yml](.github/workflows/release.yml)) builds and uploads the macOS DMG + Windows EXE + Linux AppImage on every tagged release. The three jobs are independent: a Linux failure cannot hold up or damage the macOS and Windows artifacts.
 

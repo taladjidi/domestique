@@ -62,6 +62,15 @@ class ProfilePathRebindingTests(unittest.TestCase):
         src = inspect.getsource(app._apply_profile_paths)
         self.assertIn("apply_training_dirs()", src)   # the planner's WORKOUT_DIR
         self.assertIn("global GPX_DIR", src)
+        # 3.13.1 (upstream asserts app's own `WORKOUT_DIR = _BUNDLED_WORKOUT_DIR`
+        # and `EXTRA_WORKOUT_DIR = tp.extra_workout_dir_for(wp)`; here the
+        # planner owns both, contract 5.1): the built-in library stays, the
+        # profile's folder is extra, and the app keeps no copy of either.
+        from profile_manager import ProfileManager
+        pm_src = inspect.getsource(ProfileManager.apply_training_dirs)
+        self.assertIn('training_planner.WORKOUT_DIR = Path(training_planner.__file__).parent / "workouts"', pm_src)
+        self.assertIn("training_planner.EXTRA_WORKOUT_DIR = training_planner.extra_workout_dir_for(wp_dir)", pm_src)
+        self.assertFalse(hasattr(app, "EXTRA_WORKOUT_DIR"))
         self.assertIn("GPX_DIR = gp", src)
 
     def test_no_module_binds_the_value_instead_of_the_name(self):

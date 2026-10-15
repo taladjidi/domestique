@@ -492,7 +492,13 @@ class TestGHWindow:
         assert r["deleted"] == 0
         assert _eid(stub, YESTERDAY) in fake.ids()
         get_call = next(c for c in fake.calls if c[0] == "GET")
-        assert f"oldest={TODAY.isoformat()}" in get_call[1]
+        # #28 restated G-H pin: the read looks 7 days back (a workout the
+        # rider moved there stays visible); a past-day event is never
+        # deleted (above) or re-dated (no upsert names it).
+        assert f"oldest={(TODAY - timedelta(days=7)).isoformat()}" in get_call[1]
+        assert not any(c[0] == "POST" and any(
+            ev["external_id"] == _eid(stub, YESTERDAY) for ev in c[2])
+            for c in fake.calls)
 
     def test_past_session_not_pushed(self, stub, fake):
         _apikey(stub)

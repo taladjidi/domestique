@@ -379,7 +379,9 @@ def score_ride(planned: dict, ride: dict, mode: str, *,
         # applies to an unmatched slot.
         _zwo_l = str(planned.get("zwo_file") or "").lower()
         _tt = str(planned.get("ftp_test_type") or "").lower()
-        if "ftp_test_ramp" in _zwo_l or (not _zwo_l and _tt == "ramp"):
+        # A CP test is three all-out efforts: intensity has no target to meet.
+        if ("ftp_test_ramp" in _zwo_l or "ftp_test_cp" in _zwo_l
+                or (not _zwo_l and _tt in ("ramp", "cp_test"))):
             return {"score": None, "basis": "load_only",
                     "components": {"duration": None, "load": None,
                                    "intensity": None},

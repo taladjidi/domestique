@@ -114,15 +114,19 @@ def test_setup_save_moves_the_planner_and_the_app_together(stub):
     r = stub.client.post("/api/setup/save", json={"workout_dir": str(custom)})
     assert r.status_code == 200, r.text
 
-    # one directory
-    assert Path(stub.app.active_workout_dir()) == Path(tp.active_workout_dir()) == custom
-    # the planner plans from it
+    # one directory, owned by the planner. 3.13.1: the saved folder is the
+    # EXTRA folder; the built-in library stays the library.
+    assert Path(stub.app.active_workout_dir()) == Path(tp.active_workout_dir()) == tp._BUNDLED_WORKOUT_DIR
+    assert tp.EXTRA_WORKOUT_DIR == custom and not hasattr(stub.app, "EXTRA_WORKOUT_DIR")
+    # the planner plans from both
     files = {row.get("File") for row in tp.load_workout_library()}
     assert "ONLY_CUSTOM_0.zwo" in files
-    # a file the planner would plan is the file the app serves
+    # a file the planner would plan is the file the app serves, the extra
+    # folder's own included
     planned = sorted(f for f in files if f)[0]
-    r = stub.client.get(f"/api/workout/download/{planned}")
-    assert r.status_code == 200, (planned, r.status_code, r.text[:120])
+    for name in (planned, "ONLY_CUSTOM_0.zwo"):
+        r = stub.client.get(f"/api/workout/download/{name}")
+        assert r.status_code == 200, (name, r.status_code, r.text[:120])
     # and the calendar push finds it
     day = (clock.today() + timedelta(days=1)).isoformat()
     plan = {"weeks": [{"week_num": 1, "start": clock.today().isoformat(),

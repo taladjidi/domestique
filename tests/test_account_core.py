@@ -219,7 +219,9 @@ def test_a3_profile_b_starts_clean_roundtrip_preserves_a(tmp_path):
     (pm.active_dir / "user_paths.json").write_text(
         json.dumps({"workout_dir": str(custom)}), encoding="utf-8")
     pm.apply_training_dirs()
-    assert tp.WORKOUT_DIR == custom
+    # 3.13.1: A's folder adds to the built-in library, which stays.
+    assert tp.WORKOUT_DIR == Path(tp.__file__).parent / "workouts"
+    assert tp.EXTRA_WORKOUT_DIR == custom
 
     b = pm.create_profile("Bob")
     pm.switch(b)
@@ -237,6 +239,7 @@ def test_a3_profile_b_starts_clean_roundtrip_preserves_a(tmp_path):
     assert pm.target_mode == "power"
     # AC2b: WORKOUT_DIR reset to the bundled default, not A's custom dir
     assert tp.WORKOUT_DIR == Path(tp.__file__).parent / "workouts"
+    assert tp.EXTRA_WORKOUT_DIR is None                   # B has no extra folder
 
     # round-trip back: A intact
     pm.switch(a)
@@ -244,7 +247,7 @@ def test_a3_profile_b_starts_clean_roundtrip_preserves_a(tmp_path):
     assert pm.icu_access_token == "tok_a"
     assert len(rs.load_icu_rides()) == 1
     assert len(rs.load_recent_wellness()) == 1
-    assert tp.WORKOUT_DIR == custom
+    assert tp.EXTRA_WORKOUT_DIR == custom          # 3.13.1: A's folder is extra again
 
 
 # ─── A10: disconnect-purge vs in-flight pass ─────────────────────────────────

@@ -1,5 +1,72 @@
 # Changelog
 
+## v3.13.1 — Your own workouts, added to the full library (2026-10-14)
+
+This release fixes the Critical Power test for riders who use their own workout folder, and changes what that folder does: from now on it adds workouts to Domestique's library instead of replacing it.
+
+### The built-in library is always there
+
+- **Fixed: choosing the Critical Power test said the workout was not in the library.** Riders who had set their own workout folder in setup were using only that folder, instead of the library that comes with Domestique. A folder set up before 3.13.0 doesn't have the new CP test, so choosing it failed. The same was true for every workout added in a later release.
+- **Your own folder now adds to the library.** Domestique always uses its built-in library, with every workout it ships, the FTP and CP tests included. The workouts in your own folder join it: they show in the workout library and the planner uses them. If your folder has a file with the same name as a built-in workout, the built-in one is used. Your workout files are not changed.
+- **An old install's library is no longer used by mistake.** The setup wizard used to fill in the location of the app's own library and save it. After an update, especially with the Windows download unpacked to a new folder, Domestique kept reading the old version's library. A saved folder that is a copy of Domestique's own library now only adds the workouts you put there yourself, so you always get the current versions of ours, and old or renamed copies don't come back.
+
+### Choose your extra workouts in Settings
+
+- **A new Workout library card in Settings.** It shows the built-in library (always on) and **Your extra workouts**: the folder you add, its path, and how many of its workouts were added to your library.
+- **Choose folder…** opens your computer's own folder picker on macOS, Windows and Linux. Where no picker can open, you can type the folder's path instead. **Remove** stops using the folder; the built-in library stays.
+- **Clear answers when a folder can't be used:** a folder without .zwo workout files (with a hint when they sit in a folder inside it), a folder outside your home folder, or the app's own library. A path pasted with quotes around it works too.
+- In first-time setup the field is now called **Extra workouts folder**, and it starts empty.
+
+## v3.13.0 — Your moves, your races, a Critical Power test (2026-10-14)
+
+This release is mostly about moving workouts. Whether you drag one in Domestique's Plan tab or in the intervals.icu calendar, it now stays where you put it, and Domestique's plan follows a move you make in intervals.icu. No workout gets lost on the way, and none ends up on two days. It also adds two things riders asked for: loading your races from intervals.icu into the plan builder, and a Critical Power test as a fourth FTP test. Safety fixes come with it: the plan no longer loses a change when two things edit it at once, a rest day is no longer turned into a ride of a few minutes, and a 60-minute test result can now be accepted.
+
+### Moving workouts in Domestique
+
+- **Dropping a workout on another training day swaps the two.** Until now, dropping a workout on a day that already had one replaced that day's workout, and the replaced one was gone. Now the two trade places: the workout you dragged lands on the new day, and the one that was there moves to the day you dragged from. The message after the drop names both workouts and both days. A workout you had skipped stays skipped on its new day, and the message says so.
+- **Dropping on a rest day or an empty day works as before.** The workout moves, and the day it left becomes a rest day.
+- **Some drops are refused, with a reason.** A drop is refused when either day has already been ridden ("That day has already been ridden.") or holds two sessions ("Days with two sessions can't be changed by dragging yet."). A missed workout from a day that has passed can still go to a rest day, but not onto another workout: that one would land on the passed day and count as missed. Nothing in your plan changes when a drop is refused.
+- **A workout you moved keeps its length.** When you change the hours you have on a day, the plan resizes that day's workout to fit. A workout you moved there yourself now keeps its length, because you picked that day for that workout. If you set the day to zero hours, the workout still makes way, as before.
+- **The Plan tab shows which workouts you moved.** A moved workout says "moved" on its card, in both the week view and the calendar. Hover over it to see why its length stays as it is.
+- **The automatic reschedule is unchanged.** When Domestique moves a missed workout forward on its own, it still takes an easy day the way it did. Only your own drags swap.
+
+### Moves made in the intervals.icu calendar
+
+Many riders move workouts in the intervals.icu calendar, on the web or in the app, because that is where their watch or head unit gets them. Until now Domestique fought those moves: the next calendar update put the workout back on the day Domestique had planned. Sometimes it also deleted the moved workout the next morning.
+
+- **Your plan follows a move you make in intervals.icu.** Move a workout to a rest day in the same week, today or later, and the next calendar update moves it in Domestique's plan too, as if you had dragged it there. That also works for a workout you had moved before. A move to today works too, for example to ride Thursday's workout now. If Domestique only sees the move after you rode it, intervals.icu may show the ride and the planned workout separately; your ride and Domestique's own record of it are not affected. It shows as "moved" in the Plan tab and keeps its length. After you press Push, the message adds "· 1 workout moved in your plan to match intervals.icu".
+- **When the plan can't follow, the workout still stays where you put it.** A move onto a day that already has a workout, into another week or into the past, onto a day you marked unavailable or a race day, two workouts moved onto the same day, and a copy are not copied into the plan: Domestique can't be sure what you mean there. If most of your workouts look moved at once, Domestique assumes the dates are being read wrong and changes nothing.
+- **A workout you move in intervals.icu stays there.** Automatic calendar sync, the "Push to intervals.icu calendar" button in the Plan tab and the "Send to intervals.icu calendar" button in a workout all leave it on the day you moved it to. They never delete it.
+- **It also stays when Domestique reschedules.** If Domestique later moves or swaps that workout in its own plan, it does not send a second copy to another day. The workout is on your calendar once, on the day you chose.
+- **Making the same move in both places ends clean.** If you move a workout in intervals.icu and make the same move in Domestique, you end up with one workout on that day, not two.
+- **Swaps reach your calendar correctly.** When two workouts swap in Domestique, both are updated in place on your intervals.icu calendar. If one of them can't be built (for example its workout file is missing), nothing is put on the wrong day.
+- **When you change that day in Domestique, Domestique's plan wins.** If you later change the original day in Domestique (a different workout, a skipped workout, or a workout you dragged there), that change goes to your calendar as usual. Workouts on days that have already passed are never moved or deleted.
+- **A copy you made in intervals.icu is left alone.** If you copied one of Domestique's workouts to a second day in intervals.icu, neither copy is changed or removed.
+- **The app tells you what it did.** After you press Push, the message adds, for example, "· 1 workout kept where you moved it in intervals.icu". With automatic calendar sync on, Settings shows the same count under the sync switch, for the rider whose profile is open. The "Send to intervals.icu calendar" button in a workout says "Already on your intervals.icu calendar for <date> — left where you put it" instead of sending it again.
+- **One calendar update at a time.** Automatic sync, the Push button and the Send button no longer run at the same moment. If one is already running, the others wait for it. If that takes too long, you see "A calendar update is already running — try again in a moment." Nothing has failed when you see this.
+
+### Your races from intervals.icu
+
+- **Load races from intervals.icu.** A new button under the plan builder's races reads the A, B and C races in your intervals.icu calendar for the coming year. You choose, per race, how it goes into this plan: as the plan's goal event, as a B or C race, or skip it. The earliest A race is suggested as the goal; a later A race is suggested as a B race, because a plan has one goal; races in other sports are suggested as skip. Nothing is saved until you press Generate, so check distance, climb and event type first.
+- An event plan ends on its goal day, so B and C races after the goal are left out, and the message says how many.
+
+### A Critical Power test
+
+- **A fourth FTP test: Critical Power.** Three all-out efforts of 12, 7 and 3 minutes, with 30 minutes of rest between them. Your power over the three gives your critical power, the highest power you can hold without steadily running out, and your FTP is set to it. It is the field protocol that was checked against laboratory testing; the sources are in the science notes.
+- **Your W′ (your capacity above CP) is shown, for information only.** Rests of 30 minutes measure CP well but W′ poorly, so it never changes your profile or your workouts.
+- **Correct or silent.** The test gives a number only when the three efforts fit one power curve closely. A 3-minute effort ridden well below your best, for example, gives no number instead of a CP that is too high. The test is recognised by its workout's name, also when an app adds its own prefix; a ride that only looks like it is never scored, not as a 20-minute test either.
+- It is in the test chooser next to the 20-minute, ramp and 60-minute tests. CP usually reads a few watts above an FTP from a 20-minute test.
+
+### Fixes
+
+- **Fixed: a 60-minute test result could not be accepted.** Pressing Update showed an error and kept your old FTP. This has been broken since the 60-minute test arrived in 3.11.0. Settings now also names a 60-minute or CP test as the source of your FTP.
+- **Fixed: B and C races in a General Fitness plan were ignored.** The plan builder showed the races section for that goal, but Generate never sent the races. It now does, as it already did for the FTP, VO2max and fitness goals.
+- **Fixed: turning calendar sync off, or disconnecting intervals.icu, during a calendar update could put your workouts back.** If an update was still running, it could finish after the clean-up and leave your workouts on the calendar, with nothing left to remove them. An update that was waiting now stops when sync goes off; one you start yourself with Push still runs.
+- **Fixed: the app could stop responding for a moment while you imported a ride file.** When a sync was adapting your plan at the same time, every screen waited for it. The import now waits on its own.
+- **Fixed: two changes to your plan at the same moment could lose one of them.** Many parts of the app that change your plan did so without waiting for each other. If one of them ran while another was busy, for example a sync adapting your week while you skipped a workout, the second save could quietly undo the first. Every change to the plan now waits its turn, so both are kept.
+- **Fixed: a rest day could come back as a ride of a few minutes, which later got a four-hour workout.** When you added hours to a rest day in a week that was only a little short of its training load, the plan put back a ride of 1 to 6 minutes. A later rematch could then fill that day with the longest file in the library, up to 240 minutes, and send it to your watch. A rest day now only comes back as a ride of at least 30 minutes. Otherwise it stays a rest day.
+- **Fixed: a ride put back on a rest day kept marks from the workout that used to be there.** It could stay pinned as if you had moved it there, so later plan updates passed it by, or be turned back into the old workout by a later plan check. A ride put back on a rest day now starts clean.
+
 ## v3.12.2 — Your profile and your FTP stay yours (2026-10-12)
 
 - **Fixed (important): first-run setup could take over another rider's profile.** If a profile was deleted twice, for example by a double click or from two open windows, the app could be left with riders on disk but none selected. It then opened first-run setup on top of one of those riders' profiles. Finishing setup overwrote that rider's settings, and linking a different intervals.icu account erased their synced rides and wellness. This came in with 3.12.1's setup fix. Deleting a profile that's already gone now does nothing, and with riders on disk but none selected, the app sends you to the profile picker. Found by a contributor.

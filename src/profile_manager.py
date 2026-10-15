@@ -708,17 +708,17 @@ class ProfileManager:
             log.info(f"Profile switched to '{profile_id}'")
 
     def apply_training_dirs(self) -> None:
-        """Point training_planner.PLAN_DIR / WORKOUT_DIR at the active profile.
+        """Point training_planner.PLAN_DIR / WORKOUT_DIR / EXTRA_WORKOUT_DIR
+        at the active profile.
 
         AC2b: ONE resolver shared by switch() and the boot path (app.py's
         lifespan calls this once post-activation so boot and switch agree).
-        WORKOUT_DIR resolution order:
-          1. `<active_dir>/user_paths.json`["workout_dir"] if that dir exists
-          2. `<active_dir>/workouts` if it exists
-          3. the BUNDLED default (`<training_planner dir>/workouts`) — the
-             else-branch that was missing pre-3.0.0: without it, profile A's
-             custom library stayed active after switching to B (sticky
-             WORKOUT_DIR, probe G).
+        WORKOUT_DIR is always the BUNDLED library (3.13.1). The rider's own
+        folder becomes EXTRA_WORKOUT_DIR, resolved in this order:
+          1. `<active_dir>/user_paths.json`["workout_dir"] if usable
+          2. `<active_dir>/workouts` if usable
+          3. none -- reset on every call, so profile A's folder never stays
+             active after switching to B (sticky WORKOUT_DIR, probe G).
         No-op when no profile is active.
         """
         if self._active_id is None:
@@ -743,12 +743,13 @@ class ProfileManager:
             default_per_profile = self.active_dir / "workouts"
             if training_planner.workout_dir_is_usable(default_per_profile):
                 wp_dir = default_per_profile
-        if wp_dir is None:
-            # Recompute the bundled default from the module location instead
-            # of caching the import-time value — the module global may have
-            # been mutated by an earlier switch (that's the bug).
-            wp_dir = Path(training_planner.__file__).parent / "workouts"
-        training_planner.WORKOUT_DIR = wp_dir
+        # 3.13.1: the built-in library is always the library; the rider's own
+        # folder (user_paths override or <profile>/workouts) adds to it.
+        # Recompute the bundled default from the module location instead of
+        # caching the import-time value — the module global may have been
+        # mutated by an earlier switch (that's the bug).
+        training_planner.WORKOUT_DIR = Path(training_planner.__file__).parent / "workouts"
+        training_planner.EXTRA_WORKOUT_DIR = training_planner.extra_workout_dir_for(wp_dir)
 
     def on_switch(self, callback: Callable) -> None:
         """Register a callback for profile switches."""
@@ -1028,7 +1029,7 @@ class ProfileManager:
             raise ValueError(f"ftp must be int, got {ftp!r}")
         if not (50 <= ftp <= 600):
             raise ValueError(f"ftp {ftp} out of range [50, 600]")
-        if method not in ("coggan_20min", "ramp", "manual"):
+        if method not in ("coggan_20min", "ramp", "sixty_min", "cp_test", "manual"):
             raise ValueError(f"unknown method {method!r}")
         entry = {
             "date": clock.now(timezone.utc).isoformat().replace("+00:00", "Z"),

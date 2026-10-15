@@ -701,7 +701,7 @@ class JsApi:
         slim/9.1: the served workout, fitted to a planned session's slot."""
         try:
             import app
-            p = app._safe_path(app.active_workout_dir(), filename)
+            p = app._workout_file(filename)
             if p and p.exists():
                 return app.served_zwo_bytes(p, slot_min or None, session_type or "",
                                             None, cap=False)

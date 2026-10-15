@@ -291,19 +291,19 @@ input.invalid { border-color: var(--red); }
   <div class="step-panel" id="step-3">
     <h2>Workout &amp; Route Folders</h2>
     <p class="info">
-      Domestique comes with a full <b>workout library built in</b>, so you can
-      leave both folders as they are. If you already keep your own workout
-      files or routes on this computer, point Domestique at those folders
-      instead — click <b>Browse</b> to pick one. You can change this anytime
-      in <b>Settings</b>.
+      Domestique comes with a full <b>workout library built in</b>, which is
+      always used, so you can leave both folders empty. If you keep your own
+      workout files on this computer, add that folder: its workouts join the
+      built-in library. Click <b>Browse</b> to pick one. You can change this
+      anytime in <b>Settings</b>.
     </p>
     <div class="form-row">
-      <label>Workouts folder <span class="skip-link">(optional)</span></label>
+      <label>Extra workouts folder <span class="skip-link">(optional)</span></label>
       <div style="display:flex;gap:8px;">
         <input type="text" id="s-workout-dir" placeholder="~/Documents/Workouts" style="flex:1;">
         <button type="button" class="btn btn-secondary" onclick="pickFolder(this, 's-workout-dir')" style="padding:8px 12px;white-space:nowrap;" title="Browse">&#128193; Browse</button>
       </div>
-      <div style="font-size:11px;color:var(--text3);margin-top:4px;">Structured workout files in .zwo format — e.g. exported from TrainerRoad or Zwift</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px;">Your own structured workout files (.zwo); they are added to the built-in library</div>
     </div>
     <div class="form-row">
       <label>Routes folder <span class="skip-link">(optional)</span></label>

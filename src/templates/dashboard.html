@@ -732,6 +732,8 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; h
   font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 2px;
   display: inline-block; letter-spacing: 0.04em;
 }
+/* #34: "moved" on a Plan-tab card, as on Home's This-week card. */
+.card-moved { color: #60a5fa; font-style: italic; }
 .cal-day .cal-planned-meta {
   font-size: 8px; color: var(--text2); margin-top: 1px;
 }
@@ -1427,6 +1429,16 @@ details > summary:hover::before { color: var(--accent); }
   text-align: left; z-index: 10000; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
   pointer-events: none;
 }
+/* 3.13.1 Settings: workout library card */
+.wl-row { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; margin-bottom:8px; flex-wrap:wrap; }
+.wl-icon { font-size:20px; line-height:1; }
+.wl-main { flex:1; min-width:180px; }
+.wl-title { font-size:13px; font-weight:600; }
+.wl-sub { font-size:12px; color:var(--text2); margin-top:2px; }
+.wl-path { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11px; color:var(--text3); margin-top:4px; word-break:break-all; }
+.wl-badge { font-size:11px; font-weight:600; color:var(--green,#22c55e); border:1px solid var(--green,#22c55e); border-radius:999px; padding:2px 8px; white-space:nowrap; }
+.wl-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.wl-manual { padding:0 2px 6px; }
 </style>
 <script src="/static/vendor/chart.umd.min.js"></script>
 <script src="/static/js/icu-link-reasons.js"></script>
@@ -2388,6 +2400,8 @@ window.addEventListener('unhandledrejection', function(e) {
         <div style="font-size:11px;color:var(--text2);font-weight:500;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Intermediate races (B / C) — optional</div>
         <div id="plan-bc-rows"></div>
         <button type="button" class="btn btn-sm" onclick="addBcRaceRow()">+ Add race</button>
+        <button type="button" class="btn btn-sm" onclick="icuRacesLoad()" title="Read the A, B and C races in your intervals.icu calendar and choose how each one goes into this plan">Load races from intervals.icu</button>
+        <div id="icu-races-panel" style="display:none;margin-top:8px;"></div>
       </div>
 
       <!-- Per-Day Availability Grid -->
@@ -3276,6 +3290,39 @@ window.addEventListener('unhandledrejection', function(e) {
     </div>
   </div>
 
+  <!-- 3.13.1: the workout library = the built-in library + an optional extra folder -->
+  <div class="card" style="margin-top:12px;" id="workout-library-card">
+    <h3>Workout library</h3>
+    <div class="wl-row">
+      <div class="wl-icon" aria-hidden="true">&#128218;</div>
+      <div class="wl-main">
+        <div class="wl-title">Built-in library</div>
+        <div class="wl-sub" id="wl-builtin">Every workout that comes with Domestique, including the FTP and CP tests.</div>
+      </div>
+      <span class="wl-badge">Always on</span>
+    </div>
+    <div class="wl-row">
+      <div class="wl-icon" aria-hidden="true">&#128193;</div>
+      <div class="wl-main">
+        <div class="wl-title">Your extra workouts</div>
+        <div class="wl-sub" id="wl-extra">Add a folder with your own .zwo files. They join the built-in library; your files are not changed.</div>
+        <div class="wl-path" id="wl-extra-path" style="display:none;"></div>
+      </div>
+      <div class="wl-actions">
+        <button type="button" class="btn btn-sm" id="wl-choose" onclick="wlChooseFolder(this)">Choose folder&hellip;</button>
+        <button type="button" class="btn btn-sm" id="wl-remove" style="display:none;" onclick="wlSetExtra('')">Remove</button>
+      </div>
+    </div>
+    <div id="wl-manual" class="wl-manual" style="display:none;">
+      <label for="wl-manual-path" class="wl-sub">The folder picker could not open here. Type the folder's path:</label>
+      <div style="display:flex;gap:6px;margin-top:4px;">
+        <input type="text" id="wl-manual-path" placeholder="~/Documents/Workouts" style="flex:1;min-width:0;">
+        <button type="button" class="btn btn-sm" onclick="wlSetExtra(document.getElementById('wl-manual-path').value)">Use folder</button>
+      </div>
+    </div>
+    <div id="wl-status" class="wl-sub" role="status" aria-live="polite" style="margin-top:6px;"></div>
+  </div>
+
   <!-- Connections (Intervals.icu) -->
   <div class="card" style="margin-top:12px;" id="icu-connection-card">
     <h3>Connections</h3>
@@ -3303,6 +3350,7 @@ window.addEventListener('unhandledrejection', function(e) {
           <input type="checkbox" id="icu-cal-sync-toggle" onchange="icuCalSyncToggle(this)">
           <span>Keep intervals.icu calendar in sync</span>
         </label>
+        <div id="icu-cal-sync-held" style="display:none;font-size:12px;color:var(--text2);margin-top:6px;"></div>
         <div id="icu-cal-sync-hint" style="font-size:11px;color:var(--text3);margin-top:4px;">
           Mirrors your next 14 days of planned workouts to your intervals.icu
           calendar after every plan change (Garmin &amp; MyWhoosh pull workouts
@@ -3858,8 +3906,13 @@ async function _pushWorkoutToCalendar(source, zwoFile, dateIso, name) {
                             name: name || ''})});
     r = await res.json();
   } catch (e) { r = {error: 'network'}; }
-  if (r && r.ok) {
+  if (r && r.ok && r.kept_on) {
+    // #28: the rider moved this workout in intervals.icu; it stays there.
+    showToast(`Already on your intervals.icu calendar for ${r.kept_on} — left where you put it`, 6000, 'success');
+  } else if (r && r.ok) {
     showToast(`On your intervals.icu calendar for ${dateIso} — Garmin / Wahoo / MyWhoosh will pull it automatically`, 6000, 'success');
+  } else if (r && r.error === 'busy') {
+    showToast('A calendar update is already running — try again in a moment.', 6000, 'warning');
   } else if (r && r.needs_reconnect) {
     showToast('Reconnect intervals.icu to grant calendar access', 6000, 'warning');
   } else if (r && r.needs_lthr) {
@@ -8557,7 +8610,8 @@ function showFtpTestModal(suggestion, opts) {
   const deltaColor = delta >= 0 ? '#22c55e' : '#ef4444';
   const methodLabel = fs.method === 'ramp' ? 'Ramp'
     : fs.method === 'coggan_20min' ? 'Coggan 20-min'
-    : fs.method === 'sixty_min' ? '60-min hour of power' : (fs.method || 'Unknown');
+    : fs.method === 'sixty_min' ? '60-min hour of power'
+    : fs.method === 'cp_test' ? 'Critical Power 12/7/3' : (fs.method || 'Unknown');
   let html = `<h2 style="margin-top:0;">FTP Test Detected</h2>`;
   html += `<div style="font-size:12px;color:var(--text2);letter-spacing:0.5px;font-weight:600;margin-bottom:8px;">METHOD: ${esc(methodLabel)}</div>`;
   html += `<div style="font-size:24px;font-weight:900;margin-bottom:6px;">Suggested new FTP: <span style="color:var(--accent);">${fs.ftp}</span> W</div>`;
@@ -8566,6 +8620,10 @@ function showFtpTestModal(suggestion, opts) {
   // 60-min early-quit fallback, pacing drift, Sitko level band.
   if (fs.fallback_from === 'sixty_min') {
     html += `<div style="background:rgba(234,179,8,0.10);border:1px solid #eab308;color:#a16207;padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;">The hour wasn't completed (sustained effort &lt; 50 min), so this number was scored with the validated 20-min method instead of a blind 60-min average.</div>`;
+  }
+  if (fs.method === 'cp_test' && fs.efforts_w) {
+    // W' from trials 30 min apart is not reliable (Karsten 2017): information only.
+    html += `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">Efforts: 12 min ${esc(String(fs.efforts_w['12min']))} W · 7 min ${esc(String(fs.efforts_w['7min']))} W · 3 min ${esc(String(fs.efforts_w['3min']))} W. Your FTP is set to your critical power. W′ ${esc(String(Math.round((fs.w_prime_j || 0) / 100) / 10))} kJ, for information only: rests of 30 minutes measure it poorly.</div>`;
   }
   if (fs.pacing_drift) {
     html += `<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">&#9888; Pacing drift ${esc(String(fs.pacing_drift_pct))}% between halves — an evenly paced test reads truer.</div>`;
@@ -8611,10 +8669,11 @@ async function renderFtpTestAnalysis(rideId, fs) {
   } catch (_) { host.innerHTML = ''; return; }
   const sug = a.suggestion || fs || {};
   const method = sug.method || sug.type || '';
-  const isRamp = method === 'ramp', isHour = method === 'sixty_min';
-  const factor = sug.factor != null ? sug.factor : (isRamp ? 0.75 : isHour ? 1.0 : 0.95);
-  const base = isRamp ? sug.best_60s : isHour ? sug.best_60min : sug.best_20min;
-  const baseLabel = isRamp ? 'best sustained minute' : isHour ? 'hour plateau mean' : 'best 20-min mean';
+  const isRamp = method === 'ramp', isHour = method === 'sixty_min', isCp = method === 'cp_test';
+  const factor = sug.factor != null ? sug.factor : (isRamp ? 0.75 : (isHour || isCp) ? 1.0 : 0.95);
+  const base = isRamp ? sug.best_60s : isHour ? sug.best_60min : isCp ? sug.cp_w : sug.best_20min;
+  const baseLabel = isRamp ? 'best sustained minute' : isHour ? 'hour plateau mean'
+    : isCp ? 'critical power from the 12/7/3-min efforts' : 'best 20-min mean';
   const recognised = a.source === 'fit' ? 'from the ride file' : 'from the synced ride';
 
   // ── stepper ──────────────────────────────────────────────────────────
@@ -8623,7 +8682,7 @@ async function renderFtpTestAnalysis(rideId, fs) {
       <div style="font-size:12px;font-weight:700;margin:2px 0;">${title}</div>
       <div style="font-size:11px;color:var(--text2);">${body}</div></div>`;
   let html = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-    ${step('1 · RECOGNISE', {ramp:'Ramp test', sixty_min:'60-minute test', coggan_20min:'20-minute test'}[method] || method,
+    ${step('1 · RECOGNISE', {ramp:'Ramp test', sixty_min:'60-minute test', coggan_20min:'20-minute test', cp_test:'Critical Power test'}[method] || method,
            (sug.fallback_from ? 'Hour abandoned early (plateau &lt; 50 min) — scored with the validated 20-min method. ' : '') + recognised)}
     ${step('2 · MEASURE', `${base != null ? base + ' W' : '—'}`, baseLabel + (sug.plateau_min ? ` · ${sug.plateau_min} min sustained` : '') + (a.halted ? ` · halted at step ${esc(String(a.halt_step || '?'))}` : ''))}
     ${step('3 · COMPUTE', `${sug.ftp} W`, `${base != null ? base : '?'} × ${factor} — ${esc(sug.formula_used || '')}`)}
@@ -8814,7 +8873,8 @@ async function openRideDetail(rideId) {
       const deltaColor = delta >= 0 ? '#22c55e' : '#ef4444';
       const methodLabel = fs.method === 'ramp' ? 'Ramp'
         : fs.method === 'coggan_20min' ? 'Coggan 20-min'
-        : fs.method === 'sixty_min' ? '60-min hour of power' : fs.method;
+        : fs.method === 'sixty_min' ? '60-min hour of power'
+        : fs.method === 'cp_test' ? 'Critical Power 12/7/3' : fs.method;
       const haltedBanner = s.ftp_test_halted
         ? `<div style="font-size:11px;color:#ef4444;margin-bottom:8px;">&#9888; Test was halted at step ${esc(String(s.ftp_test_halt_step || 'N'))} &mdash; suggested value may be unreliable.</div>`
         : '';
@@ -12637,6 +12697,116 @@ function readBcRaces() {
   return out;
 }
 
+// ═══ 3.13.0: races from intervals.icu ═══════════════════════════════════════
+// Reads the rider's RACE_A/B/C events (read-only) into a table where the
+// rider picks how each one goes into this plan: one race is the plan's goal
+// event, others become B/C rows, the rest are skipped. It only fills the
+// builder's fields; nothing is saved until Generate.
+let _icuRaces = [];
+function _icuRaceDefaults(races) {
+  // The earliest A race is the goal (a plan has one); later A races default
+  // to B. Races in another sport default to skip.
+  let haveA = false;
+  return races.map(function (r) {
+    if (r.sport && !/ride/i.test(r.sport)) return 'skip';
+    if (r.priority !== 'A') return r.priority;
+    if (haveA) return 'B';
+    haveA = true;
+    return 'A';
+  });
+}
+async function icuRacesLoad() {
+  const panel = document.getElementById('icu-races-panel');
+  if (!panel) return;
+  let r;
+  try { r = await (await fetch('/api/icu/races')).json(); } catch (e) { r = {error: 'network'}; }
+  if (r && r.needs_reconnect) {
+    showToast('Reconnect intervals.icu to read your calendar (Settings → Connections).', 6000, 'warning');
+    return;
+  }
+  if (!r || r.error || !Array.isArray(r.races)) {
+    showToast(r && r.error === 'not_connected'
+      ? 'Connect intervals.icu first (Settings → Connections).'
+      : "Couldn't read your intervals.icu calendar — try again in a moment.", 6000, 'error');
+    return;
+  }
+  if (!r.races.length) {
+    showToast('No A, B or C races in your intervals.icu calendar for the coming year.', 5000, 'info');
+    return;
+  }
+  _icuRaces = r.races;
+  const picks = _icuRaceDefaults(r.races);
+  const opt = (v, label, sel) => `<option value="${v}"${sel === v ? ' selected' : ''}>${label}</option>`;
+  panel.innerHTML =
+    '<div style="font-size:11px;color:var(--text2);margin-bottom:6px;">Your races in intervals.icu. Choose how each one goes into this plan. Nothing is saved until you Generate.</div>' +
+    '<table style="width:100%;font-size:12px;border-collapse:collapse;">' +
+    '<tr style="text-align:left;color:var(--text3);"><th>Date</th><th>Race</th><th>Sport</th><th>km</th><th>In this plan</th></tr>' +
+    r.races.map((x, i) =>
+      `<tr><td>${esc(x.date)}</td><td>${esc(x.name || '(no name)')} <span style="color:var(--text3);">(${esc(x.priority)} in intervals.icu)</span></td>` +
+      `<td>${esc(x.sport)}</td><td>${x.distance_km != null ? esc(x.distance_km) : ''}</td>` +
+      `<td><select class="icu-race-pick" data-i="${i}" onchange="icuRacePickChanged(this)">` +
+      opt('A', 'A — plan goal', picks[i]) + opt('B', 'B race', picks[i]) +
+      opt('C', 'C race', picks[i]) + opt('skip', 'Skip', picks[i]) + '</select></td></tr>').join('') +
+    '</table><div style="margin-top:8px;display:flex;gap:6px;">' +
+    '<button type="button" class="btn btn-sm btn-primary" onclick="icuRacesApply()">Use these races</button>' +
+    '<button type="button" class="btn btn-sm" onclick="document.getElementById(\'icu-races-panel\').style.display=\'none\'">Cancel</button></div>';
+  panel.style.display = 'block';
+}
+function icuRacePickChanged(sel) {
+  // One goal per plan: picking A for a race makes the previous A a B race.
+  if (sel.value !== 'A') return;
+  document.querySelectorAll('#icu-races-panel .icu-race-pick').forEach(function (o) {
+    if (o !== sel && o.value === 'A') o.value = 'B';
+  });
+}
+function icuRacesApply() {
+  const picks = Array.from(document.querySelectorAll('#icu-races-panel .icu-race-pick'))
+    .map(sel => ({race: _icuRaces[+sel.dataset.i], pick: sel.value}))
+    .filter(p => p.race);
+  const goal = (picks.find(p => p.pick === 'A') || {}).race || null;
+  // The plan's goal day, picked here or already in the builder: an event plan
+  // ends on it, so a B/C race after it has no week.
+  const g0 = document.getElementById('plan-goal');
+  const goalDate = goal ? goal.date
+    : ((g0 && _isEventGoal(g0.value) && (document.getElementById('plan-edate') || {}).value) || null);
+  if (goal) {
+    const g = document.getElementById('plan-goal');
+    if (g && !_isEventGoal(g.value)) { g.value = 'event'; togglePlanFields(); }
+    document.getElementById('plan-edate').value = goal.date;
+    document.getElementById('plan-ename').value = goal.name || '';
+    // No distance in intervals.icu: clear the old event's, don't keep it.
+    document.getElementById('plan-ekm').value = goal.distance_km || '';
+    _syncPlanDateToWeeks();
+    // A race can't be the goal and a B/C race too.
+    document.querySelectorAll('#plan-bc-rows .plan-bc-row').forEach(function (row) {
+      if ((row.querySelector('.bc-date') || {}).value === goal.date) row.remove();
+    });
+  }
+  const taken = new Set(readBcRaces().map(x => x.date));
+  if (goal) taken.add(goal.date);
+  let added = 0, later = 0;
+  picks.forEach(function (p) {
+    if ((p.pick !== 'B' && p.pick !== 'C') || taken.has(p.race.date)) return;
+    // An event plan ends on its goal day: a race after it has no week here.
+    if (goalDate && p.race.date > goalDate) { later++; return; }
+    addBcRaceRow({date: p.race.date, priority: p.pick, name: p.race.name,
+                  event_km: p.race.distance_km || 0});
+    taken.add(p.race.date);
+    added++;
+  });
+  document.getElementById('icu-races-panel').style.display = 'none';
+  if (typeof refreshPlanPreview === 'function') refreshPlanPreview();
+  const parts = [];
+  if (goal) parts.push(`${goal.name || 'your A race'} on ${goal.date} as the plan goal`);
+  if (added) parts.push(`${added} B/C race${added === 1 ? '' : 's'}`);
+  let msg = parts.length
+    ? `Added ${parts.join(' and ')}. Check distance, climb and event type, then Generate.`
+    : 'No races added.';
+  if (later) msg += ` ${later} race${later === 1 ? ' is' : 's are'} after your goal and not in this plan.`;
+  showToast(msg, 7000, parts.length ? 'success' : 'info');
+  return {goal: goal, added: added, later: later};
+}
+
 // ═══ v2.3.0: template intensity-mix % readout + custom split ════════════════
 // Typical % shown when a Template preset is picked (display only — the realized
 // mix is computed from the generated plan and replaces this after Generate).
@@ -12775,6 +12945,10 @@ async function generatePlan(opts) {
     body.event_date = $('plan-tdate').value || null;
     // F3 — a non-event plan can still target intermediate B/C races. Attach them
     // as events[] (no A event); the backend applies the B/C mini-tapers.
+    const _bc = readBcRaces();
+    if (_bc.length) body.events = _bc;
+  } else if (body.goal === 'general') {
+    // B/C races were shown for this goal but never sent (3.13.0 grill).
     const _bc = readBcRaces();
     if (_bc.length) body.events = _bc;
   } else if (body.goal === 'continuous') {
@@ -13156,6 +13330,7 @@ async function renderPlanJSON(plan) {
           display_name: s.display_name || '', zwo_name: s.zwo_name || '',
           name: s.zwo_name || s.description || '',
           duration_min: s.duration_min, tss: s.tss_estimate,
+          user_moved: !!s.user_moved,
         }, cardState);
 
         // Mini power block SVG. v4.1.1 FIX-PLANNER B: prefer the
@@ -13375,7 +13550,7 @@ async function pgDrop(e, dstDay, dstWeekIdx) {
   if (!srcDay || srcDay === dstDay) return;
 
   // Find the source session's workout name for the toast (item 9)
-  let srcName = 'session', srcDayLabel = srcDay, dstDayLabel = dstDay;
+  let srcName = 'session', dstName = '', srcDayLabel = srcDay, dstDayLabel = dstDay;
   try {
     const plan = window._planData;
     if (plan && plan.weeks) {
@@ -13386,6 +13561,7 @@ async function pgDrop(e, dstDay, dstWeekIdx) {
             srcDayLabel = sess.day_name || srcDay;
           }
           if (sess.day === dstDay) {
+            dstName = sess.zwo_name || (sess.session_type || '').toUpperCase();
             dstDayLabel = sess.day_name || dstDay;
           }
         }
@@ -13401,14 +13577,12 @@ async function pgDrop(e, dstDay, dstWeekIdx) {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      // v4.3.0 B1 — friendly toast for the structured 422.
-      const friendly = (res.status === 422 && data && data.error === 'source_session_not_found')
-        ? "Couldn't find that session. Try refreshing."
-        : `Move failed: ${data.error || data.detail || 'unknown'}`;
-      try { showToast(friendly, 3500); } catch(_) {}
+      // v4.3.0 B1 / #27 W11: the structured 422 codes read as a sentence, a
+      // refused drop (409) shows its own sentence.
+      try { showToast(_moveToastText(data, srcName, dstName, srcDayLabel, dstDayLabel), 3500); } catch(_) {}
       return;
     }
-    try { showToast(`Moved ${srcName} from ${srcDayLabel} to ${dstDayLabel}`, 3000); } catch(_) {}
+    try { showToast(_moveToastText(data, srcName, dstName, srcDayLabel, dstDayLabel), 3000); } catch(_) {}
     await loadPlan();
     try { await loadCalendar(); } catch(_) {}
   } catch(err) {
@@ -13773,7 +13947,13 @@ function plannedCardParts(planned, cardState) {
   const title = calCardTitleWithStructure(planned);
   const cssCls = calContentCss(planned.content_class, planned.session_type);
   const dur = planned.duration_min ? `${Math.round(planned.duration_min)}m` : '';
-  const metaText = `${dur}${planned.tss ? ' · ' + Math.round(planned.tss) + ' TSS' : ''}`;
+  // #34: say on the card that the rider moved it. Since #27 a moved session
+  // keeps its length when that day's hours change, so the rider needs to see
+  // why; Home's This-week card already showed "moved", the Plan tab did not.
+  const moved = planned.user_moved
+    ? ' · <span class="card-moved" title="You moved this workout. It keeps its length when that day\'s hours change.">moved</span>'
+    : '';
+  const metaText = `${dur}${planned.tss ? ' · ' + Math.round(planned.tss) + ' TSS' : ''}${moved}`;
   const warn = cardState === 'missing_workout'
     ? '<span class="cal-planned-warn" title="Workout missing — click ⟳ to assign one.">⚠</span>'
     : '';
@@ -14889,6 +15069,28 @@ function calDragEnd(e) {
   window._calDrag = null;
 }
 
+// #27: a drop on another training day swaps the two sessions; the toast says
+// where each one went. Not "Swap": that names the re-draw button and the
+// swap-type pin. {B} comes from the view's own lookup, else from the server.
+// W11: a refused or failed drop (no ok:true) is worded here too, so both views
+// say the same thing and a structured 422 code never reaches the rider.
+function _moveToastText(data, srcName, dstName, srcDayLabel, dstDayLabel) {
+  if (!data || data.ok !== true) {
+    const err = data && data.error;
+    if (err === 'source_session_not_found') return "Couldn't find that session. Try refreshing.";
+    if (err === 'target_week_not_found') return 'That day is outside your plan.';
+    return err ? `Move failed: ${err}` : 'Move failed.';
+  }
+  const sw = data.swapped;
+  if (sw) {
+    const other = dstName || sw.zwo_name || String(sw.session_type || '').toUpperCase() || 'session';
+    // W12: a skipped session stays skipped where it lands (nothing is sent to
+    // the watch for it), so don't make it sound like it is back on.
+    if (sw.status === 'dismissed') return `Moved ${srcName} to ${dstDayLabel}; ${other} (skipped) is now on ${srcDayLabel}`;
+    return `Moved ${srcName} to ${dstDayLabel} and ${other} to ${srcDayLabel}`;
+  }
+  return `Moved ${srcName} from ${srcDayLabel} to ${dstDayLabel}`;
+}
 async function calDrop(e, dstDay, dstWeekIdx) {
   e.preventDefault();
   e.stopPropagation();
@@ -14904,6 +15106,7 @@ async function calDrop(e, dstDay, dstWeekIdx) {
 
   // Resolve a friendly source-workout name + day labels for the toast.
   let srcName = 'session';
+  let dstName = '';
   let srcDayLabel = srcDay;
   let dstDayLabel = dstDay;
   try {
@@ -14915,6 +15118,10 @@ async function calDrop(e, dstDay, dstWeekIdx) {
             srcName = dd.planned.name
               || (dd.planned.content_class || dd.planned.session_type || '').toUpperCase()
               || 'session';
+          }
+          if (dd.date === dstDay && dd.planned) {
+            dstName = dd.planned.name
+              || (dd.planned.content_class || dd.planned.session_type || '').toUpperCase();
           }
         }
       }
@@ -14931,16 +15138,13 @@ async function calDrop(e, dstDay, dstWeekIdx) {
     });
     let data = {};
     try { data = await res.json(); } catch(_) {}
-    if (!res.ok || data.ok === false) {
-      // v4.3.0 B1: friendly toast for the structured 422 source-not-found.
-      if (res.status === 422 && data && data.error === 'source_session_not_found') {
-        try { showToast("Couldn't find that session. Try refreshing.", 3500); } catch(_) {}
-      } else {
-        try { showToast('Move failed.', 3000); } catch(_) {}
-      }
+    if (!res.ok || !data.ok) {
+      // v4.3.0 B1 / #27 W11: the structured 422 codes read as a sentence, a
+      // refused drop (409) shows its own sentence.
+      try { showToast(_moveToastText(data, srcName, dstName, srcDayLabel, dstDayLabel), 3500); } catch(_) {}
       return;
     }
-    try { showToast(`Moved ${srcName} from ${srcDayLabel} to ${dstDayLabel}`, 3000); } catch(_) {}
+    try { showToast(_moveToastText(data, srcName, dstName, srcDayLabel, dstDayLabel), 3000); } catch(_) {}
     // Re-fetch + re-render the calendar (don't yank viewport).
     window._calDidAutoScroll = true;
     await loadCalendar();
@@ -15940,7 +16144,60 @@ async function viewVersion() {
   } catch(e) { showToast('Version check failed: ' + e.message, 4000); }
 }
 
+// ═══ 3.13.1: workout library — built-in + an optional extra folder ═══════════
+function _wlRender(st) {
+  const b = document.getElementById('wl-builtin');
+  if (b && st.builtin) b.textContent = `${st.builtin.count.toLocaleString()} workouts that come with Domestique, including the FTP and CP tests.`;
+  const ex = st.extra;
+  const sub = document.getElementById('wl-extra'), path = document.getElementById('wl-extra-path');
+  const choose = document.getElementById('wl-choose'), remove = document.getElementById('wl-remove');
+  if (!sub) return;
+  if (ex) {
+    sub.textContent = ex.added === 1 ? '1 workout added to the library.'
+      : `${ex.added} workouts added to the library` + (ex.files > ex.added ? ` (${ex.files - ex.added} already in the built-in one).` : '.');
+    path.textContent = ex.path; path.style.display = '';
+    choose.innerHTML = 'Change folder&hellip;'; remove.style.display = '';
+  } else {
+    sub.textContent = 'Add a folder with your own .zwo files. They join the built-in library; your files are not changed.';
+    path.style.display = 'none';
+    choose.innerHTML = 'Choose folder&hellip;'; remove.style.display = 'none';
+  }
+}
+async function wlRefresh() {
+  try { _wlRender(await (await fetch('/api/settings/workout-folders')).json()); } catch (e) {}
+}
+async function wlChooseFolder(btn) {
+  const label = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Opening…';
+  let d = {};
+  try { d = await (await fetch('/api/setup/pick-folder')).json(); } catch (e) {}
+  btn.disabled = false; btn.innerHTML = label;
+  if (d && d.path) { await wlSetExtra(d.path); return; }
+  // No dialog here (or it was cancelled): offer typing the path instead.
+  const m = document.getElementById('wl-manual');
+  if (m) m.style.display = '';
+}
+async function wlSetExtra(path) {
+  const status = document.getElementById('wl-status');
+  let r, d = {};
+  try {
+    r = await fetch('/api/settings/workout-folders', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({extra_dir: path || ''})});
+    d = await r.json();
+  } catch (e) { d = {error: 'Could not save the folder — try again.'}; }
+  if (!r || !r.ok || d.error) {
+    if (status) { status.textContent = d.error || 'Could not save the folder.'; status.style.color = 'var(--red,#ef4444)'; }
+    return d;
+  }
+  if (status) status.textContent = '';
+  const m = document.getElementById('wl-manual');
+  if (m) m.style.display = 'none';
+  _wlRender(d);
+  showToast(path ? 'Extra workouts added to your library.' : 'Extra workouts folder removed; the built-in library stays.', 4000, 'success');
+  return d;
+}
 async function loadSettings() {
+  wlRefresh();
   const d = await (await getResource('/api/settings')).json();
   // Expose FTP globally so workout library mini SVGs use correct zone colors
   window._athleteFtp = d.ftp || 250;
@@ -16149,6 +16406,8 @@ function renderFtpSourceBadge(source, sourceDate) {
   let bg = 'var(--surface2)', fg = 'var(--text2)', border = 'var(--border)';
   if (/^tested_coggan/i.test(source)) { label = 'Tested Coggan 20min'; bg = 'rgba(34,197,94,0.15)'; fg = '#22c55e'; border = '#22c55e'; }
   else if (/^tested_ramp/i.test(source)) { label = 'Tested Ramp'; bg = 'rgba(34,197,94,0.15)'; fg = '#22c55e'; border = '#22c55e'; }
+  else if (/^tested_cp/i.test(source)) { label = 'Tested CP'; bg = 'rgba(34,197,94,0.15)'; fg = '#22c55e'; border = '#22c55e'; }
+  else if (/^tested_sixty/i.test(source)) { label = 'Tested 60min'; bg = 'rgba(34,197,94,0.15)'; fg = '#22c55e'; border = '#22c55e'; }
   else if (/^tested/i.test(source)) { label = 'Tested'; bg = 'rgba(34,197,94,0.15)'; fg = '#22c55e'; border = '#22c55e'; }
   else if (/^eftp/i.test(source) || /^icu/i.test(source)) { label = 'Estimated · ICU'; bg = 'rgba(59,130,246,0.15)'; fg = '#3b82f6'; border = '#3b82f6'; }
   else if (/^manual/i.test(source)) { label = 'Manual'; bg = 'rgba(148,163,184,0.15)'; fg = '#94a3b8'; border = '#94a3b8'; }
@@ -16660,12 +16919,25 @@ async function icuPushRefreshButton() {
 }
 
 function icuPushToastFromResult(r, verb) {
+  const nl = (r.learned || []).length;
+  if (nl && (r.needs_reconnect || r.error)) {
+    // #33: the plan already followed the moves; only the calendar update failed.
+    showToast(`Your plan now follows ${nl} move${nl === 1 ? '' : 's'} you made in intervals.icu, but the calendar update failed` +
+      (r.needs_reconnect ? ' — reconnect intervals.icu in Settings → Connections.' : ' — try again in a moment.'), 7000, 'warning');
+    if (typeof loadPlan === 'function') { try { loadPlan(); } catch (_) {} }
+    return;
+  }
   if (r.needs_reconnect) {
     showToast('intervals.icu needs a quick reconnect to allow calendar writes — Settings → Connections.', 7000, 'warning');
     return;
   }
   if (r.needs_lthr) {
     showToast('HR-mode push needs a valid LTHR (below max HR) — set it in Settings first.', 7000, 'warning');
+    return;
+  }
+  if (r.error === 'busy') {
+    // #28: another calendar update held the lock — nothing failed.
+    showToast('A calendar update is already running — try again in a moment.', 6000, 'warning');
     return;
   }
   if (r.error) {
@@ -16679,7 +16951,16 @@ function icuPushToastFromResult(r, verb) {
   let msg = parts.length ? (verb + ': ' + parts.join(' · ')) : (verb + ': calendar already up to date');
   const nSkip = (r.skipped || []).length;
   if (nSkip) msg += ' · ' + nSkip + ' skipped';
+  // #28: workouts the rider moved in intervals.icu are left there on purpose.
+  // #33: moves made in intervals.icu that the plan now follows.
+  const nLearned = nl;
+  if (nLearned === 1) msg += ' · 1 workout moved in your plan to match intervals.icu';
+  else if (nLearned > 1) msg += ' · ' + nLearned + ' workouts moved in your plan to match intervals.icu';
+  if (r.held === 1) msg += ' · 1 workout kept where you moved it in intervals.icu';
+  else if (r.held > 1) msg += ' · ' + r.held + ' workouts kept where you moved them in intervals.icu';
   showToast(msg, 5000, 'success');
+  // The plan changed under the open page: show the moved workouts.
+  if (nLearned && typeof loadPlan === 'function') { try { loadPlan(); } catch (_) {} }
 }
 
 async function icuPushNow() {
@@ -16709,6 +16990,16 @@ async function icuCalSyncRefresh() {
     cb.disabled = !s.write_ok && !s.sync_enabled;
     if (hint && !s.write_ok) {
       hint.innerHTML = 'Reconnect intervals.icu (button above) to grant calendar permission, then enable sync.';
+    }
+    // #34: automatic pushes are silent, so riders with sync on never saw the
+    // workouts Domestique left where they moved them in intervals.icu (#28).
+    const held = $('icu-cal-sync-held');
+    if (held) {
+      const n = (s.sync_enabled && s.last_result && s.last_result.held) || 0;
+      held.textContent = n === 1
+        ? 'Last update: 1 workout kept where you moved it in intervals.icu. Domestique still shows it on its planned day.'
+        : `Last update: ${n} workouts kept where you moved them in intervals.icu. Domestique still shows them on their planned days.`;
+      held.style.display = n > 0 ? 'block' : 'none';
     }
   } catch (_) { blk.style.display = 'none'; }
 }
@@ -18111,6 +18402,7 @@ function _ftpTypeFromFile(zwoFile) {
   if (f.includes('ftp_test_ramp')) return 'ramp';
   if (f.includes('ftp_test_60min')) return 'sixty_min';
   if (f.includes('ftp_test_coggan')) return 'coggan_20min';
+  if (f.includes('ftp_test_cp')) return 'cp_test';
   return null;
 }
 
@@ -19049,6 +19341,7 @@ function ftpTestChooserHtml(sessionIdx, day, currentType, opts) {
       ${card('coggan_20min', TT_SVG, '20-minute test', 'A 5-min all-out effort drains your sprint reserve, then a 20-min max effort; FTP = 95% of the 20-min average.', 'Best-validated protocol in the literature — the depletion effort keeps anaerobic inflation out.', 'Pacing is HARD — go too hard early and you fade, reading LOW. ~60 min total.')}
       ${card('ramp', RAMP_SVG, 'Ramp test', 'Power steps up 6% of FTP each minute until you can\'t hold on; FTP = 75% of your best minute.', 'Quick (~35 min) and pacing-free — just hold each step to failure.', 'The 0.75 factor has no peer-reviewed validation, and punchy/anaerobic riders read HIGH.')}
       ${card('sixty_min', HOUR_SVG, '60-minute test', 'One full hour at the hardest steady pace you can hold; FTP = the hour\'s average power — no correction factor, by definition.', 'Definitional — zero estimation error when paced right.', 'Brutal. Ride the hour with erg OFF at time-trial discipline; blown pacing ruins it. ~86 min total.')}
+      ${card('cp_test', TT_SVG, 'Critical Power test', 'Three all-out efforts of 12, 7 and 3 minutes with 30 minutes of rest between; your power over the three gives your critical power, and FTP is set to it.', 'The field protocol checked against the lab (Karsten 2015); no fixed correction factor.', 'Long (~110 min) and three maximal efforts. CP tends to read a few watts above a 20-min-test FTP.')}
     </div>
   </div>`;
 }

@@ -352,7 +352,9 @@ class TestMoveSessionVisibleAfterRefresh(PlanApiTestBase):
 
     def test_move_session_visible_after_refresh(self):
         # Seed: move Tuesday (z2) → Thursday (was vo2max) so the dst slot has
-        # a session both before and after the move.
+        # a session both before and after the move. #27: that drop now swaps
+        # the two, so BOTH days must surface their move flags after refresh
+        # (it used to overwrite Thursday and leave a stub on Tuesday).
         tue = (self._monday + timedelta(days=1)).isoformat()
         thu = (self._monday + timedelta(days=3)).isoformat()
 
@@ -362,8 +364,11 @@ class TestMoveSessionVisibleAfterRefresh(PlanApiTestBase):
         self.assertTrue(r.json().get("ok"))
 
         # Now hit /api/weekly-plan (exact endpoint loadWeeklyCalendar() calls)
+        before = (self._tmp / "current_plan.json").read_bytes()
         r = self.client.get("/api/weekly-plan")
         self.assertEqual(r.status_code, 200, r.text)
+        # P8: the read does not write.
+        self.assertEqual((self._tmp / "current_plan.json").read_bytes(), before)
         data = r.json()
         sessions = data.get("sessions", [])
         by_day = {s["day"]: s for s in sessions}
@@ -374,13 +379,36 @@ class TestMoveSessionVisibleAfterRefresh(PlanApiTestBase):
         self.assertTrue(thu_out.get("user_moved"),
                         f"user_moved flag not visible after refresh: {thu_out}")
         self.assertEqual(thu_out.get("moved_from"), tue)
+        self.assertEqual(thu_out.get("session_type"), "z2")
 
-        # Tue slot shows moved_from:<thu> status
+        # Tue holds the displaced vo2max, pinned and pointing back at Thu
         self.assertIn(tue, by_day, "Tue session missing from /api/weekly-plan")
         tue_out = by_day[tue]
-        self.assertTrue(
-            str(tue_out.get("status", "")).startswith("moved_from:"),
-            f"Tue status should start with moved_from:, got {tue_out.get('status')!r}")
+        self.assertEqual(tue_out.get("session_type"), "vo2max")
+        self.assertTrue(tue_out.get("user_moved"),
+                        f"user_moved flag not visible after refresh: {tue_out}")
+        self.assertEqual(tue_out.get("moved_from"), thu)
+        self.assertEqual(tue_out.get("status"), "pending")
+
+    def test_move_onto_rest_shows_stub_after_refresh(self):
+        # A drop on a rest day still vacates the source: the stub's status
+        # must surface after refresh, as the overwrite case used to pin.
+        tue = (self._monday + timedelta(days=1)).isoformat()
+        fri = (self._monday + timedelta(days=4)).isoformat()  # rest
+
+        r = self.client.post("/api/plan/move-session",
+                             json={"date": tue, "new_date": fri})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json().get("vacated"), tue)
+        self.assertIsNone(r.json().get("swapped"))
+
+        r = self.client.get("/api/weekly-plan")
+        self.assertEqual(r.status_code, 200, r.text)
+        by_day = {s["day"]: s for s in r.json().get("sessions", [])}
+        self.assertTrue(by_day[fri].get("user_moved"))
+        self.assertEqual(by_day[fri].get("moved_from"), tue)
+        self.assertEqual(by_day[fri].get("session_type"), "z2")
+        self.assertEqual(by_day[tue].get("status"), f"moved_from:{fri}")
 
     def test_merge_survives_stored_end_date_drift(self):
         """If the stored week's `end` date drifts (e.g. was Sunday, regenerated

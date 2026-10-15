@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='utf-8'?>
+<workout_file>
+    <author>Domestique Library</author>
+    <name>FTP Test — CP 12/7/3 Critical Power (110min)</name>
+    <description>Critical Power test (~110min total): three all-out time trials of 12, 7 and 3 minutes, with 30 minutes of rest between them. Your power over the three efforts gives your critical power (CP), the highest power you can sustain without steadily running out; your new FTP is set to your CP. 10min easy ramp warmup, 3x1min openers at 95% with 1min easy between, 4min easy. Then 12min FREE RIDE: the hardest even pace you can hold for 12 minutes, no target, no erg. 30min rest: sit up, soft pedalling or off the bike. 7min FREE RIDE as hard as you can hold. 30min rest. 3min FREE RIDE all-out. Easy 8min cooldown. Pace each effort evenly; a blown start spoils the number. The app computes CP from the ride file automatically, and shows W′ (your capacity above CP) for information only, because rests of 30 minutes measure CP well but W′ poorly.</description>
+    <sportType>bike</sportType>
+    <tags>
+        <tag name="ftp_test" />
+        <tag name="ftp_test_cp" />
+    </tags>
+    <workout>
+        <Warmup Duration="600" PowerLow="0.45" PowerHigh="0.70" pace="0" />
+        <IntervalsT Repeat="3" OnDuration="60" OffDuration="60" OnPower="0.95" OffPower="0.50" pace="0" />
+        <SteadyState Duration="240" Power="0.50" pace="0" />
+        <FreeRide Duration="720" FlatRoad="1" pace="0" />
+        <SteadyState Duration="1800" Power="0.40" pace="0" />
+        <FreeRide Duration="420" FlatRoad="1" pace="0" />
+        <SteadyState Duration="1800" Power="0.40" pace="0" />
+        <FreeRide Duration="180" FlatRoad="1" pace="0" />
+        <Cooldown Duration="480" PowerLow="0.60" PowerHigh="0.40" pace="0" />
+    </workout>
+</workout_file>

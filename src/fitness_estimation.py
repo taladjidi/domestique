@@ -622,6 +622,96 @@ def _minute_averages(powers: list[float]) -> list[float]:
     return [sum(powers[i * 60:(i + 1) * 60]) / 60.0 for i in range(n // 60)]
 
 
+# CP test (3.13.0): three maximal time trials of 12, 7 and 3 min in one
+# session, 30 min of rest between them -- the field protocol of Karsten et al.
+# (Eur J Appl Physiol 2015, 115:197-204; Front Physiol 2021, 11:613151). Same-
+# day trials 30 min apart give a valid CP but not a valid W' (Karsten et al.,
+# J Sports Sci 2017, 35:1420-1425), so W' is shown for information only. See
+# docs/SCIENCE.md.
+CP_TEST_EFFORTS_S = (720, 420, 180)
+CP_TEST_MIN_GAP_S = 600     # efforts must be separate: the protocol rests 30 min
+# Three points, two parameters: one degree of freedom, so the fit must be
+# near-perfect. Efforts off by ~2% still fit at R² ~0.99; a 3-min effort
+# ridden well below maximal (tired after the other two) falls to ~0.93 and
+# would inflate CP by ~8% -- silent instead (3.13.0 grill).
+CP_TEST_R2_MIN = 0.98
+
+
+def _best_window_clear_of(powers: list, dur: int, taken: list, gap: int):
+    """(mean, start) of the best ``dur``-second window that stays ``gap`` s
+    clear of every (start, end) in ``taken``; (None, None) when none fits."""
+    n = len(powers)
+    if n < dur:
+        return None, None
+    pre = [0.0]
+    for p in powers:
+        pre.append(pre[-1] + p)
+    best, best_i = None, None
+    for i in range(0, n - dur + 1):
+        if any(i < e + gap and i + dur > b - gap for b, e in taken):
+            continue
+        m = (pre[i + dur] - pre[i]) / dur
+        if best is None or m > best:
+            best, best_i = m, i
+    return best, best_i
+
+
+def _cp_test_efforts(power_series) -> "dict | None":
+    """{duration_s: (mean_w, start_s)} for the best 12-, 7- and 3-min
+    windows, each clear of the others, when they get harder as they get
+    shorter -- the shape of a CP test. None otherwise."""
+    powers = [float(p or 0) for p in (power_series or [])]
+    taken, eff = [], {}
+    for dur in CP_TEST_EFFORTS_S:
+        mean, start = _best_window_clear_of(powers, dur, taken, CP_TEST_MIN_GAP_S)
+        if mean is None:
+            return None
+        eff[dur] = (mean, start)
+        taken.append((start, start + dur))
+    p12, p7, p3 = (eff[d][0] for d in CP_TEST_EFFORTS_S)
+    return eff if p3 > p7 > p12 > 0 else None
+
+
+def cp_test_ftp(power_series) -> "dict | None":
+    """Score a CP test ride: the best 12-, 7- and 3-min efforts, each a
+    separate window, fitted to P = W'/t + CP (least squares). FTP = CP.
+
+    Correct or silent: None unless the efforts get harder as they get
+    shorter, the fit is near-perfect (R² >= CP_TEST_R2_MIN) and W' is
+    physiological (5-40 kJ, the profile's own bounds). Recognition is by
+    name only, so a ride is scored only when the rider meant to ride it."""
+    eff = _cp_test_efforts(power_series)
+    if eff is None:
+        return None
+    p12, p7, p3 = (eff[d][0] for d in CP_TEST_EFFORTS_S)
+    xs = [1.0 / d for d in CP_TEST_EFFORTS_S]
+    ys = [eff[d][0] for d in CP_TEST_EFFORTS_S]
+    mx, my = sum(xs) / 3, sum(ys) / 3
+    sxx = sum((x - mx) ** 2 for x in xs)
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    wprime = sxy / sxx
+    cp = my - wprime * mx
+    ss_tot = sum((y - my) ** 2 for y in ys)
+    ss_res = sum((y - (cp + wprime * x)) ** 2 for x, y in zip(xs, ys))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    if cp <= 0 or not (5000 <= wprime <= 40000) or r2 < CP_TEST_R2_MIN:
+        return None
+    s12 = eff[720][1]
+    return {
+        "type": "cp_test",
+        "value": int(round(cp)),
+        "cp_w": int(round(cp)),
+        "w_prime_j": int(round(wprime)),
+        "fit_r2": round(r2, 3),
+        "efforts_w": {"12min": int(round(p12)), "7min": int(round(p7)),
+                      "3min": int(round(p3))},
+        "formula_used": (f"CP from your 12-, 7- and 3-min efforts "
+                         f"({p12:.0f} / {p7:.0f} / {p3:.0f} W), P = W'/t + CP"),
+        "window_start_s": s12,
+        "window_end_s": s12 + 720,
+    }
+
+
 def _hint_test_kind(filename_hint) -> "str | None":
     """FTP-tests grill (HINT hardening) — recognise a protocol from name/file
     hints. Accepts a single string or a list of independent source strings
@@ -639,6 +729,11 @@ def _hint_test_kind(filename_hint) -> "str | None":
         if not src:
             continue
         lname = re.sub(r"[^a-z0-9]+", "_", str(src).lower()).strip("_")
+        # The CP test's token counts anywhere in a name: apps prefix their
+        # own ("Zwift - FTP Test — CP 12/7/3 …"), and its scorer is silent
+        # without three real efforts.
+        if "ftp_test_cp" in lname:
+            return "cp_test"
         if not lname.startswith("ftp_test"):
             continue
         if "ftp_test_coggan" in lname:
@@ -839,11 +934,20 @@ def evaluate_ftp_test(power_series, cadence_series=None,
     kind = detect_ftp_test_shape(power_series, filename_hint=filename_hint)
     if not kind:
         return None
+    if (kind == "coggan_20min" and not _hint_test_kind(filename_hint)
+            and _cp_test_efforts(power_series) is not None):
+        # A ride shaped like the CP test's three efforts, recognised by shape
+        # only (no name): the 20-min calculator would read its 12-min effort
+        # plus rest as the 20-min block, ~17% low. Silent on the shape, not
+        # on whether the CP fit accepts it (3.13.0 grill).
+        return None
     fallback = False
     if kind == "coggan_20min":
         s = coggan_20min_ftp(power_series)
     elif kind == "ramp":
         s = ramp_test_ftp(power_series)
+    elif kind == "cp_test":
+        s = cp_test_ftp(power_series)
     else:
         s = sixty_min_ftp(power_series)
         if not s:
@@ -880,7 +984,8 @@ def evaluate_ftp_test(power_series, cadence_series=None,
               "pacing_drift", "pacing_drift_pct", "blowout_missing",
               "factor_band", "likely_overestimate",
               "window_start_s", "window_end_s", "factor",
-              "blowout_start_s", "blowout_end_s"):
+              "blowout_start_s", "blowout_end_s",
+              "cp_w", "w_prime_j", "fit_r2", "efforts_w"):
         if s.get(k) is not None:
             sug[k] = s[k]
     if fallback:

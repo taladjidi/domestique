@@ -123,6 +123,55 @@ from user_home import domestique_home
 # bundled library (always ≥4000 files), never to a rider's custom dir.
 _BUNDLED_WORKOUT_DIR = Path(__file__).parent / "workouts"
 WORKOUT_DIR = _BUNDLED_WORKOUT_DIR
+# 3.13.1: a rider's own folder ADDS workouts to the built-in library instead of
+# replacing it (a replacement folder lacked every workout shipped later, e.g.
+# the CP test). None = built-in only. Set per profile, like WORKOUT_DIR.
+EXTRA_WORKOUT_DIR: "Path | None" = None
+
+
+def is_builtin_library(path) -> bool:
+    """3.13.1: is this the running app's own built-in library folder? It is
+    always the library, so it is never an extra folder."""
+    try:
+        return Path(path).resolve() == _BUNDLED_WORKOUT_DIR.resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _library_copy_names(path) -> set:
+    """The workout file names a copy of Domestique's library listed when it
+    shipped (its overhaul manifest), so an old install's folder, or a rider's
+    copy of it, adds only the rider's own workouts -- never the old copies of
+    workouts the built-in library has renamed or retired. Empty for a folder
+    that is not such a copy."""
+    try:
+        d = json.loads((Path(path) / ".overhaul_manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return set()
+    out = set()
+    for e in (d.get("entries") or []) if isinstance(d, dict) else []:
+        if isinstance(e, dict):
+            out.update(str(e.get(k) or "") for k in ("old_filename", "new_filename"))
+    out.discard("")
+    return out
+
+
+def extra_only_names(extra, builtin_names) -> set:
+    """3.13.1: the .zwo names in the extra folder that join the library: not
+    in the built-in library, and not a library-copy name (_library_copy_names)."""
+    try:
+        names = {p.name for p in Path(extra).glob("*.zwo")}
+    except OSError:
+        return set()
+    return names - set(builtin_names) - _library_copy_names(extra)
+
+
+def extra_workout_dir_for(path) -> "Path | None":
+    """The rider's folder as an extra library folder, or None when it is not
+    usable or is a built-in library (is_builtin_library)."""
+    if not path or not workout_dir_is_usable(path) or is_builtin_library(path):
+        return None
+    return Path(path)
 
 
 def workout_dir_is_usable(path) -> bool:
@@ -166,7 +215,9 @@ for _upf in [domestique_home() / "user_paths.json",
             if _up.get("workout_dir"):
                 _cand = Path(_up["workout_dir"])
                 if workout_dir_is_usable(_cand):
-                    WORKOUT_DIR = _cand
+                    # 3.13.1: the rider's folder adds to the built-in
+                    # library, it never replaces it.
+                    EXTRA_WORKOUT_DIR = extra_workout_dir_for(_cand)
                 else:
                     logging.getLogger("training_planner").error(
                         "E_WORKOUT_DIR_UNUSABLE: user_paths.json workout_dir=%s "
@@ -354,7 +405,7 @@ def _compute_workouts_dir_hash() -> str:
     return h.hexdigest()
 
 
-def _read_library_index(count: int, max_mtime: float) -> list[dict] | None:
+def _read_library_index(count: int, max_mtime: float, wd: "Path | None" = None) -> list[dict] | None:
     """v1.10.1 SPEED-INDEX: try the consolidated on-disk row index.
 
     Returns the list of pre-parsed library rows iff
@@ -374,7 +425,7 @@ def _read_library_index(count: int, max_mtime: float) -> list[dict] | None:
     own output; JSON round-trips every field cleanly (Tags=list[str],
     SecondaryFlags=dict, all other fields str/int/float).
     """
-    index_path = WORKOUT_DIR / _LIBRARY_INDEX_FILENAME
+    index_path = (wd or WORKOUT_DIR) / _LIBRARY_INDEX_FILENAME
     if not index_path.exists():
         return None
     try:
@@ -399,7 +450,7 @@ def _read_library_index(count: int, max_mtime: float) -> list[dict] | None:
     return rows
 
 
-def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None:
+def _write_library_index(rows: list[dict], count: int, max_mtime: float, wd: "Path | None" = None) -> None:
     """v1.10.1 SPEED-INDEX: persist ``rows`` to workouts/.library_index.json.
 
     Called after a full XML parse so the index self-heals when missing/stale.
@@ -409,7 +460,7 @@ def _write_library_index(rows: list[dict], count: int, max_mtime: float) -> None
     so a concurrent reader never sees a half file and a symlink planted in a
     shared workout dir is never followed (contract 3.4).
     """
-    index_path = WORKOUT_DIR / _LIBRARY_INDEX_FILENAME
+    index_path = (wd or WORKOUT_DIR) / _LIBRARY_INDEX_FILENAME
     payload = {
         "schema_version": _INDEX_SCHEMA_VERSION,
         "rules": _index_rules_fingerprint(),
@@ -478,6 +529,10 @@ class _PlanLock:
 
     def release(self):
         self._lock.release()
+
+    def _is_owned(self):
+        """Whether this thread holds the lock (threading.RLock's own probe)."""
+        return self._lock._is_owned()
 
     def __enter__(self):
         self.acquire()
@@ -1655,7 +1710,7 @@ def file_admissible(slot_type: str, row: dict) -> bool:
     fname = (row.get("File") or "").strip()
     if not fname:
         return True  # rowless/synthetic sessions carry no file to gate
-    f = workout_facts.get_facts(WORKOUT_DIR, fname)
+    f = workout_facts.get_facts(_facts_dir_for(fname), fname)
     if f is None or f.get("null"):
         return False  # A5 fail-closed: a row whose file is missing from the
         # gated library dir, or is unparseable, is inadmissible everywhere.
@@ -4931,6 +4986,47 @@ def _classify_protocol(
 
 
 def load_workout_library() -> list[dict]:
+    """The workout library: every workout of the built-in library (WORKOUT_DIR)
+    plus those in the rider's extra folder (EXTRA_WORKOUT_DIR, 3.13.1) that the
+    built-in one does not have by file name. Rows as _load_library_dir."""
+    rows = _load_library_dir(WORKOUT_DIR)
+    extra = EXTRA_WORKOUT_DIR
+    if extra is None or Path(extra) == WORKOUT_DIR or not workout_dir_is_usable(extra):
+        return rows
+    extra_rows = _load_library_dir(Path(extra))
+    # Same list object while neither part changed, as the one-folder cache.
+    key = (str(WORKOUT_DIR), str(extra))
+    hit = _WORKOUT_LIB_UNION_CACHE.get(key)
+    if hit and hit[0] is rows and hit[1] is extra_rows:
+        return hit[2]
+    have = {r.get("File") for r in rows}
+    copy_names = _library_copy_names(extra)
+    union = rows + [r for r in extra_rows
+                    if r.get("File") not in have and r.get("File") not in copy_names]
+    _WORKOUT_LIB_UNION_CACHE[key] = (rows, extra_rows, union)
+    _EXTRA_ONLY_FILES[key] = {r.get("File") for r in union[len(rows):]}
+    return union
+
+
+_WORKOUT_LIB_UNION_CACHE: dict = {}
+_EXTRA_ONLY_FILES: dict = {}
+
+
+def _facts_dir_for(fname: str) -> Path:
+    """The folder whose facts describe this workout file: the extra folder
+    for a file only it has (3.13.1), else the built-in library."""
+    extra = EXTRA_WORKOUT_DIR
+    if extra is not None and fname:
+        only = _EXTRA_ONLY_FILES.get((str(WORKOUT_DIR), str(extra)))
+        if only is not None:
+            if fname in only:
+                return Path(extra)
+        elif not (WORKOUT_DIR / fname).is_file() and (Path(extra) / fname).is_file():
+            return Path(extra)
+    return WORKOUT_DIR
+
+
+def _load_library_dir(wd: Path) -> list[dict]:
     """Scan WORKOUT_DIR (flat) and extract metadata by parsing each ZWO XML.
 
     Returns list of dicts shaped like the legacy rows so that match_zwo()
@@ -4958,15 +5054,15 @@ def load_workout_library() -> list[dict]:
     #   * Slow tier: when the fast validator misses, fall through to the
     #     full glob+max-mtime sweep that catches in-place content edits.
     global _WORKOUT_LIB_CACHE, _WORKOUT_LIB_FAST_VALIDATOR
-    cache_key = str(WORKOUT_DIR)
+    cache_key = str(wd)
 
-    if not WORKOUT_DIR.exists():
+    if not wd.exists():
         return []
 
     # Fast-path: single stat on the workouts directory itself. If it matches
     # the validator stored alongside the cache entry, the cached list is fresh.
     try:
-        dir_mtime = WORKOUT_DIR.stat().st_mtime
+        dir_mtime = wd.stat().st_mtime
     except OSError:
         dir_mtime = 0.0
     fast_key = (_CLASSIFIER_VERSION, dir_mtime)
@@ -4978,7 +5074,7 @@ def load_workout_library() -> list[dict]:
     # Slow-path: enumerate files to compute the precise validator. This
     # catches edits that don't tick the directory's mtime (in-place rewrites
     # of an existing file).
-    zwo_paths = sorted(WORKOUT_DIR.glob("*.zwo"))
+    zwo_paths = sorted(wd.glob("*.zwo"))
     # Hash the (count, max_mtime) — fast and sufficient to detect edits/adds/removes.
     try:
         max_mtime = max((p.stat().st_mtime for p in zwo_paths), default=0.0)
@@ -5000,7 +5096,7 @@ def load_workout_library() -> list[dict]:
     # above, so a stale index can never feed the planner old rows — it just falls
     # through to the parse below. Populate both caches on a hit so repeat calls
     # stay at 0.000s exactly as before.
-    indexed_rows = _read_library_index(len(zwo_paths), max_mtime)
+    indexed_rows = _read_library_index(len(zwo_paths), max_mtime, wd)
     if indexed_rows is not None:
         _WORKOUT_LIB_CACHE[cache_key] = (mtime_hash, indexed_rows)
         _WORKOUT_LIB_FAST_VALIDATOR[cache_key] = fast_key
@@ -5132,7 +5228,7 @@ def load_workout_library() -> list[dict]:
     # Keyed by the same (count, max_mtime) we just validated, so it stays fresh
     # until a *.zwo actually changes. Writing this dotfile does NOT invalidate
     # the index (the validator is over *.zwo, not the dir mtime).
-    _write_library_index(workouts, len(zwo_paths), max_mtime)
+    _write_library_index(workouts, len(zwo_paths), max_mtime, wd)
     # v3.2.0 watertight classifier (A5): facts self-heal shares the index's
     # heal moment — a new/changed *.zwo lands here (count/max_mtime miss →
     # full parse), so computing its facts row inline (~9ms/file, incremental
@@ -5140,7 +5236,7 @@ def load_workout_library() -> list[dict]:
     # row index. Best-effort: a failure only means the per-file lazy heal in
     # workout_facts.get_facts covers it later.
     try:
-        workout_facts.ensure_facts(WORKOUT_DIR, zwo_paths)
+        workout_facts.ensure_facts(wd, zwo_paths)
     except Exception as _wf_e:  # noqa: BLE001
         log.debug("facts self-heal skipped (%s)", _wf_e)
     return workouts
@@ -7543,7 +7639,7 @@ def sample_week_workouts(ctx: "week_plan.WeekContext", state: "week_plan.PlanSta
                 return False
             if float(w.get("IF", 0) or 0) > _STEPBACK_MAX_IF:
                 return False
-            f = workout_facts.get_facts(WORKOUT_DIR, w.get("File") or "") or {}
+            f = workout_facts.get_facts(_facts_dir_for(w.get("File") or ""), w.get("File") or "") or {}
             # Any time at/above 130% FTP disqualifies a deload draw. Missing
             # facts (unparseable file) fail OPEN to the IF/class verdict above
             # so a facts hiccup can't empty the deload pool.
@@ -12501,8 +12597,12 @@ def reforecast(
                     new_dur = min(int(round(hours * 60)), MAX_AVAIL_SESSION_MIN)
                     tss_per_h = TSS_PER_HOUR.get("z2", 45)
                     new_dur = _fits_budget(new_dur, tss_per_h, _budget, _planned)
-                    if new_dur <= 0:
-                        continue        # the week is already at its budget
+                    if new_dur < _VOLUME_MIN_SESSION_MIN:
+                        # #35: a week a few TSS under budget left room for a
+                        # 1- to 6-minute "restored" ride, which a later rematch
+                        # filled with a 240-minute file. Below the floor a
+                        # session is noise: the day stays rest.
+                        continue
                     s.session_type = "z2"
                     s.duration_min = new_dur
                     s.tss_estimate = round(new_dur / 60 * tss_per_h)
@@ -12510,7 +12610,20 @@ def reforecast(
                     s.description = f"z2 ({new_dur}min) — restored from rest"
                     s.zwo_file = ""
                     s.zwo_name = ""
-                elif getattr(s, "user_swapped", False):
+                    # #35: the restored ride is the planner's. Pins and marks
+                    # left by a session the rider once moved, swapped or had
+                    # adapted on this day (rested since, by a 0 h day) describe
+                    # that session, not this one: pins froze it against resize
+                    # and regen, and a stale pre_adapt let revert-cap bring the
+                    # old session back over it.
+                    s.user_moved = False
+                    s.user_swapped = False
+                    s.moved_from = ""
+                    s.adapted = False
+                    for _k in _PS_JSON_ONLY_KEYS:
+                        if hasattr(s, _k):
+                            delattr(s, _k)
+                elif getattr(s, "user_swapped", False) or getattr(s, "user_moved", False):
                     # A pinned day — swap-type, accepted redraw, FTP-test
                     # choice — keeps the workout the rider chose. Applying the
                     # calendar hours literally here rescaled the duration and,
@@ -12518,6 +12631,10 @@ def reforecast(
                     # the rider's pick: the exact "I accepted one workout and
                     # got another" report. Unavailable (0h) still wins above —
                     # a day the rider zeroed is rest whatever was pinned.
+                    # #27: a session the rider dragged (or swapped onto this
+                    # day) keeps its length too. Every ride sync hands this
+                    # pass the whole availability calendar, so a long ride
+                    # moved onto a 1 h weekday was cut to 1 h the next morning.
                     pass
                 else:
                     # v1.7.3 — apply user's hours LITERALLY (both up and

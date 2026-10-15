@@ -85,6 +85,7 @@ class Fact:
 # always overrule themselves and a fresh machine reading replaces the last.
 _RIDER_OVER_MACHINE = {
     "manual": 2, "tested_coggan_20min": 2, "tested_ramp": 2,
+    "tested_sixty_min": 2, "tested_cp_test": 2,
     "eftp_icu": 1, "eftp_auto": 1, "eftp_local": 1,
 }
 

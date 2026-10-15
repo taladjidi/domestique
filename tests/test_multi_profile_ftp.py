@@ -148,17 +148,19 @@ def test_custom_workout_dir_and_diagnostics_follow_the_switch(tmp_path):
     # already-active profile (by design), so write it first, then switch in.
     (pm._profiles_dir / a / "user_paths.json").write_text(json.dumps({"workout_dir": str(custom)}))
     pm.switch(a); app_module._apply_profile_paths()
-    assert Path(tp.WORKOUT_DIR) == custom
+    # 3.13.1: the rider's folder adds to the built-in library, which stays.
+    assert Path(tp.WORKOUT_DIR) == Path(tp._BUNDLED_WORKOUT_DIR)
+    assert Path(tp.EXTRA_WORKOUT_DIR) == custom
     app_module._DIAG_HEALTH_CACHE["result"] = None
     ha = client.get("/api/diag/health").json()["checks"]["pool_health"]
-    assert ha["workout_dir_is_bundled"] is False and ha["workout_dir"] == str(custom)
+    assert ha["workout_dir_is_bundled"] is True and ha["extra_workout_dir"] == str(custom)
 
     pm.switch(b); app_module._apply_profile_paths()
     assert Path(tp.WORKOUT_DIR) == Path(tp._BUNDLED_WORKOUT_DIR)
     # No manual cache reset: the switch hook must have dropped A's snapshot.
     hb = client.get("/api/diag/health").json()["checks"]["pool_health"]
     assert hb["workout_dir_is_bundled"] is True
-    assert hb["workout_dir"] != str(custom)
+    assert hb["extra_workout_dir"] is None and tp.EXTRA_WORKOUT_DIR is None
 
 
 # ── 4. per-tab "already shown" flag is scoped by profile ────────────────────

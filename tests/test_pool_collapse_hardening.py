@@ -88,6 +88,7 @@ def test_profile_switch_ignores_empty_override_and_empty_profile_dir(tmp_path):
             (active / "workouts").mkdir(exist_ok=True)      # empty per-profile dir
             pm.apply_training_dirs()
             assert tp.WORKOUT_DIR == tp._BUNDLED_WORKOUT_DIR, tp.WORKOUT_DIR
+            assert tp.EXTRA_WORKOUT_DIR is None
             # A populated override IS honoured.
             good = tmp_path / "good-lib"
             good.mkdir()
@@ -95,7 +96,9 @@ def test_profile_switch_ignores_empty_override_and_empty_profile_dir(tmp_path):
             (active / "user_paths.json").write_text(
                 json.dumps({"workout_dir": str(good)}))
             pm.apply_training_dirs()
-            assert tp.WORKOUT_DIR == good
+            # 3.13.1: honoured as the EXTRA folder; the built-in library stays.
+            assert tp.WORKOUT_DIR == tp._BUNDLED_WORKOUT_DIR
+            assert tp.EXTRA_WORKOUT_DIR == good
     finally:
         tp.WORKOUT_DIR, tp.PLAN_DIR = orig_wd, orig_pd
         pm_mod.ProfileManager._instance = orig_inst

@@ -425,7 +425,7 @@ def _session_naming_lookup(
         zwo_duration_min = 0
     if session:
         try:
-            path = _safe_path(active_workout_dir(), zwo_file)
+            path = _workout_file(zwo_file)     # 3.13.1: built-in + extra folder
             served = path and served_minutes(
                 path, session.get("duration_min"), session.get("session_type"))
             if served:
@@ -438,6 +438,9 @@ def _session_naming_lookup(
 _BUNDLED_WORKOUT_DIR = Path(__file__).parent / "workouts"  # bundled workout files
 _BUNDLED_GPX_DIR     = Path(__file__).parent / "gpx"       # bundled GPX files
 GPX_DIR       = _BUNDLED_GPX_DIR
+# 3.13.1: the rider's own folder adds workouts to the built-in library. The
+# planner owns it (training_planner.EXTRA_WORKOUT_DIR, set per profile by
+# ProfileManager.apply_training_dirs, contract 5.1): read it late, keep no copy.
 
 # Load the GPX path override — check user data dir (packaged) then project
 # dir (dev). The workout directory is not resolved here: the planner owns it.
@@ -463,6 +466,18 @@ def active_workout_dir() -> Path:
     tests/test_profile_path_rebinding.py enforces that.
     """
     return tp.active_workout_dir()
+
+
+def _workout_file(*parts, base: "Path | None" = None) -> "Path | None":
+    """A workout file from the library: the built-in folder (every workout the
+    app ships), then the rider's extra folder (3.13.1). The built-in one wins a
+    name both have, as in the library list. None when neither has it."""
+    roots = [base or active_workout_dir(), tp.EXTRA_WORKOUT_DIR, _BUNDLED_WORKOUT_DIR]
+    for root in [r for i, r in enumerate(roots) if r is not None and r not in roots[:i]]:
+        p = _safe_path(root, *parts)
+        if p is not None and p.is_file():
+            return p
+    return None
 
 
 def active_gpx_dir() -> Path:
@@ -1081,7 +1096,8 @@ def setup_defaults():
 
     return {
         "icu_id": config.ICU_ATHLETE_ID or "",
-        "workout_dir": str(active_workout_dir()) if active_workout_dir().exists() else workout_dir_default,
+        # 3.13.1: the field is the EXTRA folder; the built-in library is always on.
+        "workout_dir": str(tp.EXTRA_WORKOUT_DIR) if tp.EXTRA_WORKOUT_DIR else workout_dir_default,
         "gpx_dir": str(active_gpx_dir()) if active_gpx_dir().exists() else "",
         "weight": config.ATHLETE_WEIGHT_KG,
         "ftp": config.ATHLETE_FTP_W,
@@ -1281,6 +1297,77 @@ def setup_pick_folder():
         return {"path": native}
     return {"path": "", "reason": "No folder picker in a browser session: "
                                   "type the folder's full path instead."}
+
+
+def _workout_folders_state() -> dict:
+    """3.13.1 Settings: the built-in library and the rider's extra folder."""
+    try:
+        builtin = {p.name for p in _BUNDLED_WORKOUT_DIR.glob("*.zwo")}
+    except OSError:
+        builtin = set()
+    extra = tp.EXTRA_WORKOUT_DIR
+    out = {"builtin": {"count": len(builtin)}, "extra": None}
+    if extra is not None:
+        try:
+            files = sum(1 for _ in Path(extra).glob("*.zwo"))
+        except OSError:
+            files = 0
+        out["extra"] = {"path": str(extra), "files": files,
+                        "added": len(tp.extra_only_names(extra, builtin))}
+    return out
+
+
+@app.get("/api/settings/workout-folders")
+def api_workout_folders():
+    return _workout_folders_state()
+
+
+@app.post("/api/settings/workout-folders")
+def api_set_extra_workout_folder(body: dict):
+    """Set or clear (extra_dir "") the active profile's extra workouts folder.
+    Its .zwo files join the built-in library; the built-in one is always on."""
+    from profile_manager import ProfileManager
+    pm = ProfileManager.get()
+    if pm.active_id is None:
+        return JSONResponse({"error": "No active profile."}, 409)
+    # A pasted path may carry quotes (Windows "Copy as path").
+    raw = str((body or {}).get("extra_dir") or "").strip().strip('"').strip("'").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        if not _setup_path_allowed(p):
+            return JSONResponse({"error": "Choose a folder inside your home folder."}, 400)
+        if not tp.workout_dir_is_usable(p):
+            sub = p.is_dir() and next(p.glob("*/*.zwo"), None) is not None
+            return JSONResponse({"error": "That folder has no .zwo workout files"
+                                 + ("; they are in a folder inside it, so choose that one." if sub else ".")}, 400)
+        if tp.is_builtin_library(p):
+            return JSONResponse({"error": "That is Domestique's built-in library, which is always included. Choose a folder with your own workouts."}, 400)
+    paths_file = pm.active_dir / "user_paths.json"
+    with _setup_lock:                   # the wizard writes the same file
+        try:
+            paths = json.loads(paths_file.read_text(encoding="utf-8"))
+            if not isinstance(paths, dict):
+                paths = {}
+        except (OSError, json.JSONDecodeError):
+            paths = {}
+        if raw:
+            paths["workout_dir"] = str(Path(raw).expanduser())
+        else:
+            paths.pop("workout_dir", None)
+        try:
+            tmp = paths_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(paths, indent=2), encoding="utf-8")
+            tmp.replace(paths_file)
+        except OSError as e:
+            _log.warning("extra workout folder save failed: %s", e)
+            return JSONResponse({"error": "Could not save the setting — try again."}, 500)
+    pm.apply_training_dirs()
+    _apply_profile_paths()
+    clear_cache()
+    global _LIBRARY_TAGS_CACHE
+    _LIBRARY_TAGS_CACHE = None
+    _log.info("EVENT=extra_workout_folder set=%s", bool(raw))
+    return _workout_folders_state()
 
 
 # Guards against concurrent wizard submissions clobbering each other.
@@ -1910,9 +1997,10 @@ def api_profile_ftp_history():
         # Derive the canonical "type" from source if populated (catches
         # eftp_auto / eftp_icu / tested_* enums), else fall back to method.
         if src in ("eftp_auto", "eftp_icu", "eftp_local",
-                   "tested_coggan_20min", "tested_ramp"):
+                   "tested_coggan_20min", "tested_ramp", "tested_sixty_min",
+                   "tested_cp_test"):
             row_type = src
-        elif method in ("coggan_20min", "ramp"):
+        elif method in ("coggan_20min", "ramp", "sixty_min", "cp_test"):
             row_type = f"tested_{method}"
         else:
             row_type = "manual"
@@ -1952,6 +2040,8 @@ def api_profile_update_ftp(body: dict):
     source_map = {
         "coggan_20min": "tested_coggan_20min",
         "ramp": "tested_ramp",
+        "sixty_min": "tested_sixty_min",
+        "cp_test": "tested_cp_test",
         "manual": "manual",
     }
     ftp_source_tag = source_map.get(method, "manual")
@@ -5492,12 +5582,26 @@ _LIBRARY_TAGS_CACHE: tuple[float, list[str]] | None = None
 _LIBRARY_TAGS_LOCK = threading.Lock()
 
 
+def _library_zwo_paths() -> list[Path]:
+    """Every .zwo of the library: the built-in folder, then the rider's extra
+    folder's files with a name the built-in one lacks (3.13.1)."""
+    try:
+        paths = sorted(active_workout_dir().glob("*.zwo"))
+    except OSError:
+        paths = []
+    extra = tp.EXTRA_WORKOUT_DIR
+    if extra is not None and Path(extra) != active_workout_dir():
+        only = tp.extra_only_names(extra, {p.name for p in paths})
+        paths += [Path(extra) / n for n in sorted(only)]
+    return paths
+
+
 def _compute_library_tags() -> list[str]:
     """Scan all ZWO files for distinct tags. Returns sorted unique list."""
     if not active_workout_dir().exists():
         return []
     seen: set[str] = set()
-    for zwo_path in active_workout_dir().glob("*.zwo"):
+    for zwo_path in _library_zwo_paths():
         try:
             tree = ET.parse(zwo_path)
         except (ET.ParseError, OSError):
@@ -5516,12 +5620,12 @@ def _get_library_tags_cached() -> list[str]:
     """Return cached distinct tag list, refreshing on dir mtime drift."""
     global _LIBRARY_TAGS_CACHE
     try:
-        mtimes = [p.stat().st_mtime for p in active_workout_dir().glob("*.zwo")]
+        mtimes = [p.stat().st_mtime for p in _library_zwo_paths()]
     except OSError:
         mtimes = []
-    sig = max(mtimes) if mtimes else 0.0
+    sig = (str(tp.EXTRA_WORKOUT_DIR), len(mtimes), max(mtimes) if mtimes else 0.0)
     with _LIBRARY_TAGS_LOCK:
-        if _LIBRARY_TAGS_CACHE and abs(_LIBRARY_TAGS_CACHE[0] - sig) < 0.5:
+        if _LIBRARY_TAGS_CACHE and _LIBRARY_TAGS_CACHE[0] == sig:
             return _LIBRARY_TAGS_CACHE[1]
         tags_list = _compute_library_tags()
         _LIBRARY_TAGS_CACHE = (sig, tags_list)
@@ -5569,7 +5673,7 @@ def _build_library_rows() -> list[dict]:
     _content_classifications = tp._load_content_classifications()
     _CONTENT_TO_PROTOCOL = tp._CONTENT_TO_PROTOCOL
 
-    for zwo_path in sorted(active_workout_dir().glob("*.zwo")):
+    for zwo_path in _library_zwo_paths():
         scan = _scan_zwo_for_library(zwo_path)
         if not scan:
             continue
@@ -5688,7 +5792,15 @@ def _get_library_rows_cached() -> list[dict]:
                       if e.name.endswith(".zwo") and not e.name.startswith(".")]
     except OSError:
         mtimes = []
-    sig = (str(active_workout_dir()), max(mtimes) if mtimes else 0.0, len(mtimes))
+    extra = tp.EXTRA_WORKOUT_DIR
+    if extra is not None:
+        try:
+            with os.scandir(extra) as it:
+                mtimes += [e.stat().st_mtime for e in it
+                           if e.name.endswith(".zwo") and not e.name.startswith(".")]
+        except OSError:
+            pass
+    sig = (str(active_workout_dir()), str(extra), max(mtimes) if mtimes else 0.0, len(mtimes))
     with _LIBRARY_ROWS_LOCK:
         if _LIBRARY_ROWS_CACHE and _LIBRARY_ROWS_CACHE[0] == sig:
             return _LIBRARY_ROWS_CACHE[1]
@@ -5939,7 +6051,7 @@ def download_workout_by_id(filename: str, cap: int = Query(0)):
     reps to the rider's measured-power envelope. A no-op cap keeps the plain
     FileResponse (byte-identical to disk).
     """
-    path = _safe_path(active_workout_dir(), filename)
+    path = _workout_file(filename)
     if not path or not path.exists():
         return JSONResponse({"error": "not found"}, 404)
     # v1.6.4: media_type "application/octet-stream" (was "application/xml")
@@ -5980,9 +6092,9 @@ def api_workout_detail(category: str, filename: str, view: str | None = Query(No
     and the payload is the served workout (served_zwo_bytes, fitted to an
     easy slot), so the modal's chart and minutes are what the rider gets."""
     # Flat layout first, legacy category/file fallback
-    path = _safe_path(active_workout_dir(), filename)
+    path = _workout_file(filename)
     if not path or not path.exists():
-        path = _safe_path(active_workout_dir(), category, filename)
+        path = _workout_file(category, filename)
     if not path or not path.exists():
         return JSONResponse({"error": "not found"}, 404)
     try:
@@ -6185,9 +6297,9 @@ async def api_bulk_segments(request: Request):
         else:
             cat, fname = "", f
         # Flat lookup first; fall back to legacy category subdir
-        path = _safe_path(active_workout_dir(), fname) if fname else None
+        path = _workout_file(fname) if fname else None
         if (not path or not path.exists()) and cat:
-            path = _safe_path(active_workout_dir(), cat, fname)
+            path = _workout_file(cat, fname)
         if not path or not path.exists():
             continue
         try:
@@ -7187,7 +7299,7 @@ def download_zwo_flat(filename: str, outdoor: int = Query(0),
     slim/9.1: a planned session's download passes its ``slot_min`` and
     ``session_type`` and gets the served workout (fitted to an easy slot).
     """
-    path = _safe_path(active_workout_dir(), filename)
+    path = _workout_file(filename)
     if not path or not path.exists():
         return JSONResponse({"error": "not found"}, 404)
     return _zwo_download_response(path, filename, outdoor, transit_min, spin_min,
@@ -7203,9 +7315,9 @@ def download_zwo(category: str, filename: str, outdoor: int = Query(0),
     G1 (v2.1): ``outdoor=1`` adds an off-plan transit warmup + spin-home cooldown.
     task #24: ``cap=1``/on toggle caps short reps to measured power."""
     # Flat layout first, legacy category/file fallback
-    path = _safe_path(active_workout_dir(), filename)
+    path = _workout_file(filename)
     if not path or not path.exists():
-        path = _safe_path(active_workout_dir(), category, filename)
+        path = _workout_file(category, filename)
     if not path or not path.exists():
         return JSONResponse({"error": "not found"}, 404)
     return _zwo_download_response(path, filename, outdoor, transit_min, spin_min,
@@ -7863,9 +7975,11 @@ def _icu_active_pid() -> "str | None":
 
 def _icu_push_note_result(res: dict, pid: "str | None" = None) -> None:
     """Record a reconcile result (+timestamp) for the status endpoint, under
-    the profile it ran for (default: the active one)."""
+    the profile it ran for: the caller's, else the one the reconcile names
+    (#34: a switch during a slow run must not relabel it), else the active
+    one."""
     try:
-        pid = pid or _icu_active_pid()
+        pid = pid or res.get("profile_id") or _icu_active_pid()
         if pid is not None:
             _icu_push_last_result[pid] = {"at": clock.now().isoformat(), **res}
     except Exception:
@@ -7883,7 +7997,7 @@ def _icu_push_sync_enabled() -> bool:
         return False
 
 
-def _icu_push_debounced_run(expected_pid: str) -> None:
+def _icu_push_debounced_run(expected_pid: str, retried: int = 0) -> None:
     global _icu_push_timer
     with _icu_push_timer_lock:
         _icu_push_timer = None
@@ -7903,6 +8017,8 @@ def _icu_push_debounced_run(expected_pid: str) -> None:
             return
         import icu_calendar_push
         res = icu_calendar_push.reconcile()
+        if res.get("error") == "swept":         # sync went off while it waited
+            return
         _icu_push_note_result(res, expected_pid)
         # 3.3.1 hotfix (B3b): this line omitted `error` entirely — the
         # tester's swap-triggered 422 failed with a clean-looking log line.
@@ -7911,6 +8027,19 @@ def _icu_push_debounced_run(expected_pid: str) -> None:
                   res.get("pushed"), res.get("updated"), res.get("deleted"),
                   res.get("needs_reconnect"), res.get("error"),
                   res.get("error_detail"))
+        # #28 W16: "busy" = another reconcile held the calendar lock past
+        # the wait, so the plan write this run was armed for never reached
+        # intervals.icu, and the next trigger can be tomorrow's daily run.
+        # Re-arm (up to 10 times, ~15 min); a timer a newer plan write armed
+        # meanwhile covers it.
+        if res.get("error") == "busy" and retried < 10:
+            with _icu_push_timer_lock:
+                if _icu_push_timer is None:
+                    t = threading.Timer(ICU_PUSH_DEBOUNCE_S, _icu_push_debounced_run,
+                                        args=(expected_pid, retried + 1))
+                    t.daemon = True
+                    _icu_push_timer = t
+                    t.start()
     except Exception:
         _log.warning("debounced ICU calendar push failed", exc_info=True)
 
@@ -7992,6 +8121,9 @@ def _icu_push_daily_from_sync() -> None:
         _icu_push_last_daily[pid] = today
         import icu_calendar_push
         res = icu_calendar_push.reconcile()
+        if res.get("error") == "swept":         # sync went off while it waited
+            _icu_push_last_daily.pop(pid, None)  # the day's run did not happen
+            return
         _icu_push_note_result(res, pid)
         if res.get("error"):
             _icu_push_last_daily.pop(pid, None)   # transient — retry next sync pass
@@ -8065,7 +8197,7 @@ def api_icu_push(body: "dict | None" = None):
             _icu_push_cancel_pending()      # a pending debounce would re-push
             res = _icp.sweep_all()          # G-A: final forward sweep
             return {"ok": True, "sync_enabled": False, **res}
-        res = _icp.reconcile()
+        res = _icp.reconcile(abort_if_swept=False)
         _icu_push_note_result(res)          # 3.3.1 hotfix (B3b): status parity
         return {"ok": not res.get("error") and not res.get("needs_reconnect"),
                 **res}
@@ -8091,6 +8223,10 @@ def api_calendar_push_workout(body: "dict | None" = None):
         auto-sync would produce (byte-identical → merges, no duplicate). Never a
         client index or a hand-rolled <n> (grill amendment 2). O1: the horizon is
         extended to cover a target day beyond the 14-day auto-sync window.
+
+    #28: a planned session the rider moved in intervals.icu is not pushed —
+    {ok, pushed: 0, kept_on: <the day it is on there>} — and the planner push
+    waits for a running reconcile ({error: "busy"} after a minute).
 
     ALWAYS HTTP 200 with a data dict ({ok,pushed,event_date} / {needs_reconnect}
     / {needs_lthr} / {error}) — never a 4xx/500, so the shared toast handler reads
@@ -8145,6 +8281,24 @@ def api_calendar_push_workout(body: "dict | None" = None):
             return {"error": "date_out_of_range"}
         date_iso = target.isoformat()
 
+        def _send(events):
+            # ONE bulk upsert (idempotent on external_id) via the engine's own
+            # seam — the SAME transport reconcile uses, so 403-scope maps to
+            # needs_reconnect.
+            status, resp = _icp._http(
+                "POST", f"athlete/{athlete_id}/events/bulk?upsert=true",
+                payload=events)
+            if _icp._scope_403(status, resp):
+                return {"needs_reconnect": True}
+            if status == 0:
+                return {"error": "network"}
+            if not (200 <= status < 300):
+                return {"error": f"http_{status}"}
+            _icp.note_pushed(events)
+            _log.info("EVENT=icu_calendar_push_workout source=%s date=%s pushed=1",
+                      source, date_iso)
+            return {"ok": True, "pushed": 1, "event_date": date_iso}
+
         workout_dir = Path(active_workout_dir())
         if source == "library":
             # amendment 5: zwo_file is CLIENT-supplied → reject traversal BEFORE
@@ -8169,8 +8323,16 @@ def api_calendar_push_workout(body: "dict | None" = None):
                 hr_mode, lthr_ok)
             if event is None:
                 return {"error": reason}
-            events = [event]
-        else:  # planner
+            return _send([event])
+
+        def _push_planned():
+            # #28: read the plan, the window and push under the reconcile
+            # lock, so a reconcile this waited for is seen whole. The wait can
+            # outlast a profile switch or midnight (3.13.0 review).
+            if ProfileManager.get().active_id != profile_id:
+                return {"error": "profile_changed"}
+            if target < clock.today():
+                return {"error": "date_out_of_range"}
             plan = _icp._load_plan()
             if plan is None:
                 return {"error": "no_plan"}
@@ -8198,24 +8360,87 @@ def api_calendar_push_workout(body: "dict | None" = None):
                 if reason == "needs_lthr":
                     return {"needs_lthr": True}
                 return {"error": "not a pushable planned session"}
-            events = [event]
+            # #28: the upsert is keyed by external_id, which a drag in the
+            # intervals.icu calendar keeps — pushing blindly pulled a workout
+            # the rider moved there back to its planned day. Read the window
+            # first and leave it where they put it.
+            kept_on, err_res = _icp.moved_copy_day(
+                athlete_id, plan, event["external_id"], profile_id, horizon)
+            if err_res is not None:
+                if err_res.get("needs_reconnect"):
+                    return {"needs_reconnect": True}
+                return {"error": err_res.get("error") or "network"}
+            if kept_on is not None:
+                _log.info("EVENT=icu_calendar_push_workout source=planner "
+                          "date=%s pushed=0 kept_on=%s", date_iso, kept_on)
+                return {"ok": True, "pushed": 0, "kept_on": kept_on}
+            return _send([event])
 
-        # ONE bulk upsert (idempotent on external_id) via the engine's own seam —
-        # the SAME transport reconcile uses, so 403-scope maps to needs_reconnect.
-        status, resp = _icp._http(
-            "POST", f"athlete/{athlete_id}/events/bulk?upsert=true",
-            payload=events)
-        if _icp._scope_403(status, resp):
+        return _icp._one_at_a_time(_icp._RECONCILE_LOCK_TIMEOUT_S, _push_planned)
+    except Exception as e:                      # amendment 7: zero 500s, ever
+        _log.exception("calendar push-workout endpoint failed")
+        return {"error": f"internal:{type(e).__name__}"}
+
+
+_ICU_RACE_PRIORITY = {"RACE_A": "A", "RACE_B": "B", "RACE_C": "C"}
+
+
+@app.get("/api/icu/races")
+def api_icu_races():
+    """Race import (3.13.0): the rider's races planned in intervals.icu
+    (RACE_A / RACE_B / RACE_C events, today .. +365 days) for the plan builder
+    to show. Read-only: the rider maps each race in the builder and Generate
+    saves the plan as usual; nothing is stored here.
+
+    Always 200: {races: [{date, name, priority, sport, distance_km}]} sorted by
+    date, or {needs_reconnect} / {error}. Reading events needs the calendar
+    scope the push already asks for (CALENDAR:WRITE covers READ)."""
+    import icu_calendar_push as _icp
+    from profile_manager import ProfileManager
+    try:
+        pm = ProfileManager.get()
+        if not pm.active_id:
+            return {"error": "no_active_profile"}
+        athlete_id, err = _icp._connection(pm)
+        if err:
+            return {"error": err}
+        if not _icp.write_ok(pm):
+            return {"needs_reconnect": True}
+        today = clock.today()
+        status, body = _icp._http(
+            "GET", f"athlete/{athlete_id}/events?oldest={today.isoformat()}"
+                   f"&newest={(today + timedelta(days=365)).isoformat()}")
+        if _icp._scope_403(status, body) or status == 401:   # 401: token revoked/expired
             return {"needs_reconnect": True}
         if status == 0:
             return {"error": "network"}
         if not (200 <= status < 300):
             return {"error": f"http_{status}"}
-        _log.info("EVENT=icu_calendar_push_workout source=%s date=%s pushed=1",
-                  source, date_iso)
-        return {"ok": True, "pushed": 1, "event_date": date_iso}
-    except Exception as e:                      # amendment 7: zero 500s, ever
-        _log.exception("calendar push-workout endpoint failed")
+        try:
+            rows = json.loads(body or b"[]")
+        except (json.JSONDecodeError, ValueError):
+            return {"error": "bad_response"}
+        races = []
+        for ev in rows if isinstance(rows, list) else []:
+            if not isinstance(ev, dict):
+                continue
+            prio = _ICU_RACE_PRIORITY.get(str(ev.get("category") or ""))
+            day = _icp._event_day(ev)
+            if prio is None or day is None or day < today:
+                continue
+            dist = ev.get("distance")
+            km = (round(float(dist) / 1000.0, 1)
+                  if isinstance(dist, (int, float)) and not isinstance(dist, bool)
+                  and 0 < dist < 2_000_000 else None)
+            races.append({"date": day.isoformat(),
+                          "name": str(ev.get("name") or "").strip()[:120],
+                          "priority": prio,
+                          "sport": str(ev.get("type") or ""),
+                          "distance_km": km})
+        races.sort(key=lambda r: (r["date"], r["priority"], r["name"]))
+        return {"races": races}
+    except Exception as e:                      # always 200, never a 500
+        _log.exception("icu races read failed")
         return {"error": f"internal:{type(e).__name__}"}
 
 
@@ -9908,7 +10133,7 @@ def _served_zone_minutes_of(zwo_file: str, slot_min, slot_type: str):
     if not zwo_file:
         return None
     try:
-        path = active_workout_dir() / zwo_file
+        path = _workout_file(zwo_file) or active_workout_dir() / zwo_file  # 3.13.1
     except Exception:  # noqa: BLE001
         return None
     return served_zone_minutes(path, slot_min, slot_type)
@@ -13028,7 +13253,7 @@ def build_fit_workout_bytes(session_type: str, duration_min: int,
 
     ftp = config.ATHLETE_FTP_W
     if zwo_file:
-        zwo_path = _safe_path(active_workout_dir(), zwo_file)
+        zwo_path = _workout_file(zwo_file)
         if not zwo_path or not zwo_path.exists():
             raise FileNotFoundError(f"ZWO file not found: {zwo_file}")
         # The served workout (S1). task #24: capped pre-transcode when active
@@ -13679,6 +13904,19 @@ def _apply_move_session(
 
     FC3 (v2.5.0, L3-2/L3-10): a race entry is never moved, and nothing is ever
     moved ONTO a race day — returns None (the endpoint 400s before calling).
+
+    #27: a rider's move (``auto=False``) never destroys a session. Dropped on
+    a day that holds one training session (pending, missed or dismissed), the
+    two trade places: the displaced session lands on ``src_iso`` under the
+    same landing rule as the dragged one (both pinned ``user_moved``, each
+    ``moved_from`` the day it left) and no rest stub is written. A rest day,
+    a ``moved_from:`` stub or an empty day is taken as before. A rider's move
+    is refused (None, plan untouched) when either day was ridden (status
+    done / done_partial / ambiguous) or holds more than one row in its
+    stored week, or when the source is a rest day or a ``moved_from:`` stub
+    rather than a session. ``auto=True`` keeps the overwrite: the auto-reschedule
+    takeover writes off the easy day by design and its undo relies on the
+    stub.
     """
     try:
         src_d = date.fromisoformat(src_iso)
@@ -13712,36 +13950,77 @@ def _apply_move_session(
     dst_week = weeks_data[dst_week_idx]
     src_sessions = src_week.get("sessions", [])
     dst_sessions = dst_week.get("sessions", [])
-    src_session = next((s for s in src_sessions if s.get("day") == src_iso), None)
+    src_here = [s for s in src_sessions if s.get("day") == src_iso]
+    dst_here = [s for s in dst_sessions if s.get("day") == dst_iso]
+    src_session = src_here[0] if src_here else None
     if not src_session:
         return None
-    dst_session = next((s for s in dst_sessions if s.get("day") == dst_iso), None)
+    dst_session = dst_here[0] if dst_here else None
 
     # FC3 (v2.5.0): the race entry is immutable — not movable, not overwritable.
     if src_session.get("is_race") or (dst_session or {}).get("is_race"):
         return None
 
-    moved_payload = {k: v for k, v in src_session.items()}
-    moved_payload["day"] = dst_iso
-    moved_payload["day_name"] = (
-        dst_session["day_name"] if dst_session else dst_d.strftime("%a")
+    if not auto:
+        # #27: a ridden session stays on the day it was ridden (a swap would
+        # carry its ride credit to a day it was not ridden), and a day with
+        # two rows would lose one half or hold two copies of the dragged one.
+        if any(str((s or {}).get("status") or "") in _RIDDEN_RANK
+               for s in (src_session, dst_session)):
+            return None
+        if len(src_here) > 1 or len(dst_here) > 1:
+            return None
+        # #27 W14: a rider drags a session, never a rest day or the stub a
+        # move left. Swapped onto a training day, a stub would carry its
+        # "moved_from:" pointer to a day it does not describe, and the
+        # calendar push follows that pointer (#28). The views never drag
+        # either; a stale client or the raw API can.
+        if ((src_session.get("session_type") or "") == "rest"
+                or str(src_session.get("status") or "").startswith("moved_from:")):
+            return None
+
+    def _landed(sess: dict, day_iso: str, day_name: str, from_iso: str) -> dict:
+        out = {k: v for k, v in sess.items()}
+        out["day"] = day_iso
+        out["day_name"] = day_name
+        if auto:
+            # FC5a: auto-relocations carry their own provenance and never the
+            # user pin (a prior user_moved on the source is superseded — the
+            # session no longer sits where the user put it).
+            out["user_moved"] = False
+            out["auto_moved"] = True
+        else:
+            out["user_moved"] = True
+            out["auto_moved"] = False
+        out["moved_from"] = from_iso
+        if out.get("status", "pending") == "pending":
+            out["status"] = "pending"
+        elif out.get("status") == "missed" and date.fromisoformat(day_iso) >= clock.today():
+            # Dragged onto a day still to come: owed there, not missed; left
+            # "missed", the auto-reschedule moved it off the day it was put on.
+            out["status"] = "pending"
+        return out
+
+    moved_payload = _landed(
+        src_session, dst_iso,
+        dst_session["day_name"] if dst_session else dst_d.strftime("%a"),
+        src_iso,
     )
-    if auto:
-        # FC5a: auto-relocations carry their own provenance and never the
-        # user pin (a prior user_moved on the source is superseded — the
-        # session no longer sits where the user put it).
-        moved_payload["user_moved"] = False
-        moved_payload["auto_moved"] = True
-    else:
-        moved_payload["user_moved"] = True
-        moved_payload["auto_moved"] = False
-    moved_payload["moved_from"] = src_iso
-    if reset_status_to_pending or moved_payload.get("status", "pending") == "pending":
+    if reset_status_to_pending:
         moved_payload["status"] = "pending"
-    elif moved_payload.get("status") == "missed" and dst_d >= clock.today():
-        # Dragged onto a day still to come: owed there, not missed; left
-        # "missed", the auto-reschedule moved it off the day it was put on.
-        moved_payload["status"] = "pending"
+
+    # #27: a rider's drop onto a training day swaps the two. Both sessions
+    # land by the same rule, so both are pinned where the rider put them (a
+    # refit must not rewrite the half it did not see dragged).
+    displaced = None
+    if (not auto and dst_session is not None
+            and (dst_session.get("session_type") or "") != "rest"
+            and not str(dst_session.get("status") or "").startswith("moved_from:")):
+        displaced = _landed(
+            dst_session, src_iso,
+            src_session.get("day_name") or src_d.strftime("%a"),
+            dst_iso,
+        )
     if auto:
         # What the move changed, so a ride that turns up later on the
         # session's own day can undo it (_undo_auto_moves_for_ridden_days):
@@ -13767,7 +14046,9 @@ def _apply_move_session(
 
     new_src = []
     for s in src_sessions:
-        if s.get("day") == src_iso:
+        if s.get("day") == src_iso and displaced is not None:
+            new_src.append(displaced)
+        elif s.get("day") == src_iso:
             new_src.append({
                 "day": src_iso, "day_name": src_session["day_name"],
                 "session_type": "rest", "duration_min": 0,
@@ -14202,8 +14483,18 @@ async def api_plan_move_session(request: Request):
 
     - Sets `user_moved=True` on the session at its new slot.
     - Records `moved_from=<original iso date>`.
-    - The vacated slot becomes a rest with `status=moved_from:<new_date>`.
+    - Onto a rest day, a `moved_from:` stub or an empty day: the vacated slot
+      becomes a rest with `status=moved_from:<new_date>`.
+    - #27: onto a day holding one training session, the two swap places
+      (both pinned `user_moved`, each `moved_from` the day it left) and
+      nothing is vacated. A ridden day or a day with two sessions is refused
+      with 409 and a plain sentence in `error`; the plan is not written.
+      A rest day or a `moved_from:` stub is not a session to move: 422
+      `source_session_not_found`, as for an empty day.
     - §6.12: regenerate_from_today honors user_moved=True — never re-prescribed.
+
+    Returns `{"ok": true, "moved": <session now on new_date>,
+    "vacated": <date> | null, "swapped": <session now on date> | null}`.
     """
     body = await _get_json_body(request)
     json_path = _plan_dir() / "current_plan.json"
@@ -14323,15 +14614,57 @@ async def api_plan_move_session(request: Request):
                         400,
                     ))
 
-        # Mutation is shared with the auto-reschedule path (_apply_move_session)
-        # so both apply the identical same-week relocation + rest-stub rewrite.
+        # #27: the mutator refuses these too (None); checked here first so
+        # the rider reads why. The drop predicates block most of them, but
+        # a stale view can still send one, and the plan grid lets today's
+        # partly ridden session be dragged.
+        src_rows = [s for s in weeks_data[src_week_idx].get("sessions", []) or []
+                    if s.get("day") == src_iso]
+        dst_rows = [s for s in weeks_data[dst_week_idx].get("sessions", []) or []
+                    if s.get("day") == dst_iso]
+        if len(src_rows) > 1 or len(dst_rows) > 1:
+            return _reply(JSONResponse(
+                {"error": "Days with two sessions can't be changed by "
+                          "dragging yet."},
+                409,
+            ))
+        if any(str(s.get("status") or "") in _RIDDEN_RANK
+               for s in src_rows + dst_rows):
+            return _reply(JSONResponse(
+                {"error": "That day has already been ridden."}, 409
+            ))
+        # A swap puts the session that was there on the day the dragged
+        # one left. From a day that has passed, that would mark a workout
+        # the rider never touched as missed (3.13.0 review).
+        if src_d < clock.today() and any(
+                (s.get("session_type") or "") != "rest"
+                and not str(s.get("status") or "").startswith("moved_from:")
+                for s in dst_rows):
+            return _reply(JSONResponse(
+                {"error": "The workout on that day would move to a day that "
+                          "has passed. Drop this one on a rest day instead."},
+                409,
+            ))
+
+        # Mutation is shared with the auto-reschedule path (_apply_move_session):
+        # one same-week relocation. A rider's drop onto a training day swaps
+        # (#27); the auto path keeps its overwrite + rest stub.
         moved_payload = _apply_move_session(plan, src_iso, dst_iso)
         if moved_payload is None:
             return _reply(JSONResponse(
                 {"error": "source_session_not_found", "date": src_iso}, 422
             ))
 
-        out["r"] = {"ok": True, "moved": moved_payload, "vacated": src_iso}
+        # #27: a stub left on the source day means a move; the displaced
+        # session sitting there means a swap and nothing was vacated.
+        at_src = next((s for s in weeks_data[src_week_idx].get("sessions", []) or []
+                       if s.get("day") == src_iso), None)
+        if at_src is None or str(at_src.get("status") or "").startswith("moved_from:"):
+            vacated, swapped = src_iso, None
+        else:
+            vacated, swapped = None, at_src
+        out["r"] = {"ok": True, "moved": moved_payload, "vacated": vacated,
+                    "swapped": swapped}
         return plan
 
     try:
@@ -15887,7 +16220,8 @@ def _execution_for_match(s_json: dict, activity_id) -> "dict | None":
     if zwo:
         try:
             import structure_fidelity as _sf
-            band_segments = _sf.parse_zwo_file(active_workout_dir() / os.path.basename(zwo))
+            band_segments = _sf.parse_zwo_file(_workout_file(os.path.basename(zwo))
+                                               or active_workout_dir() / os.path.basename(zwo))
         except Exception:
             _log.debug("execution band segments unavailable for %s", zwo, exc_info=True)
     try:
@@ -15950,7 +16284,8 @@ def _block_eval_for(s_json: dict, ride: dict) -> "dict | None":
         if not laps or not zwo:
             return None
         import structure_fidelity as _sf
-        path = active_workout_dir() / os.path.basename(zwo)
+        path = (_workout_file(os.path.basename(zwo))
+                or active_workout_dir() / os.path.basename(zwo))
         if not path.exists():
             return None
         segs = _sf.parse_zwo_file(path)
@@ -16776,6 +17111,8 @@ def _ftp_test_family(fname: str) -> "str | None":
         return "coggan_20min"
     if f.startswith("ftp_test_60min"):
         return "sixty_min"
+    if f.startswith("ftp_test_cp"):
+        return "cp_test"
     return None
 
 
@@ -16793,6 +17130,7 @@ _FTP_TEST_PREFERRED_FILE = {
     "ramp": ("ftp_test_ramp_ladder21_200pct_35min.zwo", 35, 60),
     "coggan_20min": ("ftp_test_coggan_3x1min-1min_95pct_59min.zwo", 59, 75),
     "sixty_min": ("ftp_test_60min_steady_86min.zwo", 86, 100),
+    "cp_test": ("ftp_test_cp_12-7-3min_100pct_110min.zwo", 110, 85),
 }
 
 
@@ -16804,9 +17142,9 @@ async def api_plan_ftp_test_type(request: Request):
     body = await _get_json_body(request)
     day_iso = str(body.get("date") or "").strip()
     test_type = str(body.get("test_type") or "").strip()
-    if test_type not in ("ramp", "coggan_20min", "sixty_min"):
+    if test_type not in _FTP_TEST_PREFERRED_FILE:
         return JSONResponse(
-            {"error": "test_type must be ramp, coggan_20min or sixty_min"}, 400)
+            {"error": "test_type must be ramp, coggan_20min, sixty_min or cp_test"}, 400)
     try:
         date.fromisoformat(day_iso)
     except ValueError:
@@ -16836,6 +17174,13 @@ async def api_plan_ftp_test_type(request: Request):
         pref_file, want_dur, nominal_tss = _FTP_TEST_PREFERRED_FILE[test_type]
         cands = [w for w in library
                  if _ftp_test_family(w.get("File", "")) == test_type]
+        if not cands and _workout_file(pref_file):
+            # The rider's own folder lacks this protocol: the built-in
+            # library has it (found there by _workout_file everywhere).
+            _m = re.search(r"<name>(.*?)</name>",
+                           _workout_file(pref_file).read_text(encoding="utf-8"))
+            cands = [{"File": pref_file, "Name": _m.group(1) if _m else pref_file,
+                      "Duration(min)": want_dur, "TSS": nominal_tss}]
         if not cands:
             return _reply(JSONResponse({"error": f"no {test_type} workout in library"}, 404))
         pick = next((w for w in cands if w.get("File") == pref_file), None)
@@ -19764,7 +20109,8 @@ def api_ride_ftp_test_analysis(ride_id: str):
     if ws is not None and we is not None:
         label = {"coggan_20min": "20-min block (scored)",
                  "ramp": "best sustained minute (scored)",
-                 "sixty_min": "hour plateau (scored)"}.get(kind, "scored window")
+                 "sixty_min": "hour plateau (scored)",
+                 "cp_test": "12-min effort (with the 7 and 3)"}.get(kind, "scored window")
         windows.append({"kind": "scored", "start_s": int(ws), "end_s": int(we), "label": label})
     if suggestion.get("blowout_start_s") is not None:
         windows.append({"kind": "blowout", "start_s": int(suggestion["blowout_start_s"]),
@@ -20567,6 +20913,9 @@ def api_diag_health(request: Request):
                 "workout_dir": str(tp.WORKOUT_DIR),
                 "workout_dir_is_bundled":
                     tp.WORKOUT_DIR == tp._BUNDLED_WORKOUT_DIR,
+                # 3.13.1: the rider's folder adds to the built-in library.
+                "extra_workout_dir": (str(tp.EXTRA_WORKOUT_DIR)
+                                      if tp.EXTRA_WORKOUT_DIR else None),
                 "collapse_reason": tp._pool_collapse_reason(_pi, lib) or None,
             }
         except Exception as e:

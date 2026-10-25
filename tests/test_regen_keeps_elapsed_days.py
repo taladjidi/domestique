@@ -64,11 +64,13 @@ def test_a_mid_week_rebuild_keeps_the_days_before_today(_keep_library_index):
     cur["sessions"][0].update(status="done", completion_matches=[{"activity_id": "i1"}])
     weeks = _regen([_week(1, MON), _week(2, MON + timedelta(days=7)), cur, _week(4, MON + timedelta(days=21))],
                    _rides(MON, 17))
-    kept = next(w for w in weeks if w.end == THU - timedelta(days=1))
+    # Domestique fork: on the Monday grid the rebuilt row is widened back to
+    # its Monday (_keep_elapsed_days): one row per calendar week, the days
+    # before today in it; its target is the ramp's budget for the span.
+    kept = next(w for w in weeks if w.start <= THU - timedelta(days=1) <= w.end)
     assert kept.start == MON + timedelta(days=14) and kept.week_num == 3
-    assert [s.day for s in kept.sessions] == [MON + timedelta(days=14 + i) for i in range(3)]
+    assert [s.day for s in kept.sessions][:3] == [MON + timedelta(days=14 + i) for i in range(3)]
     assert kept.sessions[0].status == "done" and kept.sessions[0].completion_matches
-    assert kept.tss_target == 100                       # the planned load of those days
     days = [s.day for w in weeks for s in w.sessions]
     assert len(days) == len(set(days))                  # no day twice
     assert sorted(days) == [MON + timedelta(days=i) for i in range(len(days))]   # none missing
@@ -80,7 +82,7 @@ def test_the_kept_days_do_not_bring_the_stepback_forward(_keep_library_index):
     weeks = _regen([_week(1, MON), _week(2, MON + timedelta(days=7)),
                     _week(3, MON + timedelta(days=14)), _week(4, MON + timedelta(days=21))],
                    _rides(MON, 17))
-    row = next(w for w in weeks if w.start == THU)
+    row = next(w for w in weeks if w.start <= THU <= w.end)   # fork: widened to Monday
     nxt = next(w for w in weeks if w.start == THU + timedelta(days=4))
     assert (row.is_stepback, nxt.is_stepback) == (False, True)
 
@@ -137,3 +139,19 @@ def test_a_split_week_counts_once_at_every_later_rebuild():
                                MON + timedelta(days=20))
     finally:
         clock.unfreeze()
+
+
+def test_off_grid_weeks_keep_the_days_before_today_as_their_own_row(_keep_library_index):
+    """Domestique fork: plan weeks Sunday to Saturday. The rebuilt row is not
+    widened (it would run past the old week), so the days before today are a
+    row of their own, once, however often the final step runs."""
+    w0 = THU - timedelta(days=18)                        # a Sunday
+    weeks = _regen([_week(1, w0), _week(2, w0 + timedelta(days=7)), _week(3, w0 + timedelta(days=14)),
+                    _week(4, w0 + timedelta(days=21))], _rides(w0, 18))
+    kept = next(w for w in weeks if w.end == THU - timedelta(days=1))
+    assert kept.start == w0 + timedelta(days=14)
+    assert [s.day for s in kept.sessions] == [w0 + timedelta(days=14 + i) for i in range(4)]
+    days = [s.day for w in weeks for s in w.sessions]
+    assert len(days) == len(set(days))
+    assert sorted(days) == [w0 + timedelta(days=i) for i in range(len(days))]
+    assert [w.week_num for w in weeks] == list(range(1, len(weeks) + 1))

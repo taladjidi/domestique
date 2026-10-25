@@ -14110,20 +14110,9 @@ def regenerate_from_today(
 
     # 1. Keep past weeks
     past_weeks = [w for w in old_plan_weeks if w.end < today]
-    # 1a. 3.13.2 (IP_3.13.2 D): the current week's days before today are kept
-    # too, as a week of their own ending yesterday. The rebuild starts today,
-    # so they fell out of the plan, and with them the rides done there. The
-    # stepback cadence and the long-ride count read the ended weeks only:
-    # the kept part and the rebuilt rest are one calendar week.
+    # 1a. The current week's days before today are kept by the final step
+    # (_keep_elapsed_days), for every entry point.
     kept_weeks = list(past_weeks)
-    _cur = next((w for w in old_plan_weeks if w.start < today <= w.end), None)
-    if _cur is not None:
-        _elapsed = [s for s in _cur.sessions if s.day < today]
-        kept_weeks.append(replace(
-            _cur, end=today - timedelta(days=1), sessions=_elapsed,
-            tss_target=round(sum(float(s.tss_estimate or 0) for s in _elapsed
-                                 if s.session_type != "rest")),
-            net_tss_target=None))
 
     # 1b. Gather any adapted / user-moved / status-tracked sessions from the
     # CURRENT week of the old plan (fix26 §6.12).
@@ -14589,19 +14578,36 @@ def _keep_elapsed_days(all_weeks: list, old_plan_weeks: list, today: date) -> No
     new_cur = next((w for w in all_weeks if w.start <= today <= w.end), None)
     if new_cur is None or new_cur.start <= old_cur.start:
         return                      # already covers the days behind today
-    if new_cur.end > old_cur.end:
-        # The rebuilt row runs past the old week's Sunday, so it is not on the
-        # Monday grid: a reconditioning ramp (built today..+6 after an
-        # absence) or a taper row, which is laid backward from race day and
-        # exempt from the grid by design (_next_week_cursor). Widening the
-        # start would make one row span ten days and every Monday-to-Sunday
-        # reader would then divide by the wrong span. A rider who was absent
-        # long enough to earn a ramp is a different case from this one.
-        return
     elapsed = [s for s in old_cur.sessions
                if getattr(s, "day", None) is not None
                and old_cur.start <= s.day < today]
     if not elapsed:
+        return
+    if new_cur.end > old_cur.end:
+        # The rebuilt row runs past the old week's Sunday, so it is not on the
+        # Monday grid: a reconditioning ramp (built today..+6 after an
+        # absence), a taper row, which is laid backward from race day and
+        # exempt from the grid by design (_next_week_cursor), or a plan whose
+        # weeks never started on Monday. Widening the start would make one
+        # row span ten days and every Monday-to-Sunday reader would then
+        # divide by the wrong span. Upstream 3.13.2 (IP_3.13.2 D): the days
+        # are kept as a row of their own ending the day before the rebuilt
+        # row, carrying what they asked; no other row holds them, so nothing
+        # is counted twice. The final step can run twice: a day a row holds
+        # already is not added again.
+        held = {getattr(s, "day", None) for w in all_weeks for s in w.sessions}
+        kept = [s for s in elapsed if s.day < new_cur.start and s.day not in held]
+        if not kept:
+            return
+        i = all_weeks.index(new_cur)
+        all_weeks.insert(i, replace(
+            old_cur, end=new_cur.start - timedelta(days=1), sessions=kept,
+            week_num=new_cur.week_num,
+            tss_target=round(sum(float(s.tss_estimate or 0) for s in kept
+                                 if s.session_type != "rest")),
+            net_tss_target=None))
+        for w in all_weeks[i + 1:]:
+            w.week_num += 1
         return
     kept = {getattr(s, "day", None) for s in new_cur.sessions}
     elapsed = [s for s in elapsed if s.day not in kept]

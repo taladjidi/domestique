@@ -161,7 +161,9 @@ def test_a_regenerate_ramps_on_from_its_recovery_weeks(monkeypatch):
         followed.append((pw.start, pw.end)), follow(self, pw, budget))[1])
     today = MONDAY + timedelta(weeks=6)
     _TODAY[0] = today
-    rides = _rides(today - timedelta(days=13), today - timedelta(days=1))   # 4 weeks off, 2 back
+    # 2 weeks ridden, then 4 weeks off, still away. 3.13.2 (IP_3.13.2 E): the
+    # ramp is sized from the absence still going; "4 off, 2 back" has none.
+    rides = _rides(MONDAY, MONDAY + timedelta(days=13))
     _p, weeks, info = tp.regenerate_from_today(_goal(), base, 55.0, activities=rides, seed_salt=1)
     assert info["recovery_ramp_weeks"] > 0
     ahead = sorted((w.start, w.end) for w in weeks if w.end >= today)

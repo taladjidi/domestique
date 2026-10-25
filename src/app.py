@@ -12420,6 +12420,9 @@ async def api_save_availability(request: Request):
                 tsb_series=tsb_series,
                 recent_activities=recent_activities,
                 availability_overrides=availability_overrides,
+                # 3.13.2: the days the rider just changed -- a rest day
+                # given hours there becomes a ride, the week makes room.
+                explicit_days=set(availability_overrides),
                 # propagation_days=None lets reforecast emit its own
                 # touched ∪ g3_dropped set so downstream G3 downshifts
                 # land on disk too. Pre-v1.7.1 we pinned this to
@@ -12594,8 +12597,11 @@ def _current_absence_episode(old_weeks, gaps: dict, today: date):
     any gap is historical, not current). This is the "recent-gap gate" that
     stops an OLD recovered gap from triggering perpetual auto-regen.
     """
+    # 3.13.2: weeks too short to judge (a one-day first week, a ramp's stub)
+    # are left out, as detect_plan_gaps leaves them out of the streak.
     completed = sorted(
-        (w for w in old_weeks if w.end < today), key=lambda w: w.week_num,
+        (w for w in old_weeks if w.end < today and tp.gap_judged_week(w)),
+        key=lambda w: w.week_num,
     )
     if not completed:
         return None
@@ -12605,8 +12611,7 @@ def _current_absence_episode(old_weeks, gaps: dict, today: date):
         return None  # recent week trained normally → no current episode
     first = last.week_num
     i = len(completed) - 1
-    while i - 1 >= 0 and completed[i - 1].week_num in gap_nums \
-            and completed[i - 1].week_num == completed[i].week_num - 1:
+    while i - 1 >= 0 and completed[i - 1].week_num in gap_nums:
         first = completed[i - 1].week_num
         i -= 1
     return (first, last.week_num)
@@ -12868,8 +12873,14 @@ def _apply_plan_update(
     # ANYWHERE in history), which would mis-key the latch whenever an older,
     # longer, already-recovered gap exists.
     if episode is not None:
-        episode_weeks = episode[1] - episode[0] + 1
-        episode_key = f"{episode[0]}:{_ramp_band(episode_weeks * 7)}"
+        # 3.13.2 (IP_3.13.2 GD4): the band from the episode's missed days,
+        # the current week's included, as the ramp is sized. In weeks of
+        # finished weeks only, it moved once a rebuild kept the current
+        # week's elapsed days as a finished week: a second rebuild next sync.
+        episode_days = sum(gw["days"] for gw in gaps.get("gap_weeks", [])
+                           if episode[0] <= gw["week_num"] <= episode[1]
+                           or gw.get("partial_week"))
+        episode_key = f"{episode[0]}:{_ramp_band(episode_days)}"
     else:
         episode_key = f"ctl:{round(ctl_gap / 5.0) * 5}"
     latched = (plan.get("gap_regen_latch", {}) or {}).get("key") == episode_key

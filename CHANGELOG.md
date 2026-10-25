@@ -1,5 +1,33 @@
 # Changelog
 
+## v3.13.2 — Your hours lead, and no recovery ramp you didn't earn (2026-10-23)
+
+This release makes the availability calendar do what you tell it: hours you give a day become a ride of those hours, and the rest of the week adjusts around it. It also fixes a plan that started with weeks of recovery riding although you had been training, and a rebuild that lost the days of the current week before today.
+
+### Your hours in the availability calendar
+
+- **Fixed: hours on a rest day left it a rest day.** You set a rest day to 1 hour, pressed Update plan, and nothing changed. If the week's training load was already planned on other days, the hours were treated as a limit, and there was no room left. A rest day that a moved workout had left empty ignored the hours altogether.
+- **Hours you set are now a ride of those hours.** The rest of the week makes room for it: your later endurance rides that week get shorter, never below 30 minutes, so the week keeps about the same load. Intervals, tempo and other hard sessions keep their length. If the week has no endurance riding left to shorten, the ride still happens and the week ends up a little heavier.
+- **Changed your mind?** Set the day back to 0 hours and the rides that were shortened get their length back.
+- **Raising the hours of a day that already has a ride works the same way.** For example, the ride you just added, from 1 hour to 2. Each type of workout still has its usual maximum length.
+- **Only for days you change yourself.** When your rides sync, Domestique still reads the free hours in your calendar as a limit, not a target, so it never fills every free day with riding on its own.
+
+### No recovery ramp unless you were away
+
+- **Fixed: a new plan started with a reconditioning week and two weeks of recovery riding** although you had been training. A plan made on a Sunday has a first week of one day. If you didn't ride that day, it counted as a whole week missed, and the next time the plan rebuilt itself it added a recovery ramp. Weeks of fewer than 4 days are no longer judged as missed, and time away is counted in real days.
+- **Fixed: a rebuild added a recovery ramp for an absence you had long recovered from.** The ramp was sized from the longest break anywhere in your plan's history. It is now sized from the break you are in now, if any. A rebuild after weeks of normal training adds no ramp.
+
+### A rebuild keeps this week's days
+
+- **Fixed: the days of the current week before today vanished when the plan was rebuilt.** Rides you had done on those days lost their place in the plan. They now stay, as a short week that ends yesterday. Days already lost this way don't come back.
+- The rhythm of three load weeks and one easier week, and the build-up of the long ride before an event, count that split week once, so neither moves a week early.
+- A short leftover week no longer counts as your "last completed week" when Domestique checks whether a week was too heavy. One extra ride on a 1–3 day remainder could cut the next week's load.
+
+### After updating
+
+- **Does your plan start with a reconditioning week and recovery weeks although you were training?** Start the plan again once. Plans that are already built are not changed by this update.
+- Nothing else to do: your plan, rides and settings carry over as they are.
+
 ## v3.13.1 — Your own workouts, added to the full library (2026-10-14)
 
 This release fixes the Critical Power test for riders who use their own workout folder, and changes what that folder does: from now on it adds workouts to Domestique's library instead of replacing it.

@@ -31,9 +31,12 @@ day at 0) could never be restored.
 2026-09-13 (9138110d): the rider's free hours are a ceiling, not a target.
 A restore or an expansion may not push the week past its ``tss_target``;
 the day gets ``hours * 60`` only when the budget holds it, else what the
-budget leaves, and a week with no budget of its own stays unbounded. The
-fixture budgets 270 a week: a 4 h restore onto a weekend already rested
-(105 planned) is 165 TSS of room, 220 min at 45 TSS/h, not 240.
+budget leaves, and a week with no budget of its own stays unbounded.
+
+3.13.2 (owner, IP_3.13.2 A2): a rest day the rider gives hours in THIS
+save (the endpoint these tests drive) is a ride of those hours; the week
+makes room from its later easy volume, and runs over budget when it has
+none. D5 still holds for every other pass (the sync's whole calendar).
 """
 from __future__ import annotations
 
@@ -215,10 +218,9 @@ class TestRestRestoredToZ2(_AvailRestoreBase):
         after_sat = self._session(after_plan, self._sat)
         self.assertEqual(after_sat["session_type"], "z2",
                          "Sat must restore to z2 when hours raised from 0")
-        # 4 h asks 240 min; the week's budget of 270 holds 165 TSS more
-        # than the 105 planned, 220 min at 45 TSS/h.
-        self.assertEqual(after_sat["duration_min"], 220,
-                         "duration_min is the rider's hours, trimmed to the budget")
+        # 3.13.2: the rider's own 4 h, not the 220 min D5 left in the budget.
+        self.assertEqual(after_sat["duration_min"], 240,
+                         "duration_min is the rider's hours")
         self.assertGreater(after_sat["tss_estimate"], 0,
                            "tss_estimate must be positive after restore")
         # v3.11.5/v3.12.0: the restore clears the file and the plan self-heal,
@@ -283,14 +285,8 @@ class TestRoundTripRestThenRestore(_AvailRestoreBase):
         sat1 = self._session(plan1, self._sat)
         self.assertEqual(sat1["session_type"], "z2",
                          "round-trip restore: Sat must un-rest")
-        # Sat began as 90 TSS of the 260 planned; zeroed, the week holds 100
-        # TSS more than the 170 left: 133 min at the z2 rate of 45 TSS/h, and
-        # less once the TSS is the served file's own load (contract 6.8) --
-        # whatever keeps the week inside its budget, never the 240 offered.
-        self.assertLess(sat1["duration_min"], 240)
-        wk = next(w for w in plan1["weeks"] if w["start"] <= self._sat.isoformat() <= w["end"])
-        self.assertLessEqual(sum(x["tss_estimate"] for x in wk["sessions"]),
-                             wk["tss_target"] * 1.05 + 1)
+        # 3.13.2: the rider's own 4 h (D5 left 133 min in the budget).
+        self.assertEqual(sat1["duration_min"], 240)
 
 
 class TestPartialRestore(_AvailRestoreBase):
@@ -312,7 +308,7 @@ class TestPartialRestore(_AvailRestoreBase):
         after_sun = self._session(after_plan, self._sun)
 
         self.assertEqual(after_sat["session_type"], "z2")
-        self.assertEqual(after_sat["duration_min"], 220)   # 165 TSS of room at 45/h
+        self.assertEqual(after_sat["duration_min"], 240)   # 3.13.2: the rider's 4 h
         self.assertEqual(after_sun["session_type"], "rest",
                          "Sun must remain REST when override is 0")
         self.assertEqual(after_sun["duration_min"], 0)
@@ -367,10 +363,10 @@ class TestNonRestSessionScalingUnchanged(_AvailRestoreBase):
         # session_type remains long_z2.
         self.assertEqual(after_sat["session_type"], "long_z2",
                          "Non-rest scaling must not change session_type")
-        # 2.5 h asks 150 min; growing Sat (90 TSS of the 260 planned) is
-        # bounded by the 270 budget: 100 TSS of room, 133 min at 45 TSS/h.
-        self.assertEqual(after_sat["duration_min"], 133,
-                         "Sat grows to what the week's budget holds")
+        # 3.13.2 (IP_3.13.2 F): the rider's own 2.5 h in this save, not the
+        # 133 min D5 left in the budget.
+        self.assertEqual(after_sat["duration_min"], 150,
+                         "Sat grows to the rider's hours")
 
 
 class TestPartialRestoreOnlyOneKeyInDict(_AvailRestoreBase):

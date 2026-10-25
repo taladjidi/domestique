@@ -1378,13 +1378,26 @@ def stepback_due(prior_weeks, phase_name: str, row_end: "date | None" = None) ->
     if row_end is not None and row_end.weekday() + 1 < 4:
         return False
     run = 0
+    # 3.13.2: one count per calendar week. A rebuild keeps the current week's
+    # days before today as a row of its own (IP_3.13.2 D): that row, the
+    # rebuilt rest of the week and the row being decided are one week.
+    seen = _monday_on_or_before(row_end) if row_end is not None else None
     for w in reversed(list(prior_weeks or [])):
+        monday = _monday_on_or_before(_as_date(_field(w)("start")))
+        if monday == seen:
+            continue
+        seen = monday
         if _is_unload_week(w):
             return False
         run += 1
         if run >= STEP_BACK_EVERY - 1:
             return True
     return False
+
+
+def _calendar_weeks(weeks) -> int:
+    """The calendar weeks a list of plan rows covers (see stepback_due)."""
+    return len({_monday_on_or_before(_as_date(_field(w)("start"))) for w in weeks})
 
 
 def _monday_on_or_before(d: date) -> date:
@@ -12352,7 +12365,9 @@ def _last_completed_week_acwr(
     ``tss`` (or ``icu_training_load``) keys.
     """
     today = clock.today()
-    completed = [w for w in plan_weeks if w.end < today]
+    # 3.13.2: a week too short to judge (a rebuild's kept remainder, a
+    # one-day first week) gives no ratio: one ride over plan read as 40.
+    completed = [w for w in plan_weeks if w.end < today and gap_judged_week(w)]
     if not completed:
         return 0.0
     last = max(completed, key=lambda w: w.end)
@@ -12366,6 +12381,10 @@ def _last_completed_week_acwr(
     planned = float(last.tss_target or 0)
     return actual / max(planned, 1.0)
 
+
+# 3.13.2: the session types a week shortens to make room for a ride the rider
+# added on a rest day (easy volume only; intensity sessions keep theirs).
+_ROOM_FROM_TYPES = ("z2", "long_z2", "recovery")
 
 def _fits_budget(minutes: int, tss_per_h: float, budget: float, planned: float,
                  replacing: float = 0.0) -> int:
@@ -12395,6 +12414,11 @@ def reforecast(
     # to prevent runaway expansion / collapse. Algorithm runs BEFORE the G3
     # / G4 blocks so downshift logic operates on already-rescaled durations.
     availability_overrides: "dict[str, float] | None" = None,
+    # 3.13.2: the days the rider changed in THIS request (save-availability).
+    # Only there does a rest day become a ride of the rider's hours, the week
+    # making room from its other easy volume; every other pass (sync, regen)
+    # keeps hours a ceiling under the week's budget (D5).
+    explicit_days: "set | None" = None,
     # ── v1.0.6 IMPL-3D-PLANNER (TSS PRIMARY, 3D ADDITIVE) ──────────────────
     # Optional W'-balance / capacity / ACWR / polarisation inputs. NONE BY
     # DEFAULT — preserves all existing call sites byte-for-byte. When
@@ -12493,6 +12517,26 @@ def reforecast(
     # populates this on first miss and reuses it across the loop so we
     # don't re-read the full library N times in the worst case.
     _rematch_library: "list[dict] | None" = None
+    _explicit = set(explicit_days or ())
+
+    def _rematch_to_length(sess, pw_, d_iso_):
+        """Refit the session's workout file to its new length (as the
+        literal-hours branch does); a wrong-length file beats no file."""
+        nonlocal _rematch_library
+        try:
+            if _rematch_library is None:
+                _rematch_library = load_workout_library()
+            match_zwo(sess, _rematch_library, week_num=pw_.week_num,
+                      day_idx=(sess.day - pw_.start).days,
+                      used_names={sess.zwo_name} if sess.zwo_name else set(),
+                      raise_on_empty=True,
+                      micro_only=bool(getattr(goal, "vo2_microintervals_only", False)))
+        except NoCandidateWorkoutError:
+            log.info("EVENT=reforecast_kept_file day=%s slot=%smin file=%s",
+                     d_iso_, sess.duration_min, sess.zwo_file)
+        except Exception:
+            pass
+
     if availability_overrides:
         for pw in plan_weeks:
             # v1.3.5 fix: gate on pw.end (mirrors the G3 downshift block at
@@ -12515,7 +12559,14 @@ def reforecast(
                 # zeroing: a day the rider set to 0 h also rests a session
                 # still marked missed (one moved there keeps that status).
                 st = str(getattr(sess, "status", "") or "pending")
-                return sess.day >= today and (st == "pending" or (zeroing and st == "missed"))
+                if sess.day < today:
+                    return False
+                if st == "pending" or (zeroing and st == "missed"):
+                    return True
+                # 3.13.2: a day a move left (its stub) takes hours the rider
+                # sets on it just now; it ignored them, staying rest.
+                return (not zeroing and st.startswith("moved_from:")
+                        and sess.day.isoformat() in _explicit)
 
             week_keys = [
                 s.day.isoformat() for s in pw.sessions
@@ -12556,6 +12607,7 @@ def reforecast(
             _budget = float(getattr(pw, "tss_target", 0) or 0)
             _planned = sum(float(s2.tss_estimate or 0) for s2 in pw.sessions
                            if s2.session_type != "rest")
+            _explicit_grew = False
 
             for s in pw.sessions:
                 d_iso = s.day.isoformat()
@@ -12596,7 +12648,8 @@ def reforecast(
                     # current and current=0 makes the ratio undefined.
                     new_dur = min(int(round(hours * 60)), MAX_AVAIL_SESSION_MIN)
                     tss_per_h = TSS_PER_HOUR.get("z2", 45)
-                    new_dur = _fits_budget(new_dur, tss_per_h, _budget, _planned)
+                    if d_iso not in _explicit:
+                        new_dur = _fits_budget(new_dur, tss_per_h, _budget, _planned)
                     if new_dur < _VOLUME_MIN_SESSION_MIN:
                         # #35: a week a few TSS under budget left room for a
                         # 1- to 6-minute "restored" ride, which a later rematch
@@ -12623,6 +12676,9 @@ def reforecast(
                     for _k in _PS_JSON_ONLY_KEYS:
                         if hasattr(s, _k):
                             delattr(s, _k)
+                    s.status = "pending"            # a vacated day's stub status
+                    if d_iso in _explicit:
+                        _explicit_grew = True
                 elif getattr(s, "user_swapped", False) or getattr(s, "user_moved", False):
                     # A pinned day — swap-type, accepted redraw, FTP-test
                     # choice — keeps the workout the rider chose. Applying the
@@ -12676,7 +12732,10 @@ def reforecast(
                     if _type_ceil:
                         target_min = min(target_min, _type_ceil)
                     tss_per_h = TSS_PER_HOUR.get(s.session_type, 45)
-                    if target_min > s.duration_min:
+                    # 3.13.2 (IP_3.13.2 F): hours the rider raises in this
+                    # save are followed, the week making room below; every
+                    # other pass grows a day only within the budget (D5).
+                    if target_min > s.duration_min and d_iso not in _explicit:
                         # Growing a day is bounded by the week's budget; a day
                         # that no longer fits simply keeps what it had.
                         target_min = max(s.duration_min,
@@ -12696,6 +12755,8 @@ def reforecast(
                             f"{s.session_type} ({s.duration_min}min) — "
                             f"availability adjusted"
                         )
+                        if d_iso in _explicit and s.duration_min > old_dur:
+                            _explicit_grew = True
                         # v1.7.2 — when the duration change is meaningful
                         # (>= 15 % shrink OR >= 15 % expand), re-match the
                         # ZWO so the loaded workout actually fits the new
@@ -12734,6 +12795,82 @@ def reforecast(
                                 except Exception:
                                     pass
                 touched.add(d_iso)
+
+            if _explicit_grew and _budget > 0 and _planned > _budget:
+                # 3.13.2 (owner): a ride the rider put on a rest day (or the
+                # hours they raised on a day that rides) stays;
+                # the week's later easy volume makes room for it, so the
+                # week keeps its load. Longest easy session first, never
+                # below the planner's floor; intensity sessions, pinned days
+                # and days the rider set hours on keep theirs.
+                over = _planned - _budget
+                easy = sorted(
+                    (x for x in pw.sessions
+                     if x.day > today
+                     and x.day.isoformat() not in availability_overrides
+                     and str(getattr(x, "status", "") or "pending") == "pending"
+                     and x.session_type in _ROOM_FROM_TYPES
+                     and not getattr(x, "user_moved", False)
+                     and not getattr(x, "user_swapped", False)
+                     and not _protect_race(x)
+                     and x.duration_min > _VOLUME_MIN_SESSION_MIN),
+                    key=lambda x: float(x.tss_estimate or 0), reverse=True)
+                for x in easy:
+                    if over <= 0:
+                        break
+                    per_min = float(x.tss_estimate or 0) / x.duration_min
+                    if per_min <= 0:
+                        continue
+                    cut = min(x.duration_min - _VOLUME_MIN_SESSION_MIN,
+                              int(math.ceil(over / per_min)))
+                    if cut <= 0:
+                        continue
+                    old_dur, old_tss = x.duration_min, float(x.tss_estimate or 0)
+                    if not getattr(x, "shortened_from", 0):
+                        x.shortened_from = old_dur      # the planner's length, for G2
+                    x.duration_min = old_dur - cut
+                    x.tss_estimate = round(x.duration_min * per_min)
+                    over -= old_tss - x.tss_estimate
+                    _planned -= old_tss - x.tss_estimate
+                    x.description = (f"{x.session_type} ({x.duration_min}min) — "
+                                     f"shortened to make room for a ride you added")
+                    if cut / old_dur >= 0.15:
+                        _rematch_to_length(x, pw, x.day.isoformat())
+                    touched.add(x.day.isoformat())
+
+            if (_budget > 0 and _planned < _budget
+                    and any(k in _explicit for k in week_keys)):
+                # 3.13.2 (G2): the rider's change freed load in a week that
+                # once made room (a day set back to 0 h): the shortened
+                # sessions get their length back first, up to the budget.
+                for x in sorted(
+                        (x for x in pw.sessions
+                         if getattr(x, "shortened_from", 0) > x.duration_min
+                         and x.day > today
+                         and x.day.isoformat() not in availability_overrides
+                         and str(getattr(x, "status", "") or "pending") == "pending"
+                         and x.session_type in _ROOM_FROM_TYPES),
+                        key=lambda x: x.shortened_from - x.duration_min, reverse=True):
+                    per_min = float(x.tss_estimate or 0) / max(x.duration_min, 1)
+                    if per_min <= 0:
+                        continue
+                    add = min(x.shortened_from - x.duration_min,
+                              int((_budget - _planned) // per_min))
+                    if add <= 0:
+                        continue
+                    old_dur, old_tss = x.duration_min, float(x.tss_estimate or 0)
+                    x.duration_min = old_dur + add
+                    x.tss_estimate = round(x.duration_min * per_min)
+                    _planned += x.tss_estimate - old_tss
+                    if x.duration_min >= x.shortened_from:
+                        del x.shortened_from
+                        x.description = f"{x.session_type} ({x.duration_min}min)"
+                    else:
+                        x.description = (f"{x.session_type} ({x.duration_min}min) — "
+                                         f"shortened to make room for a ride you added")
+                    if add / old_dur >= 0.15:
+                        _rematch_to_length(x, pw, x.day.isoformat())
+                    touched.add(x.day.isoformat())
 
     # Fatigue. A hard session in the coming week, on a day whose TSB reading is
     # below TSB_EASE_BELOW, is eased to something the athlete can recover on,
@@ -13138,7 +13275,7 @@ from dataclasses import fields as _dc_fields  # noqa: E402
 # a rebuild is right to drop those, since a date-relative flag carried through
 # would outlive the day it was true on.
 _PS_JSON_ONLY_KEYS = ("variation", "adapted_reason", "auto_moved", "ftp_test_type",
-                      "pre_adapt", "tsb_eased_from")
+                      "pre_adapt", "tsb_eased_from", "shortened_from")
 _SESSION_FIELDS = tuple(f.name for f in _dc_fields(PlannedSession))
 _WEEK_FIELDS = tuple(f.name for f in _dc_fields(PlannedWeek))
 _SESSION_DEFAULTS = {"session_type": "z2", "duration_min": 0, "tss_estimate": 0.0,
@@ -13536,6 +13673,16 @@ def _apply_reforecast_to_dict(
             if getattr(src, "adapted", False):
                 s_json["adapted"] = True
                 s_json["adapted_reason"] = new_description
+            # 3.13.2: a day a move vacated (its stub), given hours by the
+            # rider, is pending again -- the dict kept the stub's status.
+            if (str(s_json.get("status") or "").startswith("moved_from:")
+                    and getattr(src, "status", "") == "pending"):
+                s_json["status"] = "pending"
+            shortened_from = getattr(src, "shortened_from", None)
+            if shortened_from:
+                s_json["shortened_from"] = shortened_from
+            else:
+                s_json.pop("shortened_from", None)
             eased_from = getattr(src, "tsb_eased_from", None)
             if eased_from:
                 s_json["tsb_eased_from"] = eased_from
@@ -13574,6 +13721,7 @@ def reforecast_dict(
     actual_polarization: "dict | None" = None,
     target_polarization: "dict | None" = None,
     availability_overrides: "dict[str, float] | None" = None,
+    explicit_days: "set | None" = None,
     wprime_balance_24h: "float | None" = None,
     w_prime: "float | None" = None,
     wprime_acwr: "float | None" = None,
@@ -13641,6 +13789,7 @@ def reforecast_dict(
             actual_polarization=actual_polarization,
             target_polarization=target_polarization,
             availability_overrides=availability_overrides,
+            explicit_days=explicit_days,
             wprime_balance_24h=wprime_balance_24h,
             w_prime=w_prime,
             wprime_acwr=wprime_acwr,
@@ -13672,6 +13821,17 @@ def reforecast_dict(
 # DYNAMIC PLAN REGENERATION — Mujika 2000/2001/2003, Gabbett 2016
 # ══════════════════════════════════════════════════════════════════════════════
 
+# 3.13.2: a plan week shorter than this is not judged. A plan made on a
+# Sunday has a one-day first week, and a recovery ramp that starts mid-week
+# leaves a stub before the next Monday; one unridden day was counted as a
+# missed week, 7 days of absence, and every rebuild added a recovery ramp.
+GAP_MIN_WEEK_DAYS = 4
+
+
+def gap_judged_week(w) -> bool:
+    return (w.end - w.start).days + 1 >= GAP_MIN_WEEK_DAYS
+
+
 def detect_plan_gaps(
     plan_weeks: list[PlannedWeek],
     activities: list[dict],
@@ -13700,6 +13860,8 @@ def detect_plan_gaps(
     gap_weeks = []
     consecutive_missed = 0
     max_consecutive = 0
+    streak_days = 0
+    max_streak_days = 0
 
     for w in plan_weeks:
         if w.end.isoformat() >= today_str:
@@ -13708,22 +13870,30 @@ def detect_plan_gaps(
         planned = w.tss_target
         if not planned or planned <= 0:
             continue  # skip rest/recovery weeks with 0 planned TSS
+        if not gap_judged_week(w):
+            continue  # too short to judge: neither a miss nor a reset
         ratio = actual / planned
+        days = (w.end - w.start).days + 1
 
         if ratio < 0.20:
             status = "missed"
             consecutive_missed += 1
+            streak_days += days
         elif ratio < 0.50:
             status = "substantially_missed"
             consecutive_missed += 1
+            streak_days += days
         elif ratio < 0.80:
             status = "reduced"
             consecutive_missed = 0
+            streak_days = 0
         else:
             status = "normal"
             consecutive_missed = 0
+            streak_days = 0
 
         max_consecutive = max(max_consecutive, consecutive_missed)
+        max_streak_days = max(max_streak_days, streak_days)
 
         if status in ("missed", "substantially_missed"):
             gap_weeks.append({
@@ -13733,6 +13903,7 @@ def detect_plan_gaps(
                 "actual_tss": round(actual),
                 "ratio": round(ratio, 2),
                 "status": status,
+                "days": days,
             })
 
     # The CURRENT week used to contribute nothing — the loop above stops at
@@ -13744,21 +13915,21 @@ def detect_plan_gaps(
     # trigger a rebuild (the regen gate needs a streak of 2, so a fully
     # missed PAST week must anchor it) — it exists to finish a streak early,
     # not to start one.
-    cur_partial_elapsed = 0
     cur_week = next((w for w in plan_weeks
                      if w.start.isoformat() <= today_str <= w.end.isoformat()),
                     None)
     if cur_week is not None and (cur_week.tss_target or 0) > 0:
         elapsed_d = (today - cur_week.start).days
-        planned_to_date = cur_week.tss_target * (elapsed_d / 7.0)
+        cur_days = (cur_week.end - cur_week.start).days + 1
+        planned_to_date = cur_week.tss_target * (elapsed_d / cur_days)
         # >= 50 planned TSS so a tiny plan's early week cannot count on noise.
         if elapsed_d >= 4 and planned_to_date >= 50:
             actual = actual_by_week.get(cur_week.week_num, 0)
             if actual / planned_to_date < 0.50:
                 consecutive_missed += 1
-                if consecutive_missed > max_consecutive:
-                    max_consecutive = consecutive_missed
-                    cur_partial_elapsed = elapsed_d
+                streak_days += elapsed_d
+                max_consecutive = max(max_consecutive, consecutive_missed)
+                max_streak_days = max(max_streak_days, streak_days)
                 gap_weeks.append({
                     "week_num": cur_week.week_num,
                     "phase": cur_week.phase,
@@ -13767,14 +13938,14 @@ def detect_plan_gaps(
                     "ratio": round(actual / planned_to_date, 2),
                     "status": "substantially_missed",
                     "partial_week": True,
+                    "days": elapsed_d,
                 })
 
-    # Absence in days: full missed weeks x 7, and the current week counts
-    # only its elapsed days — the ramp must not be sized as if days that
-    # have not happened yet were already missed.
-    absence_days = max_consecutive * 7
-    if cur_partial_elapsed:
-        absence_days -= (7 - cur_partial_elapsed)
+    # Absence in days: the days of the missed weeks (3.13.2: a short week
+    # counts its own days, not 7), and the current week counts only its
+    # elapsed days — the ramp must not be sized as if days that have not
+    # happened yet were already missed.
+    absence_days = max_streak_days
 
     # Expected CTL from plan progression
     past_weeks_count = sum(1 for w in plan_weeks if w.end.isoformat() < today_str)
@@ -13786,6 +13957,9 @@ def detect_plan_gaps(
         "missed_count": len(gap_weeks),
         "consecutive_missed": max_consecutive,
         "absence_days": absence_days,
+        # 3.13.2 (IP_3.13.2 E): the missed run still going -- what a rebuild
+        # sizes its ramp from; absence_days is the longest run ever.
+        "current_absence_days": streak_days,
         "current_ctl": round(current_ctl, 1),
         "expected_ctl": round(expected_ctl, 1),
         "ctl_gap": round(expected_ctl - current_ctl, 1),
@@ -13936,6 +14110,20 @@ def regenerate_from_today(
 
     # 1. Keep past weeks
     past_weeks = [w for w in old_plan_weeks if w.end < today]
+    # 1a. 3.13.2 (IP_3.13.2 D): the current week's days before today are kept
+    # too, as a week of their own ending yesterday. The rebuild starts today,
+    # so they fell out of the plan, and with them the rides done there. The
+    # stepback cadence and the long-ride count read the ended weeks only:
+    # the kept part and the rebuilt rest are one calendar week.
+    kept_weeks = list(past_weeks)
+    _cur = next((w for w in old_plan_weeks if w.start < today <= w.end), None)
+    if _cur is not None:
+        _elapsed = [s for s in _cur.sessions if s.day < today]
+        kept_weeks.append(replace(
+            _cur, end=today - timedelta(days=1), sessions=_elapsed,
+            tss_target=round(sum(float(s.tss_estimate or 0) for s in _elapsed
+                                 if s.session_type != "rest")),
+            net_tss_target=None))
 
     # 1b. Gather any adapted / user-moved / status-tracked sessions from the
     # CURRENT week of the old plan (fix26 §6.12).
@@ -13972,7 +14160,9 @@ def regenerate_from_today(
 
     # 2. Detect absence
     gaps = detect_plan_gaps(old_plan_weeks, activities or [], current_ctl)
-    absence_days = gaps["absence_days"]
+    # 3.13.2 (IP_3.13.2 E): the current absence, not the longest one ever --
+    # a rebuild weeks after a recovered gap added a ramp for it.
+    absence_days = gaps["current_absence_days"]
 
     # 3. Calculate remaining time
     if goal.target_date:
@@ -14114,14 +14304,14 @@ def regenerate_from_today(
     new_weeks = []
     used_names_dict: dict[str, int] = {}
     used_names_set: set = set()
-    week_num = len(past_weeks) + len(recovery_weeks) + 1
+    week_num = len(kept_weeks) + len(recovery_weeks) + 1
     # Seed cross-week 48h HIT-gap (PL2) with the Sunday of whichever prior
     # week is most recent: last recovery week → last past week → None.
     prev_week_sessions: list | None = None
     if recovery_weeks:
         prev_week_sessions = recovery_weeks[-1].sessions
-    elif past_weeks:
-        prev_week_sessions = past_weeks[-1].sessions
+    elif kept_weeks:
+        prev_week_sessions = kept_weeks[-1].sessions
 
     # v4.5.0 Layer 3 rolling 4-week HIT-type window per phase.
     recent_hit_by_phase: dict[str, list[str]] = {}
@@ -14306,7 +14496,7 @@ def regenerate_from_today(
         # recovery, the same count week_num is seeded from above) — otherwise a
         # mid-plan regen resets the long ride to long_start_h instead of
         # continuing from where the athlete already is.
-        _elapsed_weeks = len(past_weeks) + len(recovery_weeks)
+        _elapsed_weeks = _calendar_weeks(past_weeks) + len(recovery_weeks)
         for _wi, _w in enumerate(new_weeks):
             if getattr(_w, "phase", "") == "taper":
                 continue
@@ -14326,9 +14516,9 @@ def regenerate_from_today(
 
     # Renumber recovery weeks
     for i, rw in enumerate(recovery_weeks):
-        rw.week_num = len(past_weeks) + i + 1
+        rw.week_num = len(kept_weeks) + i + 1
 
-    all_weeks = past_weeks + recovery_weeks + new_weeks
+    all_weeks = kept_weeks + recovery_weeks + new_weeks
 
     regen_info = {
         "absence_days": absence_days,
@@ -15550,7 +15740,7 @@ def recalculate_plan(
     # ride (the <= 21 gate matches both other sites).
     if event_targets is not None:
         _mw_min = availability.weekend_cap_minutes(goal)
-        _elapsed_weeks = len(past_weeks)
+        _elapsed_weeks = _calendar_weeks(past_weeks)
         for _wi, _w in enumerate(new_weeks):
             if getattr(_w, "phase", "") == "taper":
                 continue

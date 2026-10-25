@@ -12519,6 +12519,13 @@ def reforecast(
     _rematch_library: "list[dict] | None" = None
     _explicit = set(explicit_days or ())
 
+    _room_rows_cache: dict = {}
+
+    def _room_rows():
+        if not _room_rows_cache:
+            _room_rows_cache.update(_library_rows(load_workout_library()))
+        return _room_rows_cache
+
     def _rematch_to_length(sess, pw_, d_iso_):
         """Refit the session's workout file to its new length (as the
         literal-hours branch does); a wrong-length file beats no file."""
@@ -12796,6 +12803,15 @@ def reforecast(
                                     pass
                 touched.add(d_iso)
 
+            if _explicit_grew and _budget > 0:
+                # Domestique fork: the final step restamps every session with
+                # its served file's load (contract 6.8), so the room is
+                # measured in those loads, or the week ends over its budget.
+                for x in pw.sessions:
+                    if x.day >= today and x.session_type != "rest":
+                        _restamp(x, _room_rows())
+                _planned = sum(float(s2.tss_estimate or 0) for s2 in pw.sessions
+                               if s2.session_type != "rest")
             if _explicit_grew and _budget > 0 and _planned > _budget:
                 # 3.13.2 (owner): a ride the rider put on a rest day (or the
                 # hours they raised on a day that rides) stays;
@@ -12804,39 +12820,54 @@ def reforecast(
                 # below the planner's floor; intensity sessions, pinned days
                 # and days the rider set hours on keep theirs.
                 over = _planned - _budget
-                easy = sorted(
-                    (x for x in pw.sessions
-                     if x.day > today
-                     and x.day.isoformat() not in availability_overrides
-                     and str(getattr(x, "status", "") or "pending") == "pending"
-                     and x.session_type in _ROOM_FROM_TYPES
-                     and not getattr(x, "user_moved", False)
-                     and not getattr(x, "user_swapped", False)
-                     and not _protect_race(x)
-                     and x.duration_min > _VOLUME_MIN_SESSION_MIN),
-                    key=lambda x: float(x.tss_estimate or 0), reverse=True)
-                for x in easy:
+                # Domestique fork: a shortened session's new file can be denser
+                # than the minutes it lost; another pass takes the rest, until
+                # one makes no progress.
+                for _pass in range(3):
                     if over <= 0:
                         break
-                    per_min = float(x.tss_estimate or 0) / x.duration_min
-                    if per_min <= 0:
-                        continue
-                    cut = min(x.duration_min - _VOLUME_MIN_SESSION_MIN,
-                              int(math.ceil(over / per_min)))
-                    if cut <= 0:
-                        continue
-                    old_dur, old_tss = x.duration_min, float(x.tss_estimate or 0)
-                    if not getattr(x, "shortened_from", 0):
-                        x.shortened_from = old_dur      # the planner's length, for G2
-                    x.duration_min = old_dur - cut
-                    x.tss_estimate = round(x.duration_min * per_min)
-                    over -= old_tss - x.tss_estimate
-                    _planned -= old_tss - x.tss_estimate
-                    x.description = (f"{x.session_type} ({x.duration_min}min) — "
-                                     f"shortened to make room for a ride you added")
-                    if cut / old_dur >= 0.15:
-                        _rematch_to_length(x, pw, x.day.isoformat())
-                    touched.add(x.day.isoformat())
+                    _over_before = over
+                    easy = sorted(
+                        (x for x in pw.sessions
+                         if x.day > today
+                         and x.day.isoformat() not in availability_overrides
+                         and str(getattr(x, "status", "") or "pending") == "pending"
+                         and x.session_type in _ROOM_FROM_TYPES
+                         and not getattr(x, "user_moved", False)
+                         and not getattr(x, "user_swapped", False)
+                         and not _protect_race(x)
+                         and x.duration_min > _VOLUME_MIN_SESSION_MIN),
+                        key=lambda x: float(x.tss_estimate or 0), reverse=True)
+                    for x in easy:
+                        if over <= 0:
+                            break
+                        per_min = float(x.tss_estimate or 0) / x.duration_min
+                        if per_min <= 0:
+                            continue
+                        cut = min(x.duration_min - _VOLUME_MIN_SESSION_MIN,
+                                  int(math.ceil(over / per_min)))
+                        if cut <= 0:
+                            continue
+                        old_dur, old_tss = x.duration_min, float(x.tss_estimate or 0)
+                        if not getattr(x, "shortened_from", 0):
+                            x.shortened_from = old_dur      # the planner's length, for G2
+                        x.duration_min = old_dur - cut
+                        x.tss_estimate = round(x.duration_min * per_min)
+                        over -= old_tss - x.tss_estimate
+                        _planned -= old_tss - x.tss_estimate
+                        x.description = (f"{x.session_type} ({x.duration_min}min) — "
+                                         f"shortened to make room for a ride you added")
+                        if cut / old_dur >= 0.15:
+                            _rematch_to_length(x, pw, x.day.isoformat())
+                        # Domestique fork: priced per minute above; what it will
+                        # serve is its file's load (contract 6.8).
+                        _nominal = float(x.tss_estimate or 0)
+                        _restamp(x, _room_rows())
+                        over += float(x.tss_estimate or 0) - _nominal
+                        _planned += float(x.tss_estimate or 0) - _nominal
+                        touched.add(x.day.isoformat())
+                    if over >= _over_before:
+                        break
 
             if (_budget > 0 and _planned < _budget
                     and any(k in _explicit for k in week_keys)):
